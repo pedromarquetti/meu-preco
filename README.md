@@ -71,7 +71,7 @@ This is still a very early project!
 
 ## Getting started
 
-### Run with make 
+### Run with make
 
 ```sh
 make run                     # boots the API on :8080
@@ -84,9 +84,24 @@ make lint     # gofmt + go vet (+ staticcheck if installed)
 make build    # bin/server
 ```
 
-Config comes from the environment (`PORT`, `LOG_LEVEL`, `CORS_ORIGINS`, and
-later `DATABASE_URL`, `JWT_SECRET`, `JWT_ACCESS_TTL`, `JWT_REFRESH_TTL`,
-`SEFAZ_FETCH_RPS`). Secrets are only ever set via the environment.
+### env
+
+The server expects some env. vars to be set.
+
+| Var             | Required | Default | Accepted values                         |
+| --------------- | -------- | ------- | --------------------------------------- |
+| PORT            | no       | 8080    | 1–65535                                 |
+| LOG_LEVEL       | no       | info    | `debug` \| `info` \| `warn` \| `error`  |
+| LOG_FORMAT      | no       | pretty  | `pretty` \| `json`                      |
+| CORS_ORIGINS    | no       | \*      | comma-separated origins, or `*`         |
+| SEFAZ_FETCH_RPS | no       | 1       | integer ≥ 1                             |
+| JWT_ACCESS_TTL  | no       | 15m     | Go duration (e.g. `15m`)                |
+| JWT_REFRESH_TTL | no       | 720h    | Go duration (e.g. `720h`)               |
+| DATABASE_URL    | Phase 2  | —       | `postgres://…` (required when DB lands) |
+| JWT_SECRET      | Phase 3  | —       | ≥ 32 chars (required when auth lands)   |
+
+Secrets (`JWT_SECRET`, `DATABASE_URL`) are only ever set via the environment —
+never committed.
 
 ### Container image:
 

@@ -17,6 +17,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogLevel != "info" {
 		t.Errorf("LogLevel = %q, want info", cfg.LogLevel)
 	}
+	if cfg.LogFormat != "pretty" {
+		t.Errorf("LogFormat = %q, want pretty", cfg.LogFormat)
+	}
 	if len(cfg.CORSOrigins) != 1 || cfg.CORSOrigins[0] != "*" {
 		t.Errorf("CORSOrigins = %v, want [*]", cfg.CORSOrigins)
 	}
@@ -74,6 +77,23 @@ func TestLoadBadLogLevel(t *testing.T) {
 	_, err := load(map[string]string{"LOG_LEVEL": "loud"})
 	if err == nil || !strings.Contains(err.Error(), "LOG_LEVEL") {
 		t.Fatalf("expected LOG_LEVEL error, got %v", err)
+	}
+}
+
+func TestLoadBadLogFormat(t *testing.T) {
+	_, err := load(map[string]string{"LOG_FORMAT": "xml"})
+	if err == nil || !strings.Contains(err.Error(), "LOG_FORMAT") {
+		t.Fatalf("expected LOG_FORMAT error, got %v", err)
+	}
+}
+
+func TestLoadLogFormatOverride(t *testing.T) {
+	cfg, err := load(map[string]string{"LOG_FORMAT": "json"})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("LogFormat = %q, want json", cfg.LogFormat)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"meupreco/internal/config"
 	"meupreco/internal/httpapi"
+	"meupreco/internal/logger"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -32,7 +33,7 @@ func run() error {
 		return err
 	}
 
-	log := newLogger(cfg.LogLevel)
+	log := newLogger(cfg.LogLevel, cfg.LogFormat)
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           httpapi.New(cfg, log),
@@ -73,7 +74,7 @@ func run() error {
 	return nil
 }
 
-func newLogger(level string) *slog.Logger {
+func newLogger(level, format string) *slog.Logger {
 	var lvl slog.Level
 
 	switch level {
@@ -87,5 +88,10 @@ func newLogger(level string) *slog.Logger {
 		lvl = slog.LevelInfo
 	}
 
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
+	opts := &slog.HandlerOptions{Level: lvl}
+
+	if format == "json" {
+		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	}
+	return slog.New(logger.NewPrettyHandler(os.Stdout, opts))
 }

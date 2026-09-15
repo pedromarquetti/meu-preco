@@ -14,10 +14,11 @@ import (
 type Config struct {
 	Port        string
 	LogLevel    string
+	LogFormat   string
 	CORSOrigins []string
 
-	// DatabaseURL and JWTSecret are consumed by later phases (DB in Phase 1,
-	// auth in Phase 2). They are read now so the contract is stable and will
+	// DatabaseURL and JWTSecret are consumed by later phases (DB in Phase 2,
+	// auth in Phase 3). They are read now so the contract is stable and will
 	// become required once those subsystems land (see requiredEnv below).
 	DatabaseURL   string
 	JWTSecret     string
@@ -76,6 +77,7 @@ func load(env map[string]string) (Config, error) {
 	cfg := Config{
 		Port:          envString(env, "PORT", "8080"),
 		LogLevel:      envString(env, "LOG_LEVEL", "info"),
+		LogFormat:     envString(env, "LOG_FORMAT", "pretty"),
 		CORSOrigins:   csvSlice(envString(env, "CORS_ORIGINS", "*")),
 		DatabaseURL:   env["DATABASE_URL"],
 		JWTSecret:     env["JWT_SECRET"],
@@ -97,6 +99,12 @@ func (c Config) Validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("config: LOG_LEVEL must be one of debug|info|warn|error, got %q", c.LogLevel)
+	}
+
+	switch c.LogFormat {
+	case "pretty", "json":
+	default:
+		return fmt.Errorf("config: LOG_FORMAT must be one of pretty|json, got %q", c.LogFormat)
 	}
 
 	if c.JWTAccessTTL <= 0 {

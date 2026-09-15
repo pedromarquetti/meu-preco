@@ -11,7 +11,7 @@ func healthz(w http.ResponseWriter, r *http.Request) {
 	httpx.Respond(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyz reports readiness. Phase 1 flips this to a DB ping that returns 503
+// readyz reports readiness. Phase 2 flips this to a DB ping that returns 503
 // when the database is unreachable.
 func readyz(w http.ResponseWriter, r *http.Request) {
 	httpx.Respond(w, http.StatusOK, map[string]string{"status": "ok"})
