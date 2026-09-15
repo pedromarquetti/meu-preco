@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +29,10 @@ type Config struct {
 	// SEFAZFetchRPS caps how many requests per second the SP NFC-e portal
 	// fetcher may issue (politeness/anti-ban knob).
 	SEFAZFetchRPS int
+
+	// SefazBaseURL overrides the default SP NFC-e consultation QR URL. It is
+	// optional (tests and homologation are the main use cases).
+	SefazBaseURL string
 }
 
 // requiredEnv lists environment variables without which the process must not
@@ -84,6 +89,7 @@ func load(env map[string]string) (Config, error) {
 		JWTAccessTTL:  jwtAccessTTL,
 		JWTRefreshTTL: jwtRefreshTTL,
 		SEFAZFetchRPS: sefaRPS,
+		SefazBaseURL:  env["SEFAZ_BASE_URL"],
 	}
 	return cfg, cfg.Validate()
 }
@@ -115,6 +121,13 @@ func (c Config) Validate() error {
 	}
 	if c.SEFAZFetchRPS < 1 {
 		return fmt.Errorf("config: SEFAZ_FETCH_RPS must be >= 1")
+	}
+	if c.SefazBaseURL != "" {
+		u, err := url.Parse(c.SefazBaseURL)
+
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("config: SEFAZ_BASE_URL must be an http(s) URL, got %q", c.SefazBaseURL)
+		}
 	}
 
 	return nil

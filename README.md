@@ -39,7 +39,7 @@ users**; users contribute logs and read everything.
 
 ```
 QR-code payload (chave|versao|tpAmb)
-        │  POST /nfce/submit
+        │  POST /api/v1/nfce/submit
         ▼
    server ──► SEFAZ portal (throttled, cookie jar, captcha-aware)
         │
@@ -48,7 +48,7 @@ QR-code payload (chave|versao|tpAmb)
         │
         ▼
    identity resolution (GTIN / commodity key) + itemized preview
-        │        POST /price-logs  (confirm)
+        │        POST /api/v1/price-logs  (confirm)
         ▼
    price_logs ──► products history, supermarket comparison API
 ```
@@ -95,6 +95,7 @@ The server expects some env. vars to be set.
 | LOG_FORMAT      | no       | pretty  | `pretty` \| `json`                      |
 | CORS_ORIGINS    | no       | \*      | comma-separated origins, or `*`         |
 | SEFAZ_FETCH_RPS | no       | 1       | integer ≥ 1                             |
+| SEFAZ_BASE_URL  | no       | SP prod | https URL (test/proxy endpoint)         |
 | JWT_ACCESS_TTL  | no       | 15m     | Go duration (e.g. `15m`)                |
 | JWT_REFRESH_TTL | no       | 720h    | Go duration (e.g. `720h`)               |
 | DATABASE_URL    | Phase 2  | —       | `postgres://…` (required when DB lands) |

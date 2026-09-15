@@ -32,6 +32,28 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SEFAZFetchRPS != 1 {
 		t.Errorf("SEFAZFetchRPS = %d, want 1", cfg.SEFAZFetchRPS)
 	}
+	if cfg.SefazBaseURL != "" {
+		t.Errorf("SefazBaseURL = %q, want empty default", cfg.SefazBaseURL)
+	}
+}
+
+func TestLoadSefazBaseURL(t *testing.T) {
+	cfg, err := load(map[string]string{"SEFAZ_BASE_URL": "https://portal.example.gov.br/qrcode"})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.SefazBaseURL != "https://portal.example.gov.br/qrcode" {
+		t.Errorf("SefazBaseURL = %q", cfg.SefazBaseURL)
+	}
+}
+
+func TestLoadBadSefazBaseURL(t *testing.T) {
+	for _, bad := range []string{"not a url", "ftp://x", "http://", "//missing-scheme"} {
+		_, err := load(map[string]string{"SEFAZ_BASE_URL": bad})
+		if err == nil || !strings.Contains(err.Error(), "SEFAZ_BASE_URL") {
+			t.Errorf("SEFAZ_BASE_URL=%q: expected error, got %v", bad, err)
+		}
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"meupreco/internal/config"
 )
 
-var stubGroups = []string{"/auth", "/nfce", "/price-logs", "/products", "/admin"}
+var stubGroups = []string{"/api/v1/auth", "/api/v1/price-logs", "/api/v1/products", "/api/v1/admin"}
 
 func testRouter() http.Handler {
 	return New(config.Config{CORSOrigins: []string{"https://app.example.com"}},
@@ -88,6 +88,24 @@ func TestStubGroups(t *testing.T) {
 				t.Errorf("%s: code = %q", path, body.Error.Code)
 			}
 		}
+	}
+}
+
+func TestNfceGroupNotImplemented(t *testing.T) {
+	for _, path := range []string{"/api/v1/nfce", "/api/v1/nfce/login", "/api/v1/nfce/x/y", "/api/v1/nfce/challenge/abc"} {
+		rec := httptest.NewRecorder()
+		testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+		if rec.Code != http.StatusNotImplemented {
+			t.Errorf("POST %s: status = %d, want 501", path, rec.Code)
+		}
+	}
+}
+
+func TestNfceSubmitUsesOnlyPost(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nfce/submit", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /api/v1/nfce/submit: status = %d, want 405", rec.Code)
 	}
 }
 
