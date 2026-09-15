@@ -1,10 +1,16 @@
 // Package nfce implements the fetch + parse layer for electronic receipts.
 //
 // The package is intentionally source-agnostic: it defines the Source and
-// Parser interfaces plus an AccessKey validator, and ships one concrete
-// provider for the São Paulo NFC-e portal (São Paulo is the coordinating UF of
-// the NFC-e project). Adding another federation state later means adding one
-// more Source/Parser implementation, not touching the HTTP layer or domain.
+// Parser interfaces plus an AccessKey validator, and routes requests to the
+// federation state that issued the receipt via the registry in registry.go.
+//
+// Only the São Paulo NFC-e portal is currently verified end-to-end: it is the
+// single federation state whose QR consultation URL returns a complete,
+// server-side, JavaScript-free DANFE. Every other state's portal is catalogued
+// in the registry with its actual behavior (captcha-gated, JavaScript shell,
+// unverified server-rendering) and returns ErrUnsupportedUF until a fixture-
+// verified Parser exists for it. Adding a state means implementing its
+// Parser/Source pair; the HTTP layer and domain stay untouched.
 package nfce
 
 import (
@@ -16,6 +22,15 @@ var (
 	// ErrInvalidKey reports a structurally invalid access key (length,
 	// check digit, or model). The API maps it to 422.
 	ErrInvalidKey = errors.New("invalid access key")
+
+	// ErrInvalidQRPayload reports a QR code payload that is not a well-formed
+	// p= value (see ParseQRPayload). The API maps it to 422.
+	ErrInvalidQRPayload = errors.New("invalid QR code payload")
+
+	// ErrUnsupportedUF reports that the receipt belongs to a federation state
+	// whose fiscal portal this installation cannot parse yet. The API maps it
+	// to 501.
+	ErrUnsupportedUF = errors.New("federation state not supported")
 
 	// ErrKeyNotFound reports that the fiscal portal answered but has no
 	// document for the requested key. The API maps it to 404.

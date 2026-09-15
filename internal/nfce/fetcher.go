@@ -20,13 +20,14 @@ const (
 	maxBodyBytes     = 2 << 20 // 2 MiB, DANFE pages are tens of KiB
 )
 
-// SPSourceOptions configures the São Paulo NFC-e portal fetcher. Zero values
-// fall back to sane defaults.
-type SPSourceOptions struct {
-	// BaseURL is the QR consultation endpoint (see SPURLBuilder). Defaults to
-	// DefaultSPQRBaseURL.
+// HTTPSourceOptions configures a fiscal-portal fetcher. Zero values fall back
+// to sane defaults.
+type HTTPSourceOptions struct {
+	// BaseURL is the QR consultation endpoint (see QRBuilder). Defaults to the
+	// São Paulo production base, which is what a resolver wired from the
+	// registry passes in.
 	BaseURL string
-	// RPS caps requests per second to the portal. Defaults to 1.
+	// RPS (Requests Per Second) caps requests per second to the portal. Defaults to 1.
 	RPS int
 	// UserAgent sent with every request. Defaults to a descriptive one.
 	UserAgent string
@@ -43,9 +44,9 @@ type SPSourceOptions struct {
 	ChallengeStore *ChallengeStore
 }
 
-// SPSource fetches raw NFC-e pages from the São Paulo portal ("qrcode" view,
-// which renders the DANFE for an access key).
-type SPSource struct {
+// HTTPSource fetches raw NFC-e pages from a state fiscal portal that renders
+// the DANFE through its "qrcode" view for an access key or QR payload.
+type HTTPSource struct {
 	baseURL    string
 	limit      *rateLimiter
 	user_agent string
@@ -55,7 +56,7 @@ type SPSource struct {
 	challenges *ChallengeStore
 }
 
-func NewSPSource(opts SPSourceOptions) (*SPSource, error) {
+func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 	if opts.BaseURL == "" {
 		opts.BaseURL = DefaultSPQRBaseURL
 	}
@@ -98,7 +99,7 @@ func NewSPSource(opts SPSourceOptions) (*SPSource, error) {
 		opts.Logger = slog.Default()
 	}
 
-	return &SPSource{
+	return &HTTPSource{
 		baseURL:    opts.BaseURL,
 		limit:      newRateLimiter(opts.RPS),
 		user_agent: opts.UserAgent,
@@ -109,10 +110,17 @@ func NewSPSource(opts SPSourceOptions) (*SPSource, error) {
 	}, nil
 }
 
-// Fetch retrieves the DANFE document for key. The returned bytes are the raw
-// HTML; parsing is a separate concern (see HTMLParser).
-func (s *SPSource) Fetch(ctx context.Context, key AccessKey) ([]byte, error) {
-	url := (SPURLBuilder{BaseURL: s.baseURL}).QRCodeURL(key, envProduction)
+// Fetch retrieves the DANFE document for key. When payload is non-empty it
+// replays that exact QR payload (see ParseQRPayload) against the portal,
+// which is what lets the server honor the URL the consumer actually scanned.
+// The returned bytes are raw HTML; parsing is a separate concern (see
+// HTMLParser).
+func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) ([]byte, error) {
+	builder := QRBuilder{BaseURL: s.baseURL}
+	url := builder.FromKey(key, envProduction)
+	if payload != "" {
+		url = builder.FromPayload(payload)
+	}
 
 	var lastErr error
 	for attempt := 1; attempt <= s.retries; attempt++ {
@@ -169,7 +177,7 @@ func (s *SPSource) Fetch(ctx context.Context, key AccessKey) ([]byte, error) {
 	}()
 }
 
-func (source *SPSource) doRequest(ctx context.Context, url string) (int, []byte, error) {
+func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return 0, nil, err

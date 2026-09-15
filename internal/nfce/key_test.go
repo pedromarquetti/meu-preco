@@ -107,19 +107,22 @@ func TestCheckDigitRejectsTampering(t *testing.T) {
 
 func TestQRCodeURL(t *testing.T) {
 	k, _ := ParseAccessKey(senateKey)
-	b := SPURLBuilder{BaseURL: "https://portal.test"}
+	b := QRBuilder{BaseURL: "https://portal.test"}
 	want := "https://portal.test?p=" + senateKey + "|3|1"
-	if got := b.QRCodeURL(k, envProduction); got != want {
-		t.Errorf("QRCodeURL = %q, want %q", got, want)
+	if got := b.FromKey(k, envProduction); got != want {
+		t.Errorf("FromKey = %q, want %q", got, want)
 	}
-	if got := b.QRCodeURL(k, envHomologation); got != "https://portal.test?p="+senateKey+"|3|2" {
-		t.Errorf("QRCodeURL homologation = %q", got)
+	if got := b.FromKey(k, envHomologation); got != "https://portal.test?p="+senateKey+"|3|2" {
+		t.Errorf("FromKey homologation = %q", got)
+	}
+	if got := b.FromPayload(k.String() + "|3|1"); got != "https://portal.test?p="+senateKey+"%7C3%7C1" {
+		t.Errorf("FromPayload = %q", got)
 	}
 }
 
 func TestDefaultQRCodeURL(t *testing.T) {
 	k, _ := ParseAccessKey(senateKey)
-	b := (SPURLBuilder{}).QRCodeURL(k, envProduction)
+	b := (QRBuilder{}).FromKey(k, envProduction)
 	if !strings.HasPrefix(b, DefaultSPQRBaseURL+"?p="+senateKey+"|3|") {
 		t.Errorf("default URL = %q", b)
 	}

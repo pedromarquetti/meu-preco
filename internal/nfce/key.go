@@ -84,7 +84,7 @@ func (k AccessKey) EmissionMonth() (year int, month time.Month, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	
+
 	mm, err := strconv.Atoi(ym[2:4])
 	if err != nil || mm < 1 || mm > 12 {
 		return 0, 0, fmt.Errorf("invalid month in access key")

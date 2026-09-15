@@ -34,23 +34,28 @@ users**; users contribute logs and read everything.
 - **Free and open data sources only** — enrichment uses Open Food Facts (BR),
   CONAB PROHORT / CEAGESP cotas, and Wikidata; paid options such as
   CadastroProduto / GS1 Brasil are documented but never required.
+- **Multi-UF by design** — Other states will be implemented in the future, for
+  now, only receipts from _São Paulo_ are supported.
 
 ## How it works
 
 ```
-QR-code payload (chave|versao|tpAmb)
-        │  POST /api/v1/nfce/submit
-        ▼
-   server ──► SEFAZ portal (throttled, cookie jar, captcha-aware)
-        │
-        ▼
-   parse DANFE (products, prices, supermarket, totals)
-        │
-        ▼
-   identity resolution (GTIN / commodity key) + itemized preview
-        │        POST /api/v1/price-logs  (confirm)
-        ▼
-   price_logs ──► products history, supermarket comparison API
+QR-code payload / access_key
+    │  POST /api/v1/nfce/submit   (qr_payload preferred, key fallback)
+    ▼
+registry dispatch ──► 501 unsupported_uf  (non-SP states today)
+    │
+    ▼
+HTTPSource → SEFAZ portal (throttled, cookie jar, captcha-aware)
+    │  ← exact scanned payload replayed for v2/offline variants
+    ▼
+parse DANFE ("Consulta Resumida" family — products, prices, supermarket, totals)
+    │
+    ▼
+identity resolution (GTIN / commodity key) + itemized preview
+    │        POST /api/v1/price-logs  (confirm)
+    ▼
+price_logs ──► products history, supermarket comparison API
 ```
 
 ## Stack
@@ -88,18 +93,18 @@ make build    # bin/server
 
 The server expects some env. vars to be set.
 
-| Var             | Required | Default | Accepted values                         |
-| --------------- | -------- | ------- | --------------------------------------- |
-| PORT            | no       | 8080    | 1–65535                                 |
-| LOG_LEVEL       | no       | info    | `debug` \| `info` \| `warn` \| `error`  |
-| LOG_FORMAT      | no       | pretty  | `pretty` \| `json`                      |
-| CORS_ORIGINS    | no       | \*      | comma-separated origins, or `*`         |
-| SEFAZ_FETCH_RPS | no       | 1       | integer ≥ 1                             |
-| SEFAZ_BASE_URL  | no       | SP prod | https URL (test/proxy endpoint)         |
-| JWT_ACCESS_TTL  | no       | 15m     | Go duration (e.g. `15m`)                |
-| JWT_REFRESH_TTL | no       | 720h    | Go duration (e.g. `720h`)               |
-| DATABASE_URL    | Phase 2  | —       | `postgres://…` (required when DB lands) |
-| JWT_SECRET      | Phase 3  | —       | ≥ 32 chars (required when auth lands)   |
+| Var             | Required | Default | Accepted values                                                        |
+| --------------- | -------- | ------- | ---------------------------------------------------------------------- |
+| PORT            | no       | 8080    | 1–65535                                                                |
+| LOG_LEVEL       | no       | info    | `debug` \| `info` \| `warn` \| `error`                                 |
+| LOG_FORMAT      | no       | pretty  | `pretty` \| `json`                                                     |
+| CORS_ORIGINS    | no       | \*      | comma-separated origins, or `*`                                        |
+| SEFAZ_FETCH_RPS | no       | 1       | integer ≥ 1                                                            |
+| SEFAZ_BASE_URL  | no       | SP prod | https URL (overrides the SP QR consultation endpoint for test proxies) |
+| JWT_ACCESS_TTL  | no       | 15m     | Go duration (e.g. `15m`)                                               |
+| JWT_REFRESH_TTL | no       | 720h    | Go duration (e.g. `720h`)                                              |
+| DATABASE_URL    | Phase 2  | —       | `postgres://…` (required when DB lands)                                |
+| JWT_SECRET      | Phase 3  | —       | ≥ 32 chars (required when auth lands)                                  |
 
 Secrets (`JWT_SECRET`, `DATABASE_URL`) are only ever set via the environment —
 never committed.
@@ -123,5 +128,6 @@ TODO: implement docker-compose that pulls dockerhub image?
 
 ## Non-goals
 
-Multi-UF SEFAZ portals, XML-path parsing, and the frontend SPA are explicitly
-out of scope for the current plan — they become a follow-up plan after Phase 8.
+- **Frontend** - this is server-only
+- **multi-state** - For now, only São Paulo receipts will be implemented, other
+  states return 500 HTTP status

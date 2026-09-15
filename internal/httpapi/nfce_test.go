@@ -28,8 +28,19 @@ type stubResolver struct {
 	err     error
 }
 
-func (s stubResolver) Resolve(_ context.Context, _ nfce.AccessKey) (*domain.Nfce, error) {
+func (s stubResolver) Resolve(_ context.Context, _ nfce.AccessKey, _ string) (*domain.Nfce, error) {
 	return s.receipt, s.err
+}
+
+// captureResolver records the payload the handler forwarded, so tests can
+// assert the qr_payload path is actually used.
+type captureResolver struct {
+	payload string
+}
+
+func (c *captureResolver) Resolve(_ context.Context, _ nfce.AccessKey, payload string) (*domain.Nfce, error) {
+	c.payload = payload
+	return &domain.Nfce{AccessKey: senateKey}, nil
 }
 
 func nfceRouter(res nfceResolver) http.Handler {
@@ -157,5 +168,72 @@ func TestNfceSubmitUnknownError(t *testing.T) {
 		`{"access_key":"`+senateKey+`"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d", rec.Code)
+	}
+}
+
+func TestNfceSubmitQRPayloadReplayed(t *testing.T) {
+	// A v3 payload built from the public key, embedded in a full URL as a
+	// consumer scanner would hand us.
+	v3 := senateKey + "|3|1"
+	url := "https://www.nfce.fazenda.sp.gov.br/qrcode?p=" + v3
+	capture := &captureResolver{}
+	rec := postSubmit(t, nfceRouter(capture),
+		`{"qr_payload":"`+url+`"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if capture.payload != v3 {
+		t.Errorf("resolver received payload %q, want the exact scanned value %q", capture.payload, v3)
+	}
+}
+
+func TestNfceSubmitQRPayloadBareKeyNormalized(t *testing.T) {
+	capture := &captureResolver{}
+	rec := postSubmit(t, nfceRouter(capture),
+		`{"qr_payload":"`+senateKey+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if capture.payload != senateKey+"|3|1" {
+		t.Errorf("resolver received payload %q, want %q", capture.payload, senateKey+"|3|1")
+	}
+}
+
+func TestNfceSubmitQRPayloadInvalid(t *testing.T) {
+	for _, payload := range []string{"banana", "3524|3|1", "3524115232368800014465002000000257111567590x|3|1"} {
+		rec := postSubmit(t, nfceRouter(stubResolver{}), `{"qr_payload":"`+payload+`"}`)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("payload %q: status = %d, want 422", payload, rec.Code)
+		}
+		if code, _ := decodeErrorEnvelope(t, rec); code != "invalid_qr_payload" {
+			t.Errorf("payload %q: code = %q", payload, code)
+		}
+	}
+}
+
+func TestNfceSubmitQRPayloadConflictsWithKey(t *testing.T) {
+	other := "35241211222333000181650010000000911449128550"
+	rec := postSubmit(t, nfceRouter(stubResolver{}),
+		`{"access_key":"`+senateKey+`","qr_payload":"`+other+`|3|1"}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "invalid_qr_payload" {
+		t.Errorf("code = %q", code)
+	}
+}
+
+func TestNfceSubmitUnsupportedUF(t *testing.T) {
+	// Valid MG (31) key; the stub resolver answers the way the MultiResolver
+	// does for any state without a fixture-verified parser.
+	const mgKey = "31240112345000123456650010000002571123456785"
+	rec := postSubmit(t, nfceRouter(stubResolver{err: nfce.ErrUnsupportedUF}),
+		`{"access_key":"`+mgKey+`"}`)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "unsupported_uf" {
+		t.Errorf("code = %q", code)
 	}
 }

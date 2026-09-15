@@ -26,11 +26,11 @@ func serveFixture(t *testing.T, file string) *httptest.Server {
 	}))
 }
 
-func TestSPSourceFetchOK(t *testing.T) {
+func TestHTTPSourceFetchOK(t *testing.T) {
 	srv := serveFixture(t, "nfce_1.html")
 	defer srv.Close()
 
-	src, err := NewSPSource(SPSourceOptions{
+	src, err := NewHTTPSource(HTTPSourceOptions{
 		BaseURL:    srv.URL,
 		RPS:        100,
 		MaxRetries: 1,
@@ -40,7 +40,7 @@ func TestSPSourceFetchOK(t *testing.T) {
 	}
 
 	key, _ := ParseAccessKey(senateKey)
-	body, err := src.Fetch(context.Background(), key)
+	body, err := src.Fetch(context.Background(), key, "")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -49,17 +49,42 @@ func TestSPSourceFetchOK(t *testing.T) {
 	}
 }
 
-func TestSPSourceFetchCaptcha(t *testing.T) {
+func TestHTTPSourceFetchReplaysPayload(t *testing.T) {
+	raw, _ := os.ReadFile("../../testdata/nfce_1.html")
+	var gotP string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotP = r.URL.Query().Get("p")
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	src, _ := NewHTTPSource(HTTPSourceOptions{BaseURL: srv.URL, RPS: 100, MaxRetries: 1})
+	key, _ := ParseAccessKey(senateKey)
+	v2 := senateKey + "|2|1|4|af1234"
+
+	body, err := src.Fetch(context.Background(), key, v2)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if gotP != v2 {
+		t.Errorf("portal received p=%q, want the exact payload %q", gotP, v2)
+	}
+	if !pageHasDANFE(body) {
+		t.Errorf("fetched body is not a DANFE")
+	}
+}
+
+func TestHTTPSourceFetchCaptcha(t *testing.T) {
 	raw, _ := os.ReadFile("../../testdata/captcha.html")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(raw)
 	}))
 	defer srv.Close()
 
-	src, _ := NewSPSource(SPSourceOptions{BaseURL: srv.URL, RPS: 100, MaxRetries: 1})
+	src, _ := NewHTTPSource(HTTPSourceOptions{BaseURL: srv.URL, RPS: 100, MaxRetries: 1})
 	key, _ := ParseAccessKey(senateKey)
 
-	_, err := src.Fetch(context.Background(), key)
+	_, err := src.Fetch(context.Background(), key, "")
 	var capErr *CaptchaError
 	if !errors.As(err, &capErr) {
 		t.Fatalf("fetch error = %v, want *CaptchaError", err)
@@ -82,23 +107,23 @@ func TestSPSourceFetchCaptcha(t *testing.T) {
 	}
 }
 
-func TestSPSourceFetchNotFound(t *testing.T) {
+func TestHTTPSourceFetchNotFound(t *testing.T) {
 	raw, _ := os.ReadFile("../../testdata/notfound.html")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(raw)
 	}))
 	defer srv.Close()
 
-	src, _ := NewSPSource(SPSourceOptions{BaseURL: srv.URL, RPS: 100, MaxRetries: 1})
+	src, _ := NewHTTPSource(HTTPSourceOptions{BaseURL: srv.URL, RPS: 100, MaxRetries: 1})
 	key, _ := ParseAccessKey(senateKey)
 
-	_, err := src.Fetch(context.Background(), key)
+	_, err := src.Fetch(context.Background(), key, "")
 	if !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("fetch error = %v, want ErrKeyNotFound", err)
 	}
 }
 
-func TestSPSourceRetriesThenFailsUpstream(t *testing.T) {
+func TestHTTPSourceRetriesThenFailsUpstream(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
@@ -106,10 +131,10 @@ func TestSPSourceRetriesThenFailsUpstream(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, _ := NewSPSource(SPSourceOptions{BaseURL: srv.URL, RPS: 1000, MaxRetries: 2})
+	src, _ := NewHTTPSource(HTTPSourceOptions{BaseURL: srv.URL, RPS: 1000, MaxRetries: 2})
 	key, _ := ParseAccessKey(senateKey)
 
-	_, err := src.Fetch(context.Background(), key)
+	_, err := src.Fetch(context.Background(), key, "")
 	if !errors.Is(err, ErrUpstream) {
 		t.Fatalf("fetch error = %v, want ErrUpstream", err)
 	}
@@ -118,7 +143,7 @@ func TestSPSourceRetriesThenFailsUpstream(t *testing.T) {
 	}
 }
 
-func TestSPSourceRetriesThenSucceeds(t *testing.T) {
+func TestHTTPSourceRetriesThenSucceeds(t *testing.T) {
 	var calls int
 	raw, _ := os.ReadFile("../../testdata/nfce_2.html")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -131,10 +156,10 @@ func TestSPSourceRetriesThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	src, _ := NewSPSource(SPSourceOptions{BaseURL: srv.URL, RPS: 1000, MaxRetries: 3})
+	src, _ := NewHTTPSource(HTTPSourceOptions{BaseURL: srv.URL, RPS: 1000, MaxRetries: 3})
 	key, _ := ParseAccessKey(senateKey)
 
-	body, err := src.Fetch(context.Background(), key)
+	body, err := src.Fetch(context.Background(), key, "")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -146,19 +171,19 @@ func TestSPSourceRetriesThenSucceeds(t *testing.T) {
 	}
 }
 
-func TestSPSourceContextCancel(t *testing.T) {
+func TestHTTPSourceContextCancel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 	}))
 	defer srv.Close()
 
-	src, _ := NewSPSource(SPSourceOptions{BaseURL: srv.URL, RPS: 1000, MaxRetries: 3})
+	src, _ := NewHTTPSource(HTTPSourceOptions{BaseURL: srv.URL, RPS: 1000, MaxRetries: 3})
 	key, _ := ParseAccessKey(senateKey)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	if _, err := src.Fetch(ctx, key); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := src.Fetch(ctx, key, ""); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("fetch error = %v, want deadline exceeded", err)
 	}
 }

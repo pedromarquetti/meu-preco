@@ -53,18 +53,48 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver) http.H
 	return router
 }
 
-// newNfceResolver wires the São Paulo source + HTML parser into a resolver.
+// newNfceResolver wires a per-UF dispatch table from the nfce registry.
+// Only probe-verified states (currently São Paulo) get a resolver.
+// The remaining states are answered with 501 by the MultiResolver.
 func newNfceResolver(cfg config.Config, log *slog.Logger) nfceResolver {
-	src, err := nfce.NewSPSource(nfce.SPSourceOptions{
-		BaseURL:    cfg.SefazBaseURL,
-		RPS:        cfg.SEFAZFetchRPS,
-		HTTPClient: nil,
-		Logger:     log,
-	})
-	if err != nil {
-		// NewSPSource can only fail on a malformed cookie jar (never with the
-		// defaults); a resolver that cannot resolve is a nil stub.
+	byUF := make(map[string]*nfce.Resolver)
+	for _, uf := range nfce.Registry() {
+		if !uf.Supported {
+			continue
+		}
+
+		baseURL := uf.QRBaseURL
+
+		if uf.UF == "35" && cfg.SefazBaseURL != "" {
+			// The SP base URL is overridable (SEFAZ_BASE_URL) so fixtures and
+			// deployments can point it at an alternate endpoint.
+			baseURL = cfg.SefazBaseURL
+		}
+
+		if baseURL == "" {
+			baseURL = nfce.DefaultSPQRBaseURL
+		}
+
+		src, err := nfce.NewHTTPSource(nfce.HTTPSourceOptions{
+			BaseURL: baseURL,
+			RPS:     cfg.SEFAZFetchRPS,
+			Logger:  log,
+		})
+
+		if err != nil {
+			log.Error("httpapi: cannot build nfce source", "uf", uf.UF, "err", err)
+			continue
+		}
+
+		// All supported states belong to the same "Consulta Resumida" page
+		// family today, so one Parser serves them all. A state with its own
+		// portal family gets its own Parser (and file) when added.
+		byUF[uf.UF] = nfce.NewResolver(src, &nfce.HTMLParser{Logger: log})
+	}
+
+	if len(byUF) == 0 {
 		return nil
 	}
-	return nfce.NewResolver(src, &nfce.HTMLParser{Logger: log})
+
+	return nfce.NewMultiResolver(byUF)
 }
