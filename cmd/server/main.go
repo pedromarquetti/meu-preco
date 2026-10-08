@@ -9,10 +9,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"meupreco/internal/auth"
 	"meupreco/internal/config"
+	"meupreco/internal/domain"
 	"meupreco/internal/httpapi"
 	"meupreco/internal/logger"
 	pstore "meupreco/internal/store/postgres"
@@ -45,6 +48,16 @@ func run() error {
 	}
 
 	defer db.Close()
+
+	// Seed the initial admin (from the required ADMIN_EMAIL/ADMIN_PASSWORD env)
+	// before the listener starts, so the admin can log in on first boot. Once
+	// any user exists it is a no-op and every subsequent boot skips it.
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := seedAdmin(seedCtx, log, db.Users(), cfg); err != nil {
+		seedCancel()
+		return err
+	}
+	seedCancel()
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -83,6 +96,35 @@ func run() error {
 	}
 
 	log.Info("server stopped")
+	return nil
+}
+
+// seedAdmin creates the initial admin account (role "admin") from the
+// mandatory ADMIN_EMAIL/ADMIN_PASSWORD env the first time the database is
+// empty, before the HTTP listener starts. It logs and is a no-op once any
+// account exists, so it is safe on every boot and across replicas idempotently.
+func seedAdmin(ctx context.Context, log *slog.Logger, users domain.UserStore, cfg config.Config) error {
+	n, err := users.CountAdmin(ctx)
+	if err != nil {
+		return fmt.Errorf("seed admin: count admins: %w", err)
+	}
+	if n > 0 {
+		log.Info("at least one admin already present, skipping seed", "users", n)
+		return nil
+	}
+
+	hash, err := auth.HashPassword(cfg.AdminPassword)
+	if err != nil {
+		return fmt.Errorf("seed admin: hash password: %w", err)
+	}
+
+	email := strings.ToLower(strings.TrimSpace(cfg.AdminEmail))
+	u := &domain.User{Email: email, PasswordHash: hash, Role: "admin"}
+	if err := users.Create(ctx, u); err != nil {
+		return fmt.Errorf("seed admin: create: %w", err)
+	}
+
+	log.Info("seeded initial admin account", "email", email)
 	return nil
 }
 

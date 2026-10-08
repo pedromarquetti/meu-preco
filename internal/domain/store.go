@@ -20,6 +20,21 @@ type UserStore interface {
 	Create(ctx context.Context, u *User) error
 	GetByID(ctx context.Context, id int64) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
+	// CountAdmin returns the number of admins (used by the boot-time admin seed).
+	CountAdmin(ctx context.Context) (int64, error)
+}
+
+// RefreshTokenStore persists rotating refresh-token families. Hashes are
+// sha256(refresh token) — the raw JWT never touches the database.
+type RefreshTokenStore interface {
+	Create(ctx context.Context, t *RefreshToken) error
+	// Rotate atomically revokes the row matching oldHash (FOR UPDATE) and
+	// inserts next in the same family. Returns ErrNotFound when oldHash is
+	// unknown (reused/rotated-away token) and ErrConflict when the row was
+	// already revoked.
+	Rotate(ctx context.Context, oldHash string, next *RefreshToken) error
+	// RevokeFamily marks every token of a family as revoked (reuse detected).
+	RevokeFamily(ctx context.Context, familyID string) error
 }
 
 // SupermarketStore persists receipt emitters, upserting by CNPJ.
@@ -80,6 +95,7 @@ type Stores interface {
 	PriceLogs() PriceLogStore
 	Previews() PreviewStore
 	CommoditySynonyms() CommoditySynonymStore
+	RefreshTokens() RefreshTokenStore
 	// Ping verifies the database is reachable (used by /readyz).
 	Ping(ctx context.Context) error
 	// Close releases the underlying pool.

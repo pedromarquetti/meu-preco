@@ -49,3 +49,9 @@ func (r userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, e
 	}
 	return u, nil
 }
+
+func (r userRepo) CountAdmin(ctx context.Context) (int64, error) {
+	var n int64
+	err := r.s.pool.QueryRow(ctx, `SELECT count(*) FROM users where role = 'admin'`).Scan(&n)
+	return n, err
+}

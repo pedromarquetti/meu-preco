@@ -6,7 +6,6 @@
   - [Goals](#goals)
   - [How it works](#how-it-works)
   - [Stack](#stack)
-  - [Current status](#current-status)
   - [Getting started](#getting-started)
     - [Run with make](#run-with-make)
     - [env](#env)
@@ -131,17 +130,26 @@ The server expects some env. vars to be set.
 | POSTGRES_PORT     | no       | 5432      | postgres port (1–65535)                                                |
 | JWT_ACCESS_TTL    | no       | 15m       | Go duration (e.g. `15m`)                                               |
 | JWT_REFRESH_TTL   | no       | 720h      | Go duration (e.g. `720h`)                                              |
-| JWT_SECRET        | Phase 3  | —         | ≥ 32 chars (required when auth lands)                                  |
+| JWT_SECRET        | yes      | —         | ≥ 32 chars; signs access + refresh tokens                              |
+| ADMIN_EMAIL       | yes      | —         | seeds the first admin (role `admin`) at boot when `users` is empty     |
+| ADMIN_PASSWORD    | yes      | —         | seeds the first admin password (bcrypt-hashed at boot)                 |
 
 The DSN is built as `postgres://USER:PASS@HOST:PORT/DATABASE?sslmode=disable`.
-Missing DB vars abort startup with an explicit error. Secrets (DB password,
-`JWT_SECRET`) are only ever set via the environment — never committed.
+Missing DB vars (or a too-short `JWT_SECRET`, or a missing `ADMIN_EMAIL`/
+`ADMIN_PASSWORD`) abort startup with an explicit error. Secrets (DB password,
+`JWT_SECRET`, `ADMIN_PASSWORD`) are only ever set via the environment — never
+committed.
+
+The initial admin is created **at boot, before the HTTP listener starts** (no
+API call needed): the server hashes `ADMIN_PASSWORD` and inserts the admin the
+first time the `users` table is empty. Every later boot is a no-op, so the admin
+is already logged-in-able as soon as the server answers.
 
 `make run` and `make migrate-*` automatically load `./.env` if present
-(KEY=VALUE shell syntax; copy `.env.example` to `.env` and fill in real
-values). Without `.env`, vars must be exported in the shell. In Docker the
-platform injects environment directly (`env_file`/`-e`) — the compiled binary
-never reads `.env` itself.
+(KEY=VALUE shell syntax; copy `.env.example` to `.env` and fill in real values).
+Without `.env`, vars must be exported in the shell. In Docker the platform
+injects environment directly (`env_file`/`-e`) — the compiled binary never reads
+`.env` itself.
 
 ### Container image:
 

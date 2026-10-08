@@ -45,7 +45,7 @@ func (c *captureResolver) Resolve(_ context.Context, _ nfce.AccessKey, payload s
 
 func nfceRouter(res nfceResolver) http.Handler {
 	return newRouter(config.Config{CORSOrigins: []string{"https://app.example.com"}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), res, fakePinger{})
+		slog.New(slog.NewTextHandler(io.Discard, nil)), res, &fakeStores{})
 }
 
 func postSubmit(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {

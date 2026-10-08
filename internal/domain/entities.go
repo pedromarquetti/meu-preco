@@ -16,6 +16,18 @@ type User struct {
 	CreatedAt    time.Time
 }
 
+// RefreshToken tracks one live refresh-token family row so rotation and
+// reuse detection can be enforced server-side. TokenHash is sha256(token).
+type RefreshToken struct {
+	ID        int64
+	UserID    int64
+	FamilyID  string
+	TokenHash string
+	Revoked   bool
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
 // Product is the canonical master-data row for one sellable item, keyed by
 // product_key (a 14-digit GTIN or a deterministic commodity hash).
 type Product struct {

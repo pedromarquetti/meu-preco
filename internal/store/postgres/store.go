@@ -96,6 +96,9 @@ func (s *Store) Previews() domain.PreviewStore { return previewRepo{s} }
 // CommoditySynonyms returns the commodity synonym repository.
 func (s *Store) CommoditySynonyms() domain.CommoditySynonymStore { return synonymRepo{s} }
 
+// RefreshTokens returns the refresh-token repository.
+func (s *Store) RefreshTokens() domain.RefreshTokenStore { return refreshTokenRepo{s} }
+
 // translateError converts a pgx error into the ported sentinels.
 func translateError(err error) error {
 	switch {

@@ -20,12 +20,19 @@ type Config struct {
 	CORSOrigins []string
 
 	// DatabaseURL is built from POSTGRES_USERNAME, POSTGRES_PASSWORD and
-	// DATABASE_NAME (plus optional POSTGRES_HOST/POSTGRES_PORT). JWTSecret is
-	// consumed by Phase 3 (auth).
-	DatabaseURL   string
+	// DATABASE_NAME (plus optional POSTGRES_HOST/POSTGRES_PORT).
+	DatabaseURL string
+
+	// JWTSecret signs access+refresh tokens (Phase 3); >= 32 chars.
 	JWTSecret     string
 	JWTAccessTTL  time.Duration
 	JWTRefreshTTL time.Duration
+
+	// AdminEmail/AdminPassword seed the first admin account at boot when the
+	// users table is empty, so the admin is available before the server starts
+	// serving. Both are required (see requiredEnv).
+	AdminEmail    string
+	AdminPassword string
 
 	// SEFAZFetchRPS caps how many requests per second the SP NFC-e portal
 	// fetcher may issue (politeness/anti-ban knob).
@@ -38,7 +45,11 @@ type Config struct {
 
 // requiredEnv lists environment variables without which the process must not
 // boot.
-var requiredEnv = map[string]bool{}
+var requiredEnv = map[string]bool{
+	"JWT_SECRET":     true,
+	"ADMIN_EMAIL":    true,
+	"ADMIN_PASSWORD": true,
+}
 
 // Load reads the process environment, applies defaults and validates.
 // On any problem it returns an actionable error naming the offending
@@ -101,6 +112,8 @@ func load(env map[string]string) (Config, error) {
 		JWTSecret:     env["JWT_SECRET"],
 		JWTAccessTTL:  jwtAccessTTL,
 		JWTRefreshTTL: jwtRefreshTTL,
+		AdminEmail:    env["ADMIN_EMAIL"],
+		AdminPassword: env["ADMIN_PASSWORD"],
 		SEFAZFetchRPS: sefaRPS,
 		SefazBaseURL:  env["SEFAZ_BASE_URL"],
 	}
@@ -170,6 +183,9 @@ func (c Config) Validate() error {
 	}
 	if c.JWTRefreshTTL <= 0 {
 		return fmt.Errorf("config: JWT_REFRESH_TTL must be a positive duration")
+	}
+	if len(c.JWTSecret) < 32 {
+		return fmt.Errorf("config: JWT_SECRET must be at least 32 characters")
 	}
 	if c.SEFAZFetchRPS < 1 {
 		return fmt.Errorf("config: SEFAZ_FETCH_RPS must be >= 1")

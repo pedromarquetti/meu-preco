@@ -10,19 +10,29 @@ import (
 	"testing"
 
 	"meupreco/internal/config"
+	"meupreco/internal/domain"
 )
 
-var stubGroups = []string{"/api/v1/auth", "/api/v1/price-logs", "/api/v1/products", "/api/v1/admin"}
+var stubGroups = []string{"/api/v1/price-logs", "/api/v1/products"}
 
-// fakePinger simulates a reachable database.
-type fakePinger struct{ err error }
+// fakeStores is an in-memory domain.Stores for httptest router creation. The
+// repositories it does not exercise are the embedded nil interface (they
+// panic if called); auth tests swap real in-memory fakes in via the fields.
+type fakeStores struct {
+	domain.Stores
+	users         domain.UserStore
+	refreshTokens domain.RefreshTokenStore
+	pingErr       error
+}
 
-func (f fakePinger) Ping(context.Context) error { return f.err }
+func (f *fakeStores) Users() domain.UserStore                 { return f.users }
+func (f *fakeStores) RefreshTokens() domain.RefreshTokenStore { return f.refreshTokens }
+func (f *fakeStores) Ping(context.Context) error              { return f.pingErr }
 
 func testRouter() http.Handler {
 	return New(config.Config{CORSOrigins: []string{"https://app.example.com"}},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		fakePinger{})
+		&fakeStores{})
 }
 
 func TestHealthz(t *testing.T) {

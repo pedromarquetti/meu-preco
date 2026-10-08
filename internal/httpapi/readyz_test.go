@@ -9,16 +9,17 @@ import (
 	"testing"
 
 	"meupreco/internal/config"
+	"meupreco/internal/domain"
 )
 
-func newTestRouter(p pinger) http.Handler {
+func newTestRouter(s domain.Stores) http.Handler {
 	return New(config.Config{CORSOrigins: nil},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), p)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), s)
 }
 
 func TestReadyzOK(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newTestRouter(fakePinger{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	newTestRouter(&fakeStores{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -26,7 +27,7 @@ func TestReadyzOK(t *testing.T) {
 
 func TestReadyzDBUnreachableIs503(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newTestRouter(fakePinger{err: errors.New("connection refused")}).
+	newTestRouter(&fakeStores{pingErr: errors.New("connection refused")}).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)

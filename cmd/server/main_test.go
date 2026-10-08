@@ -46,6 +46,9 @@ func TestServerGracefulShutdown(t *testing.T) {
 	cmd.Env = withEnv(cmd.Env, "POSTGRES_USERNAME", "dev")
 	cmd.Env = withEnv(cmd.Env, "POSTGRES_PASSWORD", "dev")
 	cmd.Env = withEnv(cmd.Env, "DATABASE_NAME", "meupreco_test")
+	cmd.Env = withEnv(cmd.Env, "JWT_SECRET", "test-only-secret-with-at-least-32-chars")
+	cmd.Env = withEnv(cmd.Env, "ADMIN_EMAIL", "admin@example.com")
+	cmd.Env = withEnv(cmd.Env, "ADMIN_PASSWORD", "test-admin-password")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 

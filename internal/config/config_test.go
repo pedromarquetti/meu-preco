@@ -1,18 +1,23 @@
 package config
 
 import (
+	"maps"
 	"strings"
 	"testing"
 	"time"
 )
 
-// env returns a valid PostgreSQL environment (POSTGRES_* are required by
-// load) merged with test-specific overrides.
+// env returns a valid base environment (POSTGRES_*, JWT_SECRET, ADMIN_EMAIL
+// and ADMIN_PASSWORD are required by load) merged with test-specific
+// overrides.
 func env(extra map[string]string) map[string]string {
 	m := map[string]string{
 		"POSTGRES_USERNAME": "dev",
 		"POSTGRES_PASSWORD": "dev",
 		"DATABASE_NAME":     "meupreco",
+		"JWT_SECRET":        "test-secret-with-at-least-32-characters",
+		"ADMIN_EMAIL":       "admin@example.com",
+		"ADMIN_PASSWORD":    "a-long-admin-password",
 	}
 	for k, v := range extra {
 		m[k] = v
@@ -83,7 +88,7 @@ func TestLoadOverrides(t *testing.T) {
 		"SEFAZ_FETCH_RPS": "2",
 		"POSTGRES_HOST":   "db.internal",
 		"POSTGRES_PORT":   "5433",
-		"JWT_SECRET":      "s3cret",
+		"JWT_SECRET":      "an-overridden-secret-with-more-than-32-chars",
 	}))
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -97,22 +102,55 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.JWTAccessTTL != 5*time.Minute || cfg.JWTRefreshTTL != time.Hour {
 		t.Errorf("TTLs = %v / %v", cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 	}
-	if cfg.DatabaseURL != "postgres://dev:dev@db.internal:5433/meupreco?sslmode=disable" || cfg.JWTSecret != "s3cret" {
+	if cfg.DatabaseURL != "postgres://dev:dev@db.internal:5433/meupreco?sslmode=disable" || cfg.JWTSecret != "an-overridden-secret-with-more-than-32-chars" {
 		t.Errorf("DatabaseURL/JWTSecret not built/read: %+v", cfg)
 	}
 }
 
 func TestLoadMissingPostgresEnv(t *testing.T) {
-	_, err := load(map[string]string{})
+	// JWT_SECRET, ADMIN_EMAIL and ADMIN_PASSWORD are required too, but this
+	// test isolates the PostgreSQL vars: supply them so buildPostgresURL is
+	// what reports the missing DATABASE_*.
+	_, err := load(map[string]string{
+		"JWT_SECRET":     "a-valid-secret-with-at-least-32-chars",
+		"ADMIN_EMAIL":    "admin@example.com",
+		"ADMIN_PASSWORD": "a-long-admin-password",
+	})
 	if err == nil || !strings.Contains(err.Error(), "POSTGRES_USERNAME") ||
 		!strings.Contains(err.Error(), "POSTGRES_PASSWORD") ||
 		!strings.Contains(err.Error(), "DATABASE_NAME") {
 		t.Fatalf("expected error naming all missing vars, got %v", err)
 	}
 
-	_, err = load(map[string]string{"POSTGRES_USERNAME": "dev", "POSTGRES_PASSWORD": "dev"})
+	_, err = load(map[string]string{
+		"JWT_SECRET":        "a-valid-secret-with-at-least-32-chars",
+		"ADMIN_EMAIL":       "admin@example.com",
+		"ADMIN_PASSWORD":    "a-long-admin-password",
+		"POSTGRES_USERNAME": "dev",
+		"POSTGRES_PASSWORD": "dev",
+	})
 	if err == nil || !strings.Contains(err.Error(), "DATABASE_NAME") {
 		t.Fatalf("expected error naming missing DATABASE_NAME, got %v", err)
+	}
+}
+
+func TestLoadMissingAdminEnv(t *testing.T) {
+	base := env(nil)
+
+	for _, missing := range []string{"ADMIN_EMAIL", "ADMIN_PASSWORD"} {
+		envMap := maps.Clone(base)
+		delete(envMap, missing)
+		_, err := load(envMap)
+		if err == nil || !strings.Contains(err.Error(), missing) {
+			t.Errorf("%s unset: expected required-env error, got %v", missing, err)
+		}
+
+		envMap = maps.Clone(base)
+		envMap[missing] = ""
+		_, err = load(envMap)
+		if err == nil || !strings.Contains(err.Error(), missing) {
+			t.Errorf("%s empty: expected required-env error, got %v", missing, err)
+		}
 	}
 }
 
@@ -193,6 +231,30 @@ func TestLoadBadRPS(t *testing.T) {
 	_, err := load(env(map[string]string{"SEFAZ_FETCH_RPS": "0"}))
 	if err == nil || !strings.Contains(err.Error(), "SEFAZ_FETCH_RPS") {
 		t.Fatalf("expected SEFAZ_FETCH_RPS error, got %v", err)
+	}
+}
+
+func TestLoadBadJWTSecret(t *testing.T) {
+	_, err := load(env(map[string]string{"JWT_SECRET": ""}))
+	if err == nil || !strings.Contains(err.Error(), "JWT_SECRET") {
+		t.Fatalf("expected JWT_SECRET missing error, got %v", err)
+	}
+	_, err = load(env(map[string]string{"JWT_SECRET": "too-short"}))
+	if err == nil || !strings.Contains(err.Error(), "JWT_SECRET") {
+		t.Fatalf("expected JWT_SECRET length error, got %v", err)
+	}
+}
+
+func TestLoadAdminEnv(t *testing.T) {
+	cfg, err := load(env(map[string]string{
+		"ADMIN_EMAIL":    "ops@example.com",
+		"ADMIN_PASSWORD": "s3cret-admin",
+	}))
+	if err != nil {
+		t.Fatalf("admin env rejected: %v", err)
+	}
+	if cfg.AdminEmail != "ops@example.com" || cfg.AdminPassword != "s3cret-admin" {
+		t.Errorf("admin env not read: %+v", cfg)
 	}
 }
 

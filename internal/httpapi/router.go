@@ -8,21 +8,21 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"meupreco/internal/config"
+	"meupreco/internal/domain"
 	"meupreco/internal/httpx"
 	"meupreco/internal/middleware"
 	"meupreco/internal/nfce"
 )
 
 // New builds the full HTTP handler from the validated configuration.
-// db (optional) is the store used by /readyz; nil means "no database
-// configured" and the check answers 503.
-func New(cfg config.Config, log *slog.Logger, db pinger) http.Handler {
-	return newRouter(cfg, log, newNfceResolver(cfg, log), db)
+// stores drives /readyz (Ping) and auth endpoints.
+func New(cfg config.Config, log *slog.Logger, stores domain.Stores) http.Handler {
+	return newRouter(cfg, log, newNfceResolver(cfg, log), stores)
 }
 
 // newRouter assembles the router with the given nfce resolver (kept injectable
 // for httptest tests).
-func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, db pinger) http.Handler {
+func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores domain.Stores) http.Handler {
 	router := chi.NewRouter()
 
 	router.Use(
@@ -37,7 +37,9 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, db pin
 
 	// Health checks stay unprefixed; everything else lives under /api/v1/.
 	router.Get("/healthz", healthz)
-	router.Get("/readyz", readyz(db))
+	router.Get("/readyz", readyz(stores))
+
+	authAPI := newAuthAPI(cfg, stores)
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Route("/nfce", func(nr chi.Router) {
@@ -45,12 +47,34 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, db pin
 			nr.NotFound(http.HandlerFunc(httpx.NotImplemented))
 		})
 
-		for _, prefix := range []string{"/auth", "/price-logs", "/products", "/admin"} {
+		r.Route("/auth", func(ar chi.Router) {
+			ar.Post("/register", authAPI.register)
+			ar.Post("/login", authAPI.login)
+			ar.Post("/refresh", authAPI.refreshHandler)
+			ar.With(authAPI.mw.RequireAuth).Get("/me", authAPI.me)
+			ar.NotFound(httpx.NotFound)
+		})
+
+		// The admin group exists and is gated (401 without
+		// token, 403 for non-admin, 200 for admin).
+		r.Route("/admin", func(ar chi.Router) {
+			ar.Use(authAPI.mw.RequireRole("admin"))
+			ar.Get("/", adminStub)
+			ar.NotFound(httpx.NotFound)
+		})
+
+		for _, prefix := range []string{"/price-logs", "/products"} {
 			r.Mount(prefix, http.HandlerFunc(httpx.NotImplemented))
 		}
 	})
 
 	return router
+}
+
+// adminStub is the admin-gated placeholder; it answers 200 only when
+// an admin token passed the RequireRole gate.
+func adminStub(w http.ResponseWriter, _ *http.Request) {
+	httpx.Respond(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // newNfceResolver wires a per-UF dispatch table from the nfce registry.
