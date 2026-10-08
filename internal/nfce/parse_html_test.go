@@ -111,7 +111,7 @@ func TestParseGroceryReceipt(t *testing.T) {
 	if n.Number != "257" || n.Series != "002" {
 		t.Errorf("number/series = %q/%q", n.Number, n.Series)
 	}
-	if want := time.Date(2024, time.November, 15, 8, 52, 53, 0, time.UTC); !n.IssuedAt.Equal(want) {
+	if want := time.Date(2024, time.November, 15, 8, 52, 53, 0, time.UTC); n.IssuedAt == nil || !n.IssuedAt.Equal(want) {
 		t.Errorf("issuedAt = %v, want %v", n.IssuedAt, want)
 	}
 	if n.Protocol != "435261386373123" {

@@ -14,15 +14,15 @@ import (
 )
 
 // New builds the full HTTP handler from the validated configuration.
-// Endpoint groups that belong to later phases are mounted as 501 stubs so the
-// route boundary is visible from day one and handlers mount in place later.
-func New(cfg config.Config, log *slog.Logger) http.Handler {
-	return newRouter(cfg, log, newNfceResolver(cfg, log))
+// db (optional) is the store used by /readyz; nil means "no database
+// configured" and the check answers 503.
+func New(cfg config.Config, log *slog.Logger, db pinger) http.Handler {
+	return newRouter(cfg, log, newNfceResolver(cfg, log), db)
 }
 
 // newRouter assembles the router with the given nfce resolver (kept injectable
 // for httptest tests).
-func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver) http.Handler {
+func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, db pinger) http.Handler {
 	router := chi.NewRouter()
 
 	router.Use(
@@ -37,7 +37,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver) http.H
 
 	// Health checks stay unprefixed; everything else lives under /api/v1/.
 	router.Get("/healthz", healthz)
-	router.Get("/readyz", readyz)
+	router.Get("/readyz", readyz(db))
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Route("/nfce", func(nr chi.Router) {

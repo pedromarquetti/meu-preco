@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -18,9 +19,9 @@ type Config struct {
 	LogFormat   string
 	CORSOrigins []string
 
-	// DatabaseURL and JWTSecret are consumed by later phases (DB in Phase 2,
-	// auth in Phase 3). They are read now so the contract is stable and will
-	// become required once those subsystems land (see requiredEnv below).
+	// DatabaseURL is built from POSTGRES_USERNAME, POSTGRES_PASSWORD and
+	// DATABASE_NAME (plus optional POSTGRES_HOST/POSTGRES_PORT). JWTSecret is
+	// consumed by Phase 3 (auth).
 	DatabaseURL   string
 	JWTSecret     string
 	JWTAccessTTL  time.Duration
@@ -44,6 +45,13 @@ var requiredEnv = map[string]bool{}
 // variable; main() must abort on it.
 func Load() (Config, error) {
 	return load(envSnapshot())
+}
+
+// PostgresURLFromEnv builds the PostgreSQL DSN from the process environment
+// using the same rules as Load, so auxiliary tools (cmd/migrate) share one
+// source of truth. It errors, explicitly, when a required variable is missing.
+func PostgresURLFromEnv() (string, error) {
+	return buildPostgresURL(envSnapshot())
 }
 
 func envSnapshot() map[string]string {
@@ -79,12 +87,17 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	dsn, err := buildPostgresURL(env)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Port:          envString(env, "PORT", "8080"),
 		LogLevel:      envString(env, "LOG_LEVEL", "info"),
 		LogFormat:     envString(env, "LOG_FORMAT", "pretty"),
 		CORSOrigins:   csvSlice(envString(env, "CORS_ORIGINS", "*")),
-		DatabaseURL:   env["DATABASE_URL"],
+		DatabaseURL:   dsn,
 		JWTSecret:     env["JWT_SECRET"],
 		JWTAccessTTL:  jwtAccessTTL,
 		JWTRefreshTTL: jwtRefreshTTL,
@@ -92,6 +105,45 @@ func load(env map[string]string) (Config, error) {
 		SefazBaseURL:  env["SEFAZ_BASE_URL"],
 	}
 	return cfg, cfg.Validate()
+}
+
+// buildPostgresURL assembles postgres://user:pass@host:port/db?sslmode=disable
+// from POSTGRES_USERNAME, POSTGRES_PASSWORD and DATABASE_NAME (required),
+// POSTGRES_HOST (default localhost) and POSTGRES_PORT (default 5432). Missing
+// variables or a malformed port produce an explicit, actionable error.
+func buildPostgresURL(env map[string]string) (string, error) {
+	var missing []string
+
+	for _, k := range []string{"POSTGRES_USERNAME", "POSTGRES_PASSWORD", "DATABASE_NAME"} {
+		if env[k] == "" {
+			missing = append(missing, k)
+		}
+	}
+
+	if len(missing) > 0 {
+		return "", fmt.Errorf("config: missing required PostgreSQL environment variable(s): %s",
+			strings.Join(missing, ", "))
+	}
+
+	host := envString(env, "POSTGRES_HOST", "localhost")
+	port := envString(env, "POSTGRES_PORT", "5432")
+
+	if _, err := strconv.Atoi(port); err != nil {
+		return "", fmt.Errorf("config: POSTGRES_PORT must be a number, got %q", port)
+	}
+
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(env["POSTGRES_USERNAME"], env["POSTGRES_PASSWORD"]),
+		Host:   net.JoinHostPort(host, port),
+		Path:   "/" + env["DATABASE_NAME"],
+	}
+
+	q := u.Query()
+	q.Set("sslmode", "disable")
+	u.RawQuery = q.Encode()
+
+	return u.String(), nil
 }
 
 // Validate checks the assembled Config for semantic errors.
@@ -127,6 +179,13 @@ func (c Config) Validate() error {
 
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("config: SEFAZ_BASE_URL must be an http(s) URL, got %q", c.SefazBaseURL)
+		}
+	}
+
+	if c.DatabaseURL != "" {
+		u, err := url.Parse(c.DatabaseURL)
+		if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil || u.Host == "" {
+			return fmt.Errorf("config: DATABASE_URL must be a postgres:// URL, got %q", c.DatabaseURL)
 		}
 	}
 

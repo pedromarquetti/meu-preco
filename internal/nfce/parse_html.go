@@ -229,12 +229,16 @@ func parseMetadata(doc *goquery.Document, n *domain.Nfce) {
 			if m := serieRegex.FindStringSubmatch(body); len(m) > 1 {
 				n.Series = m[1]
 			}
+
 			if m := emissaoRegex.FindStringSubmatch(body); len(m) > 2 {
-				n.IssuedAt = parseEmissao(m[1], m[2])
+				t := parseEmissao(m[1], m[2])
+				n.IssuedAt = &t
 			}
+
 			if m := protoRegex.FindStringSubmatch(body); len(m) > 1 {
 				n.Protocol = m[1]
 			}
+
 			if m := ambRegex.FindStringSubmatch(body); len(m) > 1 {
 				n.Environment = m[1]
 			}

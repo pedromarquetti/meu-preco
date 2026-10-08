@@ -15,6 +15,7 @@ import (
 	"meupreco/internal/config"
 	"meupreco/internal/httpapi"
 	"meupreco/internal/logger"
+	pstore "meupreco/internal/store/postgres"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -34,9 +35,20 @@ func run() error {
 	}
 
 	log := newLogger(cfg.LogLevel, cfg.LogFormat)
+
+	// Open the database pool. It is lazy (no round-trip yet), so boot succeeds
+	// even while PostgreSQL is down; readyz reports 503 until Ping succeeds.
+	db, err := pstore.New(pstore.Options{DSN: cfg.DatabaseURL})
+
+	if err != nil {
+		return err
+	}
+
+	defer db.Close()
+
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           httpapi.New(cfg, log),
+		Handler:           httpapi.New(cfg, log, db),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

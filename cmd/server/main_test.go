@@ -40,13 +40,19 @@ func TestServerGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	cmd := exec.Command(bin)
 	cmd.Env = withEnv(os.Environ(), "PORT", freePort(t))
+	cmd.Env = withEnv(cmd.Env, "POSTGRES_USERNAME", "dev")
+	cmd.Env = withEnv(cmd.Env, "POSTGRES_PASSWORD", "dev")
+	cmd.Env = withEnv(cmd.Env, "DATABASE_NAME", "meupreco_test")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+
 	defer func() {
 		_ = cmd.Process.Kill()
 	}()
