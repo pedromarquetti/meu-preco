@@ -62,3 +62,7 @@ migrate-down:
 
 migrate-version:
 	@$(ENV_LOAD) go run ./cmd/migrate version
+
+# Import a gzipped Open Food Facts products dump (789/790 GTINs only, idempotent).
+seed-off:
+	@$(ENV_LOAD) go run ./cmd/seed-off $(ARGS)

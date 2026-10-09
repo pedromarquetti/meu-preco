@@ -42,7 +42,7 @@ func (m *Middleware) RequireRole(role string) func(http.Handler) http.Handler {
 			if !ok {
 				return
 			}
-			
+
 			if claims.Role != role {
 				httpx.Error(w, r, http.StatusForbidden, "forbidden", "insufficient role")
 				return

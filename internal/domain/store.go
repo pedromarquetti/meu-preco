@@ -51,6 +51,14 @@ type ProductStore interface {
 	GetByKey(ctx context.Context, key string) (*Product, error)
 	GetByGTIN(ctx context.Context, gtin string) (*Product, error)
 	Search(ctx context.Context, query string, limit, offset int) ([]Product, error)
+	// UpsertMany batch-inserts products keyed on product_key, updating the
+	// row when it already exists; returns how many rows were created new.
+	// Used by the OFF bulk seeder, which must be safe to re-run.
+	UpsertMany(ctx context.Context, products []*Product) (int, error)
+	// NearestMatch returns the product most similar to stem (pg_trgm over
+	// name/brand/canonical_stem) together with its similarity score, or
+	// ErrNotFound when no row clears the threshold.
+	NearestMatch(ctx context.Context, stem string, threshold float64) (*Product, float64, error)
 }
 
 // NfceStore persists normalized receipts, one per access key.

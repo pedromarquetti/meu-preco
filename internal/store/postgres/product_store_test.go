@@ -126,4 +126,115 @@ func TestProductNotFound(t *testing.T) {
 	}
 }
 
+func TestProductUpsertMany(t *testing.T) {
+	s := mustStore(t)
+	truncate(t)
+	ctx := context.Background()
+
+	gtin := "07896008038717"
+	rows := []*domain.Product{
+		{ProductKey: gtin, GTIN: stringPtr("7896008038717"), Name: "ARROZ BRANCO TIPO 1 5KG", Unit: "UN"},
+		{ProductKey: "cm-limao", Name: "Limão Tahiti", CanonicalStem: stringPtr("limao tahiti"), Unit: "UN"},
+	}
+	created, err := s.Products().UpsertMany(ctx, rows)
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if created != 2 {
+		t.Errorf("created = %d, want 2", created)
+	}
+	// GTIN normalized by the trigger.
+	byG, err := s.Products().GetByGTIN(ctx, "7896008038717")
+	if err != nil {
+		t.Fatalf("get by gtin after upsert: %v", err)
+	}
+	if byG.Name != "ARROZ BRANCO TIPO 1 5KG" {
+		t.Errorf("name = %q", byG.Name)
+	}
+
+	// Re-run: upserts in place (no duplicates), returns created=0.
+	byG.Name = "ARROZ BRANCO TIPO 1 5KG (ATUALIZADO)"
+	rows2 := []*domain.Product{{ProductKey: gtin, GTIN: stringPtr("7896008038717"), Name: byG.Name, Unit: "UN"}}
+	created, err = s.Products().UpsertMany(ctx, rows2)
+	if err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	if created != 0 {
+		t.Errorf("created on re-run = %d, want 0 (idempotent)", created)
+	}
+	got, err := s.Products().GetByKey(ctx, gtin)
+	if err != nil {
+		t.Fatalf("get by key: %v", err)
+	}
+	if got.Name != "ARROZ BRANCO TIPO 1 5KG (ATUALIZADO)" {
+		t.Errorf("name after re-upsert = %q", got.Name)
+	}
+}
+
+func TestProductUpsertManyChunked(t *testing.T) {
+	s := mustStore(t)
+	truncate(t)
+	ctx := context.Background()
+
+	// Past chunkSize (100) to exercise the multi-statement path.
+	rows := make([]*domain.Product, 0, 250)
+	for i := 0; i < 250; i++ {
+		rows = append(rows, &domain.Product{
+			ProductKey: "key-" + string(rune('a'+i%26)) + itoa(i),
+			Name:       "Produto",
+			Unit:       "UN",
+		})
+	}
+	created, err := s.Products().UpsertMany(ctx, rows)
+	if err != nil {
+		t.Fatalf("upsert many: %v", err)
+	}
+	if created != 250 {
+		t.Errorf("created = %d, want 250", created)
+	}
+}
+
+func TestProductNearestMatch(t *testing.T) {
+	s := mustStore(t)
+	truncate(t)
+	ctx := context.Background()
+
+	if err := s.Products().Create(ctx, &domain.Product{
+		ProductKey:    "cm-batata",
+		Name:          "Batata Inglesa",
+		CanonicalStem: stringPtr("batata inglesa"),
+		Unit:          "KG",
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	p, sim, err := s.Products().NearestMatch(ctx, "batata", 0.3)
+	if err != nil {
+		t.Fatalf("nearest match: %v", err)
+	}
+	if sim < 0.3 {
+		t.Errorf("sim = %f, below threshold", sim)
+	}
+	if p == nil || p.Name != "Batata Inglesa" {
+		t.Fatalf("product = %+v", p)
+	}
+
+	// A query with nothing related must not match anything.
+	if _, _, err := s.Products().NearestMatch(ctx, "zzzzzzzzzzzzzzz", 0.3); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
+}
+
 func stringPtr(s string) *string { return &s }

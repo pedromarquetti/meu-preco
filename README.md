@@ -109,6 +109,13 @@ make migrate-version
 # Postgres integration tests use their own database ($MEUPRECO_TEST_DATABASE_URL)
 export MEUPRECO_TEST_DATABASE_URL='postgres://dev:dev@localhost:5432/meupreco_test?sslmode=disable'
 go test ./internal/store/...
+
+# Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)
+make seed-off ARGS=./openfoodfacts-products.jsonl.gz
+
+# Opt-in live Open Food Facts BR test (hermetic runs skip it)
+export MEUPRECO_LIVE_OFF=1
+go test ./internal/enrich/... -run TestOFFLookupLive -v
 ```
 
 ### env
