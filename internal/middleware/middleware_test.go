@@ -147,7 +147,7 @@ func TestCORSPreflight(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
 		t.Errorf("ACAO = %q, want *", got)
 	}
-	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Idempotency-Key") {
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Content-Type") || strings.Contains(got, "Idempotency-Key") {
 		t.Errorf("Allow-Headers = %q", got)
 	}
 }

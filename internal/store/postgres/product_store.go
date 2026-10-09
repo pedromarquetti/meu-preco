@@ -8,10 +8,10 @@ import (
 	"meupreco/internal/domain"
 )
 
-type productRepo struct{ s *Store }
+type productRepo struct{ db queryer }
 
 func (r productRepo) Create(ctx context.Context, p *domain.Product) error {
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`INSERT INTO products (product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id, gtin, created_at`,
@@ -28,7 +28,7 @@ func (r productRepo) Create(ctx context.Context, p *domain.Product) error {
 
 func (r productRepo) GetByID(ctx context.Context, id int64) (*domain.Product, error) {
 	p := &domain.Product{}
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by, created_at
 		 FROM products WHERE id = $1`, id,
 	).Scan(&p.ID, &p.ProductKey, &p.GTIN, &p.Name, &p.Brand, &p.Unit,
@@ -41,7 +41,7 @@ func (r productRepo) GetByID(ctx context.Context, id int64) (*domain.Product, er
 
 func (r productRepo) GetByKey(ctx context.Context, key string) (*domain.Product, error) {
 	p := &domain.Product{}
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by, created_at
 		 FROM products WHERE product_key = $1`, key,
 	).Scan(&p.ID, &p.ProductKey, &p.GTIN, &p.Name, &p.Brand, &p.Unit,
@@ -56,7 +56,7 @@ func (r productRepo) GetByGTIN(ctx context.Context, gtin string) (*domain.Produc
 	p := &domain.Product{}
 	// normalize_gtin keeps the stored value canonical (14 digits); the lookup
 	// normalizes the bare input the same way.
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by, created_at
 		 FROM products WHERE gtin = normalize_gtin($1)`, gtin,
 	).Scan(&p.ID, &p.ProductKey, &p.GTIN, &p.Name, &p.Brand, &p.Unit,
@@ -81,7 +81,7 @@ func (r productRepo) Search(ctx context.Context, query string, limit, offset int
 		similarity(COALESCE(canonical_stem, ''), $1)
 	)`
 
-	rows, err := r.s.pool.Query(ctx,
+	rows, err := r.db.Query(ctx,
 		`SELECT id, product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by, created_at,
 		        `+score+` AS sim
 		 FROM products
@@ -154,7 +154,7 @@ func (r productRepo) upsertChunk(ctx context.Context, chunk []*domain.Product) (
 			unit = EXCLUDED.unit
 		RETURNING (xmax = 0) AS inserted`)
 
-	rows, err := r.s.pool.Query(ctx, sql.String(), args...)
+	rows, err := r.db.Query(ctx, sql.String(), args...)
 	if err != nil {
 		return 0, err
 	}
@@ -185,7 +185,7 @@ func (r productRepo) NearestMatch(ctx context.Context, stem string, threshold fl
 
 	p := &domain.Product{}
 	var sim float64
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by, created_at,
 		        `+score+` AS sim
 		 FROM products

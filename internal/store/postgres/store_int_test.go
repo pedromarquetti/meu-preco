@@ -54,6 +54,11 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// schemaLockKey serializes schema-affecting setup against other test packages
+// sharing the same MEUPRECO_TEST_DATABASE_URL (the httpapi integration suite
+// uses the same key). Down+Up and Up-only migrations must never interleave.
+const schemaLockKey int64 = 0x6d6575707265636f // "meupreco" as a u64
+
 // resetSchema rolls every migration back then forward so a test run always
 // starts from the same migrated state.
 func resetSchema(dsn string) error {
@@ -67,11 +72,46 @@ func resetSchema(dsn string) error {
 		return err
 	}
 
-	_ = m.Down() // ignores ErrNoChange from a clean DB
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+	if err := withSchemaLock(dsn, func() error {
+		if err := m.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+			return err
+		}
+		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	return nil
+}
+
+// withSchemaLock runs fn while holding the shared schema advisory lock on the
+// same database. pg_advisory_lock is session-scoped, so the lock lives on a
+// dedicated connection through the call.
+func withSchemaLock(dsn string, fn func() error) (err error) {
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	conn, err := pool.Acquire(context.Background())
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(context.Background(),
+		`SELECT pg_advisory_lock($1)`, schemaLockKey); err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = conn.Exec(context.Background(),
+			`SELECT pg_advisory_unlock($1)`, schemaLockKey)
+	}()
+
+	return fn()
 }
 
 // mustStore returns the shared store, skipping the test when postgres is not

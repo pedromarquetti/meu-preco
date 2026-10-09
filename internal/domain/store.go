@@ -80,10 +80,17 @@ type PriceLogStore interface {
 type PreviewStore interface {
 	Create(ctx context.Context, p *Preview) error
 	GetByID(ctx context.Context, id int64) (*Preview, error)
-	GetByIdempotencyKey(ctx context.Context, idempotencyKey string) (*Preview, error)
+	// GetPendingByUserAccessKey returns the caller's live pending draft for a
+	// receipt (one per (user, access_key), partial unique index), or
+	// ErrNotFound. This is the receipt-idempotency lookup: re-new-ing the same
+	// receipt replays its draft instead of stacking a duplicate.
+	GetPendingByUserAccessKey(ctx context.Context, userID int64, accessKey string) (*Preview, error)
 	// MarkCommitted atomically flips a pending preview to committed; returns
 	// ErrConflict if it was already committed, ErrNotFound if missing.
 	MarkCommitted(ctx context.Context, id int64) error
+	// PurgeExpired deletes preview rows past their ttl (written/preview GC).
+	// It returns how many rows were removed.
+	PurgeExpired(ctx context.Context) (int64, error)
 }
 
 // CommoditySynonymStore persists the produce taxonomy used for GTIN-less
@@ -108,4 +115,8 @@ type Stores interface {
 	Ping(ctx context.Context) error
 	// Close releases the underlying pool.
 	Close()
+	// Tx runs fn inside a single database transaction: the store handed to fn
+	// shares the caller's transaction, and a non-nil error rolls everything
+	// back (the transaction commits only when fn returns nil).
+	Tx(ctx context.Context, fn func(tx Stores) error) error
 }

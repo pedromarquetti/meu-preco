@@ -13,7 +13,9 @@ import (
 	"meupreco/internal/domain"
 )
 
-var stubGroups = []string{"/api/v1/price-logs", "/api/v1/products"}
+// stubGroups are the endpoint groups that are still full placeholders; both
+// answer 501 for any method until their owning phase lands.
+var stubGroups = []string{"/api/v1/products"}
 
 // fakeStores is an in-memory domain.Stores for httptest router creation. The
 // repositories it does not exercise are the embedded nil interface (they
@@ -108,12 +110,32 @@ func TestStubGroups(t *testing.T) {
 	}
 }
 
+// TestNfceRequireAuth asserts the two-phase ingestion surface is gated:
+// every route under /nfce answers 401 without a bearer token.
+func TestNfceRequireAuth(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/nfce/new",
+		"/api/v1/nfce/submit",
+		"/api/v1/nfce/x/y",
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			rec := httptest.NewRecorder()
+			testRouter().ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s %s: status = %d, want 401", method, path, rec.Code)
+			}
+		}
+	}
+}
+
+// TestNfceGroupNotImplemented asserts auth-gated unknown paths under /nfce
+// still answer 501 once the token passes.
 func TestNfceGroupNotImplemented(t *testing.T) {
-	for _, path := range []string{"/api/v1/nfce", "/api/v1/nfce/login", "/api/v1/nfce/x/y", "/api/v1/nfce/challenge/abc"} {
+	for _, path := range []string{"/api/v1/nfce", "/api/v1/nfce/login", "/api/v1/nfce/challenge/abc"} {
 		rec := httptest.NewRecorder()
 		testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
-		if rec.Code != http.StatusNotImplemented {
-			t.Errorf("POST %s: status = %d, want 501", path, rec.Code)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("POST %s: status = %d, want 401 (auth gate precedes route resolution)", path, rec.Code)
 		}
 	}
 }
@@ -121,8 +143,8 @@ func TestNfceGroupNotImplemented(t *testing.T) {
 func TestNfceSubmitUsesOnlyPost(t *testing.T) {
 	rec := httptest.NewRecorder()
 	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nfce/submit", nil))
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("GET /api/v1/nfce/submit: status = %d, want 405", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/nfce/submit: status = %d, want 401 (gate before method check)", rec.Code)
 	}
 }
 

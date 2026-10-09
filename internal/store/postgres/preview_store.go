@@ -6,14 +6,14 @@ import (
 	"meupreco/internal/domain"
 )
 
-type previewRepo struct{ s *Store }
+type previewRepo struct{ db queryer }
 
 func (r previewRepo) Create(ctx context.Context, p *domain.Preview) error {
-	err := r.s.pool.QueryRow(ctx,
-		`INSERT INTO previews (user_id, access_key, plan_items, plan_totals, status, idempotency_key, ttl)
-		 VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7)
+	err := r.db.QueryRow(ctx,
+		`INSERT INTO previews (user_id, access_key, plan_items, plan_totals, status, ttl)
+		 VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
 		 RETURNING id, created_at`,
-		p.UserID, p.AccessKey, p.PlanItems, p.PlanTotals, p.Status, p.IdempotencyKey, p.TTL,
+		p.UserID, p.AccessKey, p.PlanItems, p.PlanTotals, p.Status, p.TTL,
 	).Scan(&p.ID, &p.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -26,24 +26,24 @@ func (r previewRepo) Create(ctx context.Context, p *domain.Preview) error {
 
 func (r previewRepo) GetByID(ctx context.Context, id int64) (*domain.Preview, error) {
 	p := &domain.Preview{}
-	err := r.s.pool.QueryRow(ctx,
-		`SELECT id, user_id, access_key, plan_items, plan_totals, status, idempotency_key, ttl, created_at
+	err := r.db.QueryRow(ctx,
+		`SELECT id, user_id, access_key, plan_items, plan_totals, status, ttl, created_at
 		 FROM previews WHERE id = $1`, id,
 	).Scan(&p.ID, &p.UserID, &p.AccessKey, &p.PlanItems, &p.PlanTotals, &p.Status,
-		&p.IdempotencyKey, &p.TTL, &p.CreatedAt)
+		&p.TTL, &p.CreatedAt)
 	if err != nil {
 		return nil, translateError(err)
 	}
 	return p, nil
 }
 
-func (r previewRepo) GetByIdempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Preview, error) {
+func (r previewRepo) GetPendingByUserAccessKey(ctx context.Context, userID int64, accessKey string) (*domain.Preview, error) {
 	p := &domain.Preview{}
-	err := r.s.pool.QueryRow(ctx,
-		`SELECT id, user_id, access_key, plan_items, plan_totals, status, idempotency_key, ttl, created_at
-		 FROM previews WHERE idempotency_key = $1`, idempotencyKey,
+	err := r.db.QueryRow(ctx,
+		`SELECT id, user_id, access_key, plan_items, plan_totals, status, ttl, created_at
+		 FROM previews WHERE user_id = $1 AND access_key = $2 AND status = 'pending'`, userID, accessKey,
 	).Scan(&p.ID, &p.UserID, &p.AccessKey, &p.PlanItems, &p.PlanTotals, &p.Status,
-		&p.IdempotencyKey, &p.TTL, &p.CreatedAt)
+		&p.TTL, &p.CreatedAt)
 	if err != nil {
 		return nil, translateError(err)
 	}
@@ -54,7 +54,7 @@ func (r previewRepo) GetByIdempotencyKey(ctx context.Context, idempotencyKey str
 // the preview was already committed (double confirm) and ErrNotFound if it no
 // longer exists.
 func (r previewRepo) MarkCommitted(ctx context.Context, id int64) error {
-	tag, err := r.s.pool.Exec(ctx,
+	tag, err := r.db.Exec(ctx,
 		`UPDATE previews SET status = 'committed' WHERE id = $1 AND status = 'pending'`, id)
 	if err != nil {
 		return err
@@ -71,4 +71,16 @@ func (r previewRepo) MarkCommitted(ctx context.Context, id int64) error {
 		return domain.ErrConflict
 	}
 	return domain.ErrConflict
+}
+
+// PurgeExpired deletes preview rows past their ttl regardless of status; the
+// write paths (preview/commit) call it as a sweep so the table cannot grow
+// unbounded with stale plans.
+func (r previewRepo) PurgeExpired(ctx context.Context) (int64, error) {
+	tag, err := r.db.Exec(ctx,
+		`DELETE FROM previews WHERE ttl < now()`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

@@ -57,7 +57,7 @@ users**; users contribute logs and read everything.
 
 ```
 QR-code payload / access_key
-    │  POST /api/v1/nfce/submit   (qr_payload preferred, key fallback)
+    │  POST /api/v1/nfce/new   (draft: fetch + classify, persists only a plan)
     ▼
 registry dispatch ──► 501 unsupported_uf  (non-SP states today)
     │
@@ -68,8 +68,8 @@ HTTPSource → SEFAZ portal (throttled, cookie jar, captcha-aware)
 parse DANFE ("Consulta Resumida" family — products, prices, supermarket, totals)
     │
     ▼
-identity resolution (GTIN / commodity key) + itemized preview
-    │        POST /api/v1/price-logs  (confirm)
+identity resolution (GTIN / commodity key) + itemized plan
+    │        POST /api/v1/nfce/submit  (confirm → writes atomically)
     ▼
 price_logs ──► products history, supermarket comparison API
 ```

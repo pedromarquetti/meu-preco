@@ -20,6 +20,15 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// queryer is the minimal SQL surface shared by pgxpool.Pool and pgx.Tx so a
+// repository can bind to either the pool (steady-state calls) or a caller-
+// owned transaction (the Phase 5 commit path) without knowing which.
+type queryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
 // Options controls Store construction.
 type Options struct {
 	// DSN is the postgres:// connection string (built from config's
@@ -76,28 +85,66 @@ func (s *Store) Close() {
 }
 
 // Users returns the user repository.
-func (s *Store) Users() domain.UserStore { return userRepo{s} }
+func (s *Store) Users() domain.UserStore { return userRepo{db: s.pool} }
 
 // Supermarkets returns the supermarket repository.
-func (s *Store) Supermarkets() domain.SupermarketStore { return supermarketRepo{s} }
+func (s *Store) Supermarkets() domain.SupermarketStore { return supermarketRepo{db: s.pool} }
 
 // Products returns the product repository.
-func (s *Store) Products() domain.ProductStore { return productRepo{s} }
+func (s *Store) Products() domain.ProductStore { return productRepo{db: s.pool} }
 
 // Nfces returns the receipt repository.
-func (s *Store) Nfces() domain.NfceStore { return nfceRepo{s} }
+func (s *Store) Nfces() domain.NfceStore { return nfceRepo{db: s.pool} }
 
 // PriceLogs returns the price-log repository.
-func (s *Store) PriceLogs() domain.PriceLogStore { return priceLogRepo{s} }
+func (s *Store) PriceLogs() domain.PriceLogStore { return priceLogRepo{db: s.pool} }
 
 // Previews returns the preview repository.
-func (s *Store) Previews() domain.PreviewStore { return previewRepo{s} }
+func (s *Store) Previews() domain.PreviewStore { return previewRepo{db: s.pool} }
 
 // CommoditySynonyms returns the commodity synonym repository.
-func (s *Store) CommoditySynonyms() domain.CommoditySynonymStore { return synonymRepo{s} }
+func (s *Store) CommoditySynonyms() domain.CommoditySynonymStore { return synonymRepo{db: s.pool} }
 
 // RefreshTokens returns the refresh-token repository.
-func (s *Store) RefreshTokens() domain.RefreshTokenStore { return refreshTokenRepo{s} }
+func (s *Store) RefreshTokens() domain.RefreshTokenStore { return refreshTokenRepo{db: s.pool} }
+
+// Tx runs fn inside a real PostgreSQL transaction. The store handed to fn
+// binds its repositories to the open pgx transaction, so every write it makes
+// commits or rolls back together; fn returning an error aborts the whole unit.
+func (s *Store) Tx(ctx context.Context, fn func(domain.Stores) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := fn(&txStores{db: tx}); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// txStores is the transaction-bound view of Store: identical repository
+// surface, every query routed through one pgx.Tx.
+type txStores struct{ db queryer }
+
+func (s *txStores) Users() domain.UserStore               { return userRepo{db: s.db} }
+func (s *txStores) Supermarkets() domain.SupermarketStore { return supermarketRepo{db: s.db} }
+func (s *txStores) Products() domain.ProductStore         { return productRepo{db: s.db} }
+func (s *txStores) Nfces() domain.NfceStore               { return nfceRepo{db: s.db} }
+func (s *txStores) PriceLogs() domain.PriceLogStore       { return priceLogRepo{db: s.db} }
+func (s *txStores) Previews() domain.PreviewStore         { return previewRepo{db: s.db} }
+func (s *txStores) CommoditySynonyms() domain.CommoditySynonymStore {
+	return synonymRepo{db: s.db}
+}
+func (s *txStores) RefreshTokens() domain.RefreshTokenStore { return refreshTokenRepo{db: s.db} }
+func (s *txStores) Ping(context.Context) error              { return nil }
+func (s *txStores) Close()                                  {} // no-op: owned by Tx
+
+// Tx on a transaction-bound store is a nested-transaction attempt; the outer
+// transaction is already the single atomic unit, so it is rejected.
+func (s *txStores) Tx(context.Context, func(domain.Stores) error) error { return errNestedTx }
 
 // translateError converts a pgx error into the ported sentinels.
 func translateError(err error) error {

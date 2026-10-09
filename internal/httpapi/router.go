@@ -42,13 +42,21 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 	authAPI := newAuthAPI(cfg, stores)
 
 	router.Route("/api/v1", func(r chi.Router) {
+		nfceAPI := newNfceAPI(stores, nfceSvc, log)
+
+		// Two-phase receipt ingestion, both steps authenticated:
+		// POST /nfce/new    — draft: fetch + classify, persist only a plan
+		// POST /nfce/submit — commit: apply the confirmed plan atomically
 		r.Route("/nfce", func(nr chi.Router) {
-			nr.Post("/submit", handleNfceSubmit(nfceSvc))
+			nr.Use(authAPI.mw.RequireAuth)
+			nr.Post("/new", nfceAPI.draft)
+			nr.Post("/submit", nfceAPI.confirm)
 			nr.NotFound(http.HandlerFunc(httpx.NotImplemented))
 		})
 
 		r.Route("/auth", func(ar chi.Router) {
 			ar.Post("/register", authAPI.register)
+			// TODO: check if a logout endpoint should be implemented here
 			ar.Post("/login", authAPI.login)
 			ar.Post("/refresh", authAPI.refreshHandler)
 			ar.With(authAPI.mw.RequireAuth).Get("/me", authAPI.me)
@@ -63,9 +71,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 			ar.NotFound(httpx.NotFound)
 		})
 
-		for _, prefix := range []string{"/price-logs", "/products"} {
-			r.Mount(prefix, http.HandlerFunc(httpx.NotImplemented))
-		}
+		r.Mount("/products", http.HandlerFunc(httpx.NotImplemented))
 	})
 
 	return router

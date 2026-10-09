@@ -53,6 +53,83 @@ INSERT INTO commodity_synonyms (
 ('queijo prato', 'queijo prato', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('queijo minas', 'queijo minas', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('queijo', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+
+-- "QJ"/"QJO" are the deli shorthand for queijo: expand the abbreviation the
+-- same way the generic 'queijo' row answers ("QJ PARMESAO VIGOR KG" and
+-- "QJO BRIE VIGOR KG" both normalize to a stem ending in the brand token, so
+-- the exact-stem rows below round out the cheese variants).
+('qj', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+('qjo', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+
+(
+    'queijo parmesao',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+('parmesao', 'queijo parmesao', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'qj parmesao',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qj parmesao vigor',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+
+('queijo brie', 'queijo brie', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+('qjo brie', 'queijo brie', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'qjo brie vigor',
+    'queijo brie',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+
+(
+    'queijo gorgonzola',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'gorgonzola',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo mofo',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo mofo azul',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo mofo azul tirolez',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+
 ('manteiga', 'manteiga', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 
 (
@@ -84,4 +161,3 @@ INSERT INTO commodity_synonyms (
 ),
 ('oleo de soja', 'oleo de soja', 'mercearia', 'LT', 'CONAB PROHORT / CEAGESP')
 ON CONFLICT (synonym) DO NOTHING;
-

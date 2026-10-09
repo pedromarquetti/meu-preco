@@ -4,16 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 
-	"meupreco/internal/config"
 	"meupreco/internal/domain"
 	"meupreco/internal/nfce"
 )
@@ -32,7 +30,7 @@ func (s stubResolver) Resolve(_ context.Context, _ nfce.AccessKey, _ string) (*d
 	return s.receipt, s.err
 }
 
-// captureResolver records the payload the handler forwarded, so tests can
+// captureResolver records the payload the service forwarded, so tests can
 // assert the qr_payload path is actually used.
 type captureResolver struct {
 	payload string
@@ -43,15 +41,20 @@ func (c *captureResolver) Resolve(_ context.Context, _ nfce.AccessKey, payload s
 	return &domain.Nfce{AccessKey: senateKey}, nil
 }
 
-func nfceRouter(res nfceResolver) http.Handler {
-	return newRouter(config.Config{CORSOrigins: []string{"https://app.example.com"}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), res, &fakeStores{})
+// nfceRouter builds the full router for user 1 against hermetic stub stores,
+// issuing a valid bearer token the middleware accepts.
+func nfceRouter(t *testing.T, res nfceResolver, stores *stubStores) http.Handler {
+	t.Helper()
+	if stores == nil {
+		stores = newStubStores()
+	}
+	return ingestionRouter(t, stores, res, 1)
 }
 
-func postSubmit(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
+func postNfce(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/nfce/submit", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(rec, req)
 	return rec
@@ -69,8 +72,10 @@ func decodeErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder) (code str
 	return code, body.Error
 }
 
-func TestNfceSubmitOK(t *testing.T) {
-	receipt := &domain.Nfce{
+// uidUncertainReceipt is a GTIN-less receipt line the stub catalog cannot
+// identify, so the plan resolves to uid_uncertain.
+func uidUncertainReceipt() *domain.Nfce {
+	return &domain.Nfce{
 		AccessKey:     senateKey,
 		Number:        "257",
 		Series:        "002",
@@ -80,25 +85,56 @@ func TestNfceSubmitOK(t *testing.T) {
 			{Line: 1, Description: "LIMAO TAHITI KG", Qty: decimal.RequireFromString("0.815")},
 		},
 	}
-	rec := postSubmit(t, nfceRouter(stubResolver{receipt: receipt}),
-		`{"access_key":"`+senateKey+`"}`)
+}
 
+func TestNfceNewBuildsDraftAndReplays(t *testing.T) {
+	res := stubResolver{receipt: uidUncertainReceipt()}
+	h := nfceRouter(t, res, nil)
+
+	rec := postNfce(t, h, "/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var body struct {
-		Receipt domain.Nfce `json:"receipt"`
+	var plan struct {
+		PreviewID int64 `json:"preview_id"`
+		Status    string
+		AccessKey string `json:"access_key"`
+		Items     []struct {
+			Line   int    `json:"line"`
+			Status string `json:"status"`
+		} `json:"items"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+	if err := json.Unmarshal(rec.Body.Bytes(), &plan); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if body.Receipt.AccessKey != senateKey || len(body.Receipt.Items) != 1 {
-		t.Errorf("receipt = %+v", body.Receipt)
+	if plan.PreviewID == 0 || plan.Status != "pending" {
+		t.Errorf("preview = %+v, want a pending id", plan)
+	}
+	if plan.AccessKey != senateKey {
+		t.Errorf("access_key = %q, want normalized %q", plan.AccessKey, senateKey)
+	}
+	if len(plan.Items) != 1 || plan.Items[0].Status != "uid_uncertain" {
+		t.Errorf("plan items = %+v, want 1 uid_uncertain", plan.Items)
+	}
+
+	// Re-drafting the same receipt while pending replays the same plan.
+	rec2 := postNfce(t, h, "/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("replay status = %d", rec2.Code)
+	}
+	var replay struct {
+		PreviewID int64 `json:"preview_id"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &replay); err != nil {
+		t.Fatalf("unmarshal replay: %v", err)
+	}
+	if replay.PreviewID != plan.PreviewID {
+		t.Errorf("replay preview_id = %d, want %d", replay.PreviewID, plan.PreviewID)
 	}
 }
 
-func TestNfceSubmitInvalidKey(t *testing.T) {
-	rec := postSubmit(t, nfceRouter(stubResolver{}), `{"access_key":"123"}`)
+func TestNfceNewInvalidKey(t *testing.T) {
+	rec := postNfce(t, nfceRouter(t, stubResolver{}, nil), "/api/v1/nfce/new", `{"access_key":"123"}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -107,9 +143,9 @@ func TestNfceSubmitInvalidKey(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitBadBody(t *testing.T) {
+func TestNfceNewBadBody(t *testing.T) {
 	for _, body := range []string{"", "nope", `{"access_key":`} {
-		rec := postSubmit(t, nfceRouter(stubResolver{}), body)
+		rec := postNfce(t, nfceRouter(t, stubResolver{}, nil), "/api/v1/nfce/new", body)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("body %q: status = %d, want 400", body, rec.Code)
 		}
@@ -119,10 +155,10 @@ func TestNfceSubmitBadBody(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitCaptcha(t *testing.T) {
-	rec := postSubmit(t, nfceRouter(stubResolver{
+func TestNfceNewCaptcha(t *testing.T) {
+	rec := postNfce(t, nfceRouter(t, stubResolver{
 		err: &nfce.CaptchaError{ChallengeID: "abc123", ImageURL: "../DownloadCaptcha.ashx"},
-	}), `{"access_key":"`+senateKey+`"}`)
+	}, nil), "/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
 
 	if rec.Code != http.StatusPreconditionFailed {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -136,9 +172,9 @@ func TestNfceSubmitCaptcha(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitNotFound(t *testing.T) {
-	rec := postSubmit(t, nfceRouter(stubResolver{err: nfce.ErrKeyNotFound}),
-		`{"access_key":"`+senateKey+`"}`)
+func TestNfceNewNotFound(t *testing.T) {
+	rec := postNfce(t, nfceRouter(t, stubResolver{err: nfce.ErrKeyNotFound}, nil),
+		"/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -147,13 +183,13 @@ func TestNfceSubmitNotFound(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitUpstream(t *testing.T) {
+func TestNfceNewUpstream(t *testing.T) {
 	for _, err := range []error{
 		errors.Join(nfce.ErrUpstream, errors.New("boom")),
 		nfce.ErrBadResponse,
 	} {
-		rec := postSubmit(t, nfceRouter(stubResolver{err: err}),
-			`{"access_key":"`+senateKey+`"}`)
+		rec := postNfce(t, nfceRouter(t, stubResolver{err: err}, nil),
+			"/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
 		if rec.Code != http.StatusBadGateway {
 			t.Errorf("%v: status = %d, want 502", err, rec.Code)
 		}
@@ -163,22 +199,22 @@ func TestNfceSubmitUpstream(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitUnknownError(t *testing.T) {
-	rec := postSubmit(t, nfceRouter(stubResolver{err: errors.New("mystery")}),
-		`{"access_key":"`+senateKey+`"}`)
+func TestNfceNewUnknownError(t *testing.T) {
+	rec := postNfce(t, nfceRouter(t, stubResolver{err: errors.New("mystery")}, nil),
+		"/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d", rec.Code)
 	}
 }
 
-func TestNfceSubmitQRPayloadReplayed(t *testing.T) {
+func TestNfceNewQRPayloadReplayed(t *testing.T) {
 	// A v3 payload built from the public key, embedded in a full URL as a
 	// consumer scanner would hand us.
 	v3 := senateKey + "|3|1"
 	url := "https://www.nfce.fazenda.sp.gov.br/qrcode?p=" + v3
 	capture := &captureResolver{}
-	rec := postSubmit(t, nfceRouter(capture),
-		`{"qr_payload":"`+url+`"}`)
+	rec := postNfce(t, nfceRouter(t, capture, nil),
+		"/api/v1/nfce/new", `{"qr_payload":"`+url+`"}`)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -188,10 +224,10 @@ func TestNfceSubmitQRPayloadReplayed(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitQRPayloadBareKeyNormalized(t *testing.T) {
+func TestNfceNewQRPayloadBareKeyNormalized(t *testing.T) {
 	capture := &captureResolver{}
-	rec := postSubmit(t, nfceRouter(capture),
-		`{"qr_payload":"`+senateKey+`"}`)
+	rec := postNfce(t, nfceRouter(t, capture, nil),
+		"/api/v1/nfce/new", `{"qr_payload":"`+senateKey+`"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -200,9 +236,10 @@ func TestNfceSubmitQRPayloadBareKeyNormalized(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitQRPayloadInvalid(t *testing.T) {
+func TestNfceNewQRPayloadInvalid(t *testing.T) {
 	for _, payload := range []string{"banana", "3524|3|1", "3524115232368800014465002000000257111567590x|3|1"} {
-		rec := postSubmit(t, nfceRouter(stubResolver{}), `{"qr_payload":"`+payload+`"}`)
+		rec := postNfce(t, nfceRouter(t, stubResolver{}, nil),
+			"/api/v1/nfce/new", `{"qr_payload":"`+payload+`"}`)
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Errorf("payload %q: status = %d, want 422", payload, rec.Code)
 		}
@@ -212,10 +249,10 @@ func TestNfceSubmitQRPayloadInvalid(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitQRPayloadConflictsWithKey(t *testing.T) {
+func TestNfceNewQRPayloadConflictsWithKey(t *testing.T) {
 	other := "35241211222333000181650010000000911449128550"
-	rec := postSubmit(t, nfceRouter(stubResolver{}),
-		`{"access_key":"`+senateKey+`","qr_payload":"`+other+`|3|1"}`)
+	rec := postNfce(t, nfceRouter(t, stubResolver{}, nil),
+		"/api/v1/nfce/new", `{"access_key":"`+senateKey+`","qr_payload":"`+other+`|3|1"}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -224,16 +261,88 @@ func TestNfceSubmitQRPayloadConflictsWithKey(t *testing.T) {
 	}
 }
 
-func TestNfceSubmitUnsupportedUF(t *testing.T) {
-	// Valid MG (31) key; the stub resolver answers the way the MultiResolver
-	// does for any state without a fixture-verified parser.
+func TestNfceNewUnsupportedUF(t *testing.T) {
+	// Valid MG (31) key; the MultiResolver answers 501 for any state without
+	// a fixture-verified parser.
 	const mgKey = "31240112345000123456650010000002571123456785"
-	rec := postSubmit(t, nfceRouter(stubResolver{err: nfce.ErrUnsupportedUF}),
-		`{"access_key":"`+mgKey+`"}`)
+	rec := postNfce(t, nfceRouter(t, stubResolver{err: nfce.ErrUnsupportedUF}, nil),
+		"/api/v1/nfce/new", `{"access_key":"`+mgKey+`"}`)
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	if code, _ := decodeErrorEnvelope(t, rec); code != "unsupported_uf" {
+		t.Errorf("code = %q", code)
+	}
+}
+
+func TestNfceSubmitBadBody(t *testing.T) {
+	for _, body := range []string{"", "nope", `{"preview_id":`} {
+		rec := postNfce(t, nfceRouter(t, stubResolver{}, nil), "/api/v1/nfce/submit", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %q: status = %d, want 400", body, rec.Code)
+		}
+		if code, _ := decodeErrorEnvelope(t, rec); code != "invalid_request" {
+			t.Errorf("body %q: code = %q", body, code)
+		}
+	}
+}
+
+func TestNfceSubmitForeignPreviewIs404(t *testing.T) {
+	st := newStubStores()
+	if err := st.Previews().Create(context.Background(), &domain.Preview{
+		UserID: 2, AccessKey: senateKey,
+		PlanItems: json.RawMessage(`[{"line":1,"status":"uid_uncertain"}]`),
+		Status:    "pending", TTL: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed foreign preview: %v", err)
+	}
+
+	rec := postNfce(t, nfceRouter(t, stubResolver{}, st), "/api/v1/nfce/submit",
+		`{"preview_id":1,"confirm":true}`)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "preview_not_found" {
+		t.Errorf("code = %q", code)
+	}
+}
+
+func TestNfceSubmitDoubleCommitIs409(t *testing.T) {
+	st := newStubStores()
+	if err := st.Previews().Create(context.Background(), &domain.Preview{
+		UserID: 1, AccessKey: senateKey,
+		PlanItems: json.RawMessage(`[{"line":1,"status":"uid_uncertain"}]`),
+		Status:    "committed", TTL: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed committed preview: %v", err)
+	}
+
+	rec := postNfce(t, nfceRouter(t, stubResolver{}, st), "/api/v1/nfce/submit",
+		`{"preview_id":1,"confirm":true}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "preview_already_committed" {
+		t.Errorf("code = %q", code)
+	}
+}
+
+func TestNfceSubmitExpiredIs422(t *testing.T) {
+	st := newStubStores()
+	if err := st.Previews().Create(context.Background(), &domain.Preview{
+		UserID: 1, AccessKey: senateKey,
+		PlanItems: json.RawMessage(`[{"line":1,"status":"uid_uncertain"}]`),
+		Status:    "pending", TTL: time.Now().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("seed expired preview: %v", err)
+	}
+
+	rec := postNfce(t, nfceRouter(t, stubResolver{}, st), "/api/v1/nfce/submit",
+		`{"preview_id":1,"confirm":true}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "preview_expired" {
 		t.Errorf("code = %q", code)
 	}
 }

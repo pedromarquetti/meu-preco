@@ -7,7 +7,8 @@
 // https://openfoodfacts-ds.s3.eu-west-3.amazonaws.com/openfoodfacts-products.jsonl.gz
 // TODO: make an auto scheduled downloader for this
 //
-// then: 
+// then:
+//
 //	go run ./cmd/seed-off ./openfoodfacts-products.jsonl.gz
 //
 // The database is named by POSTGRES_USERNAME, POSTGRES_PASSWORD, DATABASE_NAME

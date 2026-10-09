@@ -47,6 +47,42 @@ func TestCommoditySynonymSeeded(t *testing.T) {
 	}
 }
 
+func TestCommoditySynonymSeededCheese(t *testing.T) {
+	// Regression for the deli-cheese stems seen in real receipts — the exact
+	// NormalizeStem output (lowercase, accent-stripped, brand tokens like
+	// VIGOR/TIROLEZ retained) that must flip to commodity_fingerprint.
+	s := mustStore(t)
+	ctx := context.Background()
+
+	cases := map[string]string{
+		"qj mussarela":             "queijo mussarela", // map to self
+		"qjo mussarela":            "queijo mussarela", // map to self
+		"qj":                       "queijo mussarela", // abbreviation expansion
+		"qjo":                      "queijo mussarela", // abbreviation expansion
+		"qj parmesao":              "queijo parmesao",
+		"qj parmesao vigor":        "queijo parmesao", // "QJ PARMESAO VIGOR KG"
+		"qjo brie":                 "queijo brie",
+		"qjo brie vigor":           "queijo brie", // "QJO BRIE VIGOR KG"
+		"queijo mofo":              "queijo gorgonzola",
+		"queijo azul":              "queijo gorgonzola",
+		"queijo mofo azul":         "queijo gorgonzola",
+		"queijo mofo azul tirolez": "queijo gorgonzola", // "QUEIJO MOFO AZUL TIROLEZ"
+	}
+	for stem, want := range cases {
+		got, err := s.CommoditySynonyms().Canonicalize(ctx, stem)
+		if err != nil {
+			t.Errorf("canonicalize %q: %v", stem, err)
+			continue
+		}
+		if got.CanonicalName != want {
+			t.Errorf("canonicalize %q = %q, want %q", stem, got.CanonicalName, want)
+		}
+		if got.Unit != "KG" {
+			t.Errorf("canonicalize %q unit = %q, want KG", stem, got.Unit)
+		}
+	}
+}
+
 func TestCommoditySynonymConflictAndNotFound(t *testing.T) {
 	s := mustStore(t)
 	truncate(t)

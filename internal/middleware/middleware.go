@@ -102,7 +102,7 @@ func Logging(log *slog.Logger) func(http.Handler) http.Handler {
 func CORS(origins []string) func(http.Handler) http.Handler {
 	const (
 		allowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-		allowHeaders = "Authorization, Content-Type, X-Request-ID, Idempotency-Key"
+		allowHeaders = "Authorization, Content-Type, X-Request-ID"
 	)
 
 	exact := make(map[string]bool, len(origins))

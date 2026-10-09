@@ -21,7 +21,7 @@ const (
 //
 // This intentionally rejects: non-BR prefixes (they cannot resolve through our
 // enrichment source), the 11-digit ABA/Banco do Brasil codes occasionally
-// printed on coupons, and garbage. 
+// printed on coupons, and garbage.
 func NormalizeGTIN(code string) (string, bool) {
 	digits := barcodeDigits(code)
 	if digits == "" {

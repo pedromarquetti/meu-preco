@@ -64,17 +64,18 @@ type PriceLog struct {
 }
 
 // Preview is the transient, two-phase-commit record binding an ingestion plan
-// to a single confirm step. plan_items/plan_totals ride as JSON.
+// to a single confirm step. plan_items/plan_totals ride as JSON. Idempotency
+// is the receipt's access key: at most one live "pending" row may exist for a
+// (user_id, access_key) pair (enforced by a partial unique index).
 type Preview struct {
-	ID             int64
-	UserID         int64
-	AccessKey      string
-	PlanItems      json.RawMessage // JSON array
-	PlanTotals     json.RawMessage // JSON object
-	Status         string          // "pending" | "committed" | "expired"
-	IdempotencyKey string
-	TTL            time.Time
-	CreatedAt      time.Time
+	ID         int64
+	UserID     int64
+	AccessKey  string
+	PlanItems  json.RawMessage // JSON array
+	PlanTotals json.RawMessage // JSON object
+	Status     string          // "pending" | "committed" | "expired"
+	TTL        time.Time
+	CreatedAt  time.Time
 }
 
 // CommoditySynonym maps a normalized synonym stem to a canonical commodity

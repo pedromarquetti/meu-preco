@@ -2,23 +2,26 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
 	"meupreco/internal/domain"
 )
 
-type priceLogRepo struct{ s *Store }
+type priceLogRepo struct{ db queryer }
 
 func (r priceLogRepo) Create(ctx context.Context, l *domain.PriceLog) error {
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`INSERT INTO price_logs (nfce_id, product_id, line, description_snapshot,
 		                        qty, unit, normalized_unit, price_per_unit,
 		                        unit_price, total_price, identity_status,
 		                        needs_review, resolved_by, resolution_note)
 		 VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, $8::numeric, $9::numeric, $10::numeric,
 		         $11, $12, $13, $14)
+		 ON CONFLICT (nfce_id, line) DO NOTHING
 		 RETURNING id, created_at`,
 		l.NfceID, l.ProductID, l.Line, l.DescriptionSnapshot,
 		l.Qty.String(), l.Unit, l.NormalizedUnit, scanDecimalPtrOrNil(l.PricePerUnit),
@@ -26,7 +29,9 @@ func (r priceLogRepo) Create(ctx context.Context, l *domain.PriceLog) error {
 		l.NeedsReview, l.ResolvedBy, l.ResolutionNote,
 	).Scan(&l.ID, &l.CreatedAt)
 	if err != nil {
-		if isUniqueViolation(err) {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// (nfce_id, line) already logged: DO NOTHING returns no row
+			// instead of a unique violation, keeping a live commit tx healthy.
 			return domain.ErrConflict
 		}
 		return err
@@ -51,7 +56,7 @@ func (r priceLogRepo) scanOne(ctx context.Context, where string, args ...any) (*
 		pricePerUnit               *string
 	)
 
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, nfce_id, product_id, line, description_snapshot,
 		        qty::text, unit, normalized_unit, price_per_unit::text,
 		        unit_price::text, total_price::text, identity_status,

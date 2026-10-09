@@ -6,10 +6,10 @@ import (
 	"meupreco/internal/domain"
 )
 
-type userRepo struct{ s *Store }
+type userRepo struct{ db queryer }
 
 func (r userRepo) Create(ctx context.Context, u *domain.User) error {
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash, role)
 		 VALUES ($1, $2, COALESCE(NULLIF($3, ''), 'user'))
 		 RETURNING id, created_at`,
@@ -28,7 +28,7 @@ func (r userRepo) Create(ctx context.Context, u *domain.User) error {
 
 func (r userRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) {
 	u := &domain.User{}
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, email, password_hash, role, created_at FROM users WHERE id = $1`, id,
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
 
@@ -41,7 +41,7 @@ func (r userRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) {
 
 func (r userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	u := &domain.User{}
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, email, password_hash, role, created_at FROM users WHERE email = $1`, email,
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
 	if err != nil {
@@ -52,6 +52,6 @@ func (r userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, e
 
 func (r userRepo) CountAdmin(ctx context.Context) (int64, error) {
 	var n int64
-	err := r.s.pool.QueryRow(ctx, `SELECT count(*) FROM users where role = 'admin'`).Scan(&n)
+	err := r.db.QueryRow(ctx, `SELECT count(*) FROM users where role = 'admin'`).Scan(&n)
 	return n, err
 }

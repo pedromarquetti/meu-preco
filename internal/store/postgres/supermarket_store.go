@@ -6,10 +6,10 @@ import (
 	"meupreco/internal/domain"
 )
 
-type supermarketRepo struct{ s *Store }
+type supermarketRepo struct{ db queryer }
 
 func (r supermarketRepo) Upsert(ctx context.Context, s *domain.Supermarket) error {
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`INSERT INTO supermarkets (cnpj, legal_name, address)
 		 VALUES ($1, $2, $3)
 		 ON CONFLICT (cnpj) DO UPDATE
@@ -23,7 +23,7 @@ func (r supermarketRepo) Upsert(ctx context.Context, s *domain.Supermarket) erro
 
 func (r supermarketRepo) GetByID(ctx context.Context, id int64) (*domain.Supermarket, error) {
 	s := &domain.Supermarket{ID: id}
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, cnpj, legal_name, address, created_at FROM supermarkets WHERE id = $1`, id,
 	).Scan(&s.ID, &s.CNPJ, &s.LegalName, &s.Address, &s.CreatedAt)
 	if err != nil {
@@ -34,7 +34,7 @@ func (r supermarketRepo) GetByID(ctx context.Context, id int64) (*domain.Superma
 
 func (r supermarketRepo) GetByCNPJ(ctx context.Context, cnpj string) (*domain.Supermarket, error) {
 	s := &domain.Supermarket{}
-	err := r.s.pool.QueryRow(ctx,
+	err := r.db.QueryRow(ctx,
 		`SELECT id, cnpj, legal_name, address, created_at FROM supermarkets WHERE cnpj = $1`, cnpj,
 	).Scan(&s.ID, &s.CNPJ, &s.LegalName, &s.Address, &s.CreatedAt)
 	if err != nil {
