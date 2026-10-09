@@ -64,6 +64,8 @@ registry dispatch ──► 501 unsupported_uf  (non-SP states today)
     ▼
 HTTPSource → SEFAZ portal (throttled, cookie jar, captcha-aware)
     │  ← exact scanned payload replayed for v2/offline variants
+    │  └─► poral demands a captcha ──► 412 challenge_id + proxied no-store image
+    │        user solves it via POST /api/v1/nfce/captcha → plan
     ▼
 parse DANFE ("Consulta Resumida" family — products, prices, supermarket, totals)
     │

@@ -95,15 +95,29 @@ func TestHTTPSourceFetchCaptcha(t *testing.T) {
 	if !strings.Contains(capErr.ImageURL, "Captcha") {
 		t.Errorf("image URL = %q", capErr.ImageURL)
 	}
-	if len(src.challenges.next) != 1 {
-		t.Fatalf("challenges registered = %d, want 1", len(src.challenges.next))
+
+	if n := src.challenges.Count(); n != 1 {
+		t.Fatalf("challenges registered = %d, want 1", n)
 	}
-	var storedID string
-	for id := range src.challenges.next {
-		storedID = id
+	ch, err := src.challenges.Get(capErr.ChallengeID)
+	if err != nil {
+		t.Fatalf("get challenge: %v", err)
 	}
-	if capErr.ChallengeID != storedID {
-		t.Errorf("challenge id = %q, want registered id %q", capErr.ChallengeID, storedID)
+	if ch.FormAction == "" {
+		t.Errorf("challenge captured no form action")
+	}
+	if ch.Fields["__VIEWSTATE"] == "" || ch.Fields["__EVENTVALIDATION"] == "" {
+		t.Errorf("challenge captured no viewstate fields: %v", ch.Fields)
+	}
+	// Relative URLs are absolutized against the fetch base.
+	if !strings.HasPrefix(ch.ImageURL, srv.URL) || !strings.Contains(ch.ImageURL, "DownloadCaptcha") {
+		t.Errorf("absolute image URL = %q", ch.ImageURL)
+	}
+	if !strings.HasPrefix(ch.FormAction, srv.URL) {
+		t.Errorf("absolute form action = %q", ch.FormAction)
+	}
+	if ch.Payload != "" || ch.AccessKey != senateKey {
+		t.Errorf("challenge context = payload %q key %q", ch.Payload, ch.AccessKey)
 	}
 }
 

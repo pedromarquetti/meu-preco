@@ -22,19 +22,25 @@ type nfceResolver interface {
 	Resolve(ctx context.Context, key nfce.AccessKey, payload string) (*domain.Nfce, error)
 }
 
-// nfceAPI serves the Phase 5 two-phase ingestion endpoints, both behind
+// nfceAPI serves the two-phase ingestion endpoints, both behind
 // RequireAuth:
 //
 //	POST /api/v1/nfce/new    — draft: fetch + classify, persist only a plan
 //	POST /api/v1/nfce/submit — commit: apply the confirmed plan atomically
 //
 // The fetch is the draft step, and /nfce/submit is strictly the confirmation.
+// captcha may be nil to disable the endpoints.
 type nfceAPI struct {
-	svc *service.Service
+	svc     *service.Service
+	captcha *captchaAPI
 }
 
-func newNfceAPI(stores domain.Stores, res nfceResolver, log *slog.Logger) *nfceAPI {
-	return &nfceAPI{svc: service.New(stores, res, log)}
+func newNfceAPI(stores domain.Stores, res nfceResolver, log *slog.Logger, captcha *service.CaptchaSupport) *nfceAPI {
+	svc := service.New(stores, res, log, captcha)
+	return &nfceAPI{
+		svc:     svc,
+		captcha: newCaptchaAPI(svc, log),
+	}
 }
 
 // draft implements POST /api/v1/nfce/new: normalize + validate the chave (or
@@ -186,14 +192,15 @@ func respondResolveError(writer http.ResponseWriter, req *http.Request, err erro
 
 // respondCaptcha returns the captcha challenge the client must solve. The
 // envelope always uses the canonical error wrapper; captcha fields ride along
-// so the SPA can render the image and echo the challenge id back in Phase 6.
+// so the SPA can render the image (proxied by our no-store endpoint) and echo
+// the challenge id back in the solve call.
 func respondCaptcha(w http.ResponseWriter, capErr *nfce.CaptchaError) {
 	httpx.Respond(w, http.StatusPreconditionFailed, map[string]any{
 		"error": map[string]any{
 			"code":         "captcha_required",
 			"message":      "the fiscal portal requires a captcha challenge; solve it and retry",
 			"challenge_id": capErr.ChallengeID,
-			"image_url":    capErr.ImageURL,
+			"image_url":    "/api/v1/nfce/captcha/image/" + capErr.ChallengeID,
 		},
 	})
 }

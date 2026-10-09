@@ -24,6 +24,7 @@ import (
 	"meupreco/internal/config"
 	"meupreco/internal/domain"
 	"meupreco/internal/nfce"
+	"meupreco/internal/service"
 	pstore "meupreco/internal/store/postgres"
 	"meupreco/migrations"
 )
@@ -122,6 +123,14 @@ func truncatePG(t *testing.T, pool *pgxpool.Pool) {
 // resolver; userID is who the bearer token belongs to.
 func ingestionRouter(t *testing.T, stores domain.Stores, res nfceResolver, userID int64) http.Handler {
 	t.Helper()
+	return authRouter(t, stores, res, userID, nil)
+}
+
+// authRouter is the shared router harness: the config, a signed bearer token
+// for userID, and (optionally) an injected captcha support. captcha nil picks
+// the default newCaptchaSupport wiring.
+func authRouter(t *testing.T, stores domain.Stores, res nfceResolver, userID int64, captcha *service.CaptchaSupport) http.Handler {
+	t.Helper()
 	cfg := config.Config{
 		CORSOrigins:   []string{"https://app.example.com"},
 		JWTSecret:     testJWTSecret,
@@ -135,7 +144,7 @@ func ingestionRouter(t *testing.T, stores domain.Stores, res nfceResolver, userI
 		t.Fatalf("issue token: %v", err)
 	}
 
-	handler := newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), res, stores)
+	handler := newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), res, stores, captcha)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Authorization", "Bearer "+token)

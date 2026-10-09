@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"meupreco/internal/domain"
+	"meupreco/internal/nfce"
 )
 
 // ReportPreview implements the draft - half of the two-phase commit — it used
@@ -46,6 +47,14 @@ func (s *Service) ReportPreview(ctx context.Context, req PreviewRequest) (*Previ
 		return nil, err
 	}
 
+	return s.persistDraft(ctx, req.UserID, key, receipt)
+}
+
+// persistDraft writes a pending previews row for (userID, key) from an
+// already-resolved receipt — the tail of the draft path, shared by
+// POST /nfce/new (ReportPreview) and the captcha solve handler. A concurrent
+// draft that won the same (user, access_key) pending slot replays instead.
+func (s *Service) persistDraft(ctx context.Context, userID int64, key nfce.AccessKey, receipt *domain.Nfce) (*PreviewResult, error) {
 	plan, totals := buildPlan(ctx, s.Stores, receipt)
 
 	itemsJSON, err := json.Marshal(plan)
@@ -57,21 +66,20 @@ func (s *Service) ReportPreview(ctx context.Context, req PreviewRequest) (*Previ
 		return nil, fmt.Errorf("service: encode totals: %w", err)
 	}
 
-	ttl := s.now().Add(s.PreviewTTL)
 	p := &domain.Preview{
-		UserID:     req.UserID,
+		UserID:     userID,
 		AccessKey:  key.String(),
 		PlanItems:  itemsJSON,
 		PlanTotals: totalsJSON,
 		Status:     "pending",
-		TTL:        ttl,
+		TTL:        s.now().Add(s.PreviewTTL),
 	}
 
 	if err := s.Stores.Previews().Create(ctx, p); err != nil {
 		// A concurrent draft won the same (user, access_key) between our read
 		// and insert; return its plan as our answer.
 		if errors.Is(err, domain.ErrConflict) {
-			if existing, err2 := s.Stores.Previews().GetPendingByUserAccessKey(ctx, req.UserID, key.String()); err2 == nil {
+			if existing, err2 := s.Stores.Previews().GetPendingByUserAccessKey(ctx, userID, key.String()); err2 == nil {
 				return s.decodePreview(existing)
 			}
 		}

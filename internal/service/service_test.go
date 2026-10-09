@@ -55,7 +55,7 @@ func testReceipt() *domain.Nfce {
 }
 
 func newTestService(m *memStores) *Service {
-	svc := New(m, stubResolver{receipt: testReceipt()}, nil)
+	svc := New(m, stubResolver{receipt: testReceipt()}, nil, nil)
 	return svc
 }
 

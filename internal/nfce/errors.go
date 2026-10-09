@@ -44,12 +44,32 @@ var (
 	// ErrBadResponse flags portal responses that cannot be a DANFE (empty
 	// result, mismatched access key, unexpected layout). The API maps it to 502.
 	ErrBadResponse = errors.New("unexpected response from the fiscal portal")
+
+	// ErrWrongSolution reports a captcha answer the portal rejected. The
+	// challenge stays usable until its attempt budget is spent.
+	ErrWrongSolution = errors.New("captcha solution incorrect")
+
+	// ErrChallengeNotFound reports a challenge_id the store does not hold (a
+	// wrong id, one already solved, or one from another process).
+	ErrChallengeNotFound = errors.New("captcha challenge not found")
+
+	// ErrChallengeExpired reports a challenge past its TTL.
+	ErrChallengeExpired = errors.New("captcha challenge expired")
+
+	// ErrChallengeLocked reports a challenge whose attempt budget is spent.
+	ErrChallengeLocked = errors.New("captcha challenge attempt budget exhausted")
+
+	// ErrChallengeReused reports a second solve of an already-solved challenge
+	// (replay prevention: a challenge is single-use).
+	ErrChallengeReused = errors.New("captcha challenge already used")
 )
 
 // CaptchaError is returned by a Source when the portal answers with its
-// human-verification challenge instead of the receipt. Solving the challenge
-// is a later phase; here the error just carries a handle (ChallengeID) and the
-// image the user must read, so the API layer can hand them back to the client.
+// human-verification challenge instead of the receipt. It carries a handle
+// (ChallengeID) and the image the user must read, so the API layer can hand
+// them back to the client; the full session context (form action, hidden
+// viewstate fields, cookies) lives on the Challenge registered in the
+// ChallengeStore, which the solver replays in Phase 6.
 type CaptchaError struct {
 	ChallengeID string
 	ImageURL    string

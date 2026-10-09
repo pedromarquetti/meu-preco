@@ -44,6 +44,23 @@ type Resolver interface {
 	Resolve(ctx context.Context, key nfce.AccessKey, payload string) (*domain.Nfce, error)
 }
 
+// SolvedCache is the opt-in half of the resolver surface the captcha flow
+// needs: after a challenge is solved, the raw DANFE is cached by access key so
+// the follow-up fetch (the /nfce/submit re-fetch) serves it without another
+// portal challenge. Implemented by *nfce.Resolver; unused by stub resolvers.
+type SolvedCache interface {
+	CacheSolved(key nfce.AccessKey, raw []byte)
+}
+
+// CaptchaSupport wires the captcha-solving loop into the pipeline: where the
+// challenges live, who replays the answer against the portal, and the attempt
+// budget. Nil on a Service disables the captcha endpoints.
+type CaptchaSupport struct {
+	Store       *nfce.ChallengeStore
+	Solver      nfce.CaptchaSolver
+	MaxAttempts int
+}
+
 // PlanItem is one receipt line's identity verdict, the unit of both the
 // preview payload and (after a resolution) the commit. It mirrors what
 // product.Decision produced for the line, in a JSON-stable shape that rides
@@ -127,11 +144,12 @@ type Service struct {
 	Resolver   Resolver
 	Log        *slog.Logger
 	PreviewTTL time.Duration
+	Captcha    *CaptchaSupport
 	now        func() time.Time
 }
 
-// New builds the service. log may be nil (discarded).
-func New(stores domain.Stores, res Resolver, log *slog.Logger) *Service {
+// New builds the service. log and captcha may be nil (discarded/disabled).
+func New(stores domain.Stores, res Resolver, log *slog.Logger, captcha *CaptchaSupport) *Service {
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -140,6 +158,7 @@ func New(stores domain.Stores, res Resolver, log *slog.Logger) *Service {
 		Resolver:   res,
 		Log:        log,
 		PreviewTTL: 15 * time.Minute,
+		Captcha:    captcha,
 		now:        time.Now,
 	}
 }

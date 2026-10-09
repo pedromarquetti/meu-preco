@@ -50,6 +50,95 @@ INSERT INTO commodity_synonyms (
 ('queijo prato', 'queijo prato', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('queijo minas', 'queijo minas', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('queijo', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+('qj', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+('qjo', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'qj mussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qjo mussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo parmesao',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+('parmesao', 'queijo parmesao', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'qj parmesao',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qj parmesao vigor',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+('queijo brie', 'queijo brie', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+('qjo brie', 'queijo brie', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'qjo brie vigor',
+    'queijo brie',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo gorgonzola',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'gorgonzola',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo mofo',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo azul',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo mofo azul',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo mofo azul tirolez',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
 ('manteiga', 'manteiga', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 
 (

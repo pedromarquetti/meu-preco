@@ -12,17 +12,18 @@ import (
 	"meupreco/internal/httpx"
 	"meupreco/internal/middleware"
 	"meupreco/internal/nfce"
+	"meupreco/internal/service"
 )
 
 // New builds the full HTTP handler from the validated configuration.
 // stores drives /readyz (Ping) and auth endpoints.
 func New(cfg config.Config, log *slog.Logger, stores domain.Stores) http.Handler {
-	return newRouter(cfg, log, newNfceResolver(cfg, log), stores)
+	return newRouter(cfg, log, newNfceResolver(cfg, log), stores, nil)
 }
 
 // newRouter assembles the router with the given nfce resolver (kept injectable
 // for httptest tests).
-func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores domain.Stores) http.Handler {
+func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores domain.Stores, captcha *service.CaptchaSupport) http.Handler {
 	router := chi.NewRouter()
 
 	router.Use(
@@ -42,15 +43,23 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 	authAPI := newAuthAPI(cfg, stores)
 
 	router.Route("/api/v1", func(r chi.Router) {
-		nfceAPI := newNfceAPI(stores, nfceSvc, log)
+		if captcha == nil {
+			captcha = newCaptchaSupport(cfg, log)
+		}
+
+		nfceAPI := newNfceAPI(stores, nfceSvc, log, captcha)
 
 		// Two-phase receipt ingestion, both steps authenticated:
 		// POST /nfce/new    — draft: fetch + classify, persist only a plan
 		// POST /nfce/submit — commit: apply the confirmed plan atomically
+		// POST /nfce/captcha — solve a portal challenge into a draft
 		r.Route("/nfce", func(nr chi.Router) {
 			nr.Use(authAPI.mw.RequireAuth)
 			nr.Post("/new", nfceAPI.draft)
 			nr.Post("/submit", nfceAPI.confirm)
+			nr.Get("/captcha", nfceAPI.captcha.state)
+			nr.Post("/captcha", nfceAPI.captcha.solve)
+			nr.Get("/captcha/image/{challenge_id}", nfceAPI.captcha.image)
 			nr.NotFound(http.HandlerFunc(httpx.NotImplemented))
 		})
 
@@ -75,6 +84,19 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 	})
 
 	return router
+}
+
+// newCaptchaSupport wires the captcha flow: an in-memory challenge
+// registry shared with the portal source (which registers challenges when the
+// portal demands one) plus a solver that replays typed answers into the
+// challenge's captured session. The MaxAttempts here echoes the store default
+// so solve-time and challenge-mint time agree.
+func newCaptchaSupport(cfg config.Config, log *slog.Logger) *service.CaptchaSupport {
+	return &service.CaptchaSupport{
+		Store:       nfce.NewChallengeStore(),
+		Solver:      nfce.NewHTTPChallengeSolver(nfce.HTTPChallengeSolverOptions{RPS: cfg.SEFAZFetchRPS, Logger: log}),
+		MaxAttempts: 5,
+	}
 }
 
 // adminStub is the admin-gated placeholder; it answers 200 only when

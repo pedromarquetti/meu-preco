@@ -167,8 +167,13 @@ func TestNfceNewCaptcha(t *testing.T) {
 	if code != "captcha_required" {
 		t.Errorf("code = %q", code)
 	}
-	if extra["challenge_id"] != "abc123" || extra["image_url"] != "../DownloadCaptcha.ashx" {
-		t.Errorf("captcha envelope = %v", extra)
+	if extra["challenge_id"] != "abc123" {
+		t.Errorf("challenge_id = %v", extra["challenge_id"])
+	}
+	// The client renders the image through our proxy, never the SEFAZ URL:
+	// cookies and viewstate stay server-side.
+	if extra["image_url"] != "/api/v1/nfce/captcha/image/abc123" {
+		t.Errorf("image_url = %v, want the proxied challenge path", extra["image_url"])
 	}
 }
 

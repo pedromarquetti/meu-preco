@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -160,7 +161,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 		if err := pageFailure(body); err != nil {
 			capErr, asErr := errors.AsType[*CaptchaError](err)
 			if asErr {
-				ch := s.challenges.Register(capErr.ImageURL, body)
+				ch := s.captureChallenge(url, payload, key, capErr.ImageURL, body)
 				capErr.ChallengeID = ch.ID
 				return nil, capErr
 			}
@@ -201,6 +202,47 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, []byt
 		return resp.StatusCode, nil, err
 	}
 	return resp.StatusCode, body, nil
+}
+
+// captureChallenge registers the session context of a captcha-challenged fetch
+// so the solver can replay the answer in the same session later: the absolute
+// image URL, the postback form action, the hidden viewstate fields and a
+// snapshot of the session cookies the challenge page was served in.
+func (s *HTTPSource) captureChallenge(fetchURL, payload string, key AccessKey, imageURL string, body []byte) Challenge {
+	page := parseCaptchaPage(body)
+	base, _ := url.Parse(fetchURL)
+
+	var cookies []*http.Cookie
+	if u, err := url.Parse(fetchURL); err == nil {
+		cookies = s.client.Jar.Cookies(u)
+	}
+
+	return s.challenges.Register(&Challenge{
+		Payload:    payload,
+		AccessKey:  key.String(),
+		ImageURL:   resolveURL(base, page.imageSrc, imageURL),
+		FormAction: resolveURL(base, page.formAction, ""),
+		Fields:     page.fields,
+		Cookies:    cookies,
+		Raw:        body,
+	})
+}
+
+// resolveURL absolutizes a page-relative reference (form action, image src)
+// against the fetch URL; empty references fall back to fallback.
+func resolveURL(base *url.URL, ref, fallback string) string {
+	if ref == "" {
+		return fallback
+	}
+	if u, err := url.Parse(ref); err == nil {
+		if u.IsAbs() {
+			return ref
+		}
+		if base != nil {
+			return base.ResolveReference(u).String()
+		}
+	}
+	return ref
 }
 
 // pageFailure returns a typed error whenever body is not a healthy DANFE page.

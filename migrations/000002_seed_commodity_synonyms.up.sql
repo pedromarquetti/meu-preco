@@ -60,6 +60,20 @@ INSERT INTO commodity_synonyms (
 -- the exact-stem rows below round out the cheese variants).
 ('qj', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('qjo', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'qj mussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qjo mussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
 
 (
     'queijo parmesao',
@@ -110,6 +124,13 @@ INSERT INTO commodity_synonyms (
 ),
 (
     'queijo mofo',
+    'queijo gorgonzola',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'queijo azul',
     'queijo gorgonzola',
     'laticinios',
     'KG',
