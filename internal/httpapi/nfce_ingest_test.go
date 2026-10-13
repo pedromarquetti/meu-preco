@@ -32,7 +32,7 @@ import (
 // Two-phase ingestion end-to-end (POST /api/v1/nfce/new + /nfce/submit)
 // against a real postgres store. The phase DoD "needs_review invisible to
 // public GET /api/v1/products" is asserted here at the data level (product_id
-// NULL + needs_review flag); the public read endpoint itself lands in Phase 7.
+// NULL + needs_review flag); the public read endpoint itself filters them out.
 //
 // This suite shares the MEUPRECO_TEST_DATABASE_URL database with the
 // store/postgres package. It never migrates and only truncates the rows it

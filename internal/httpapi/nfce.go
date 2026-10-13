@@ -176,7 +176,7 @@ func (api *nfceAPI) respondError(writer http.ResponseWriter, req *http.Request, 
 		errors.Is(err, service.ErrForbidden),
 		errors.Is(err, service.ErrInUse),
 		errors.Is(err, service.ErrInvalidFilter):
-		// Phase 7 receipt-lifecycle failures share the read/admin envelope.
+		// Receipt-lifecycle failures share the read/admin envelope.
 		respondServiceError(writer, req, err)
 	default:
 		respondResolveError(writer, req, err)

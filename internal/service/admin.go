@@ -12,7 +12,7 @@ import (
 	"meupreco/internal/product"
 )
 
-// Admin-only Phase 7 curation: the needs-review queue, batch assigning to
+// Admin-only curation: the needs-review queue, batch assigning to
 // existing or brand-new products, product/supermarket merges and deletes, and
 // user role management. Every mutation lives behind a single Stores.Tx so a
 // failed batch never leaves a half-applied plan.

@@ -12,7 +12,7 @@ import (
 	"meupreco/internal/product"
 )
 
-// Read-only Phase 7 endpoints: shared product/supermarket reads, all behind
+// Read-only endpoints: shared product/supermarket reads, all behind
 // RequireAuth. Money fields are strings so the JSON payload never transports a
 // float; the canonical unit pair (KG/UN/GR/ML/LT) carries the price_per_unit
 // basis explicitly per point.

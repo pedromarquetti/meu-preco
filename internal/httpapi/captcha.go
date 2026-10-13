@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"meupreco/internal/httpx"
+	"meupreco/internal/middleware"
 	"meupreco/internal/nfce"
 	"meupreco/internal/service"
 )
@@ -129,7 +129,7 @@ func (api *captchaAPI) solve(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if !api.limiter.Allow(clientIP(req)) {
+	if !api.limiter.Allow(middleware.ClientIP(req)) {
 		httpx.Error(w, req, http.StatusTooManyRequests, "rate_limited",
 			"too many captcha requests; slow down and retry")
 		return
@@ -173,7 +173,7 @@ func (api *captchaAPI) image(w http.ResponseWriter, req *http.Request) {
 }
 
 // respondSolveError maps the captcha flow's typed failures onto the canonical
-// envelope. The status-and-code contract (from PROJECT.md):
+// envelope. The status-and-code contract:
 //
 //   - wrong solution that still allows retries  → 412 captcha_wrong_solution
 //   - challenge not found                      → 404 challenge_not_found
@@ -221,13 +221,4 @@ func (api *captchaAPI) respondSolveError(w http.ResponseWriter, req *http.Reques
 // decodeJSON is the small JSON reader every handler here shares.
 func decodeJSON(req *http.Request, v any) error {
 	return json.NewDecoder(req.Body).Decode(v)
-}
-
-// clientIP is the remote address as ip:port, port stripped.
-func clientIP(req *http.Request) string {
-	host, _, err := net.SplitHostPort(req.RemoteAddr)
-	if err != nil {
-		return req.RemoteAddr
-	}
-	return host
 }

@@ -18,6 +18,7 @@ import (
 	"meupreco/internal/domain"
 	"meupreco/internal/httpapi"
 	"meupreco/internal/logger"
+	"meupreco/internal/service"
 	pstore "meupreco/internal/store/postgres"
 )
 
@@ -58,6 +59,18 @@ func run() error {
 		return err
 	}
 	seedCancel()
+
+	// Background sweep of expired receipt drafts, on top of the write-time
+	// sweep the service performs before each draft/commit. Cancelled when the
+	// process shuts down.
+	gcCtx, cancelGC := context.WithCancel(context.Background())
+	defer cancelGC()
+
+	go func() {
+		if err := service.RunPreviewGC(gcCtx, log, db.Previews(), cfg.PreviewGCInterval); err != nil {
+			log.Warn("preview GC stopped", "err", err)
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,

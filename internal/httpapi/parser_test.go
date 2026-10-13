@@ -77,7 +77,7 @@ func jint(v any) int64 {
 	return 0
 }
 
-// seedHTTPPhase7 adds a supermarket with a created_by owner plus one nfce with
+// seedHTTPLog adds a supermarket with a created_by owner plus one nfce with
 // a price_log (optionally flagged for review) — every row needed by the admin
 // flow in a single call.
 func seedHTTPLog(t *testing.T, st *pstore.Store, sm *domain.Supermarket, unit string, p *domain.Product, issued time.Time, price string, review bool, createdBy int64) *domain.PriceLog {

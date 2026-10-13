@@ -23,6 +23,11 @@ func Respond(w http.ResponseWriter, status int, v any) {
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	// Receipt drafts, plans and auth bodies are private by nature; no-store
+	// keeps caches and proxies from replaying them.
+	w.Header().Set("Cache-Control", "no-store")
+
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }

@@ -69,7 +69,7 @@ var (
 // (ChallengeID) and the image the user must read, so the API layer can hand
 // them back to the client; the full session context (form action, hidden
 // viewstate fields, cookies) lives on the Challenge registered in the
-// ChallengeStore, which the solver replays in Phase 6.
+// ChallengeStore, which the solver replays.
 type CaptchaError struct {
 	ChallengeID string
 	ImageURL    string

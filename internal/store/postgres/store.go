@@ -22,7 +22,7 @@ type Store struct {
 
 // queryer is the minimal SQL surface shared by pgxpool.Pool and pgx.Tx so a
 // repository can bind to either the pool (steady-state calls) or a caller-
-// owned transaction (the Phase 5 commit path) without knowing which.
+// owned transaction (the commit path) without knowing which.
 type queryer interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row

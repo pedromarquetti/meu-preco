@@ -13,12 +13,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"meupreco/internal/httpx"
 )
 
 type ctxKey int
 
 const requestIDKey ctxKey = 0
+
+// routePattern recovers the chi route pattern for a request after routing
+// completed. Requests that never matched a route (404/405) have no pattern;
+// the caller falls back to the concrete path.
+func routePattern(r *http.Request) string {
+	if rctx := chi.RouteContext(r.Context()); rctx != nil {
+		if p := rctx.RoutePattern(); p != "" {
+			return p
+		}
+	}
+	return r.Method + " " + r.URL.Path
+}
 
 // RequestID injects a X-Request-ID (incoming if provided, otherwise random)
 // and makes it available in the request context.
@@ -81,7 +95,7 @@ func Logging(log *slog.Logger) func(http.Handler) http.Handler {
 			}
 
 			dur := time.Since(start)
-			recordRequest(sr.status, dur)
+			defaultRegistry.record(r.Method, routePattern(r), sr.status, dur)
 
 			log.Info("http_request",
 				"method", r.Method,

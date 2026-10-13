@@ -85,7 +85,7 @@ func TestLogging(t *testing.T) {
 		w.Write([]byte("x"))
 	})
 
-	before := Snapshot()
+	before := Report()
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ok", nil))
 
@@ -95,7 +95,7 @@ func TestLogging(t *testing.T) {
 			t.Errorf("log missing %q:\n%s", want, logs)
 		}
 	}
-	after := Snapshot()
+	after := Report()
 	if after.TotalRequests != before.TotalRequests+1 {
 		t.Errorf("request counter = %d, want %d", after.TotalRequests, before.TotalRequests+1)
 	}
@@ -131,6 +131,91 @@ func TestCORSDisallowedOrigin(t *testing.T) {
 	}
 }
 
+func TestSecurityHeaders(t *testing.T) {
+	r := chi.NewRouter()
+	r.Use(SecurityHeaders)
+	r.Get("/", okHandler)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options = %q, want DENY", got)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+}
+
+func TestMetricsReport(t *testing.T) {
+	r := chi.NewRouter()
+	r.Use(Logging(testLogger(&bytes.Buffer{})))
+	r.Get("/ok", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	r.Get("/fail", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
+
+	before := Report()
+	for i := 0; i < 3; i++ {
+		r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/ok", nil))
+	}
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/fail", nil))
+
+	report := Report()
+	if got := report.TotalRequests - before.TotalRequests; got != 4 {
+		t.Errorf("TotalRequests delta = %d, want 4", got)
+	}
+	if got := report.AuthFailures - before.AuthFailures; got != 1 {
+		t.Errorf("AuthFailures delta = %d, want 1", got)
+	}
+	for _, class := range []string{"2xx", "4xx"} {
+		if report.ByStatus[class] < before.ByStatus[class] {
+			t.Errorf("ByStatus[%s] went backwards", class)
+		}
+	}
+	if report.ByStatus["4xx"]-before.ByStatus["4xx"] != 1 {
+		t.Errorf("4xx delta = %d, want 1", report.ByStatus["4xx"]-before.ByStatus["4xx"])
+	}
+
+	var got *RouteMetrics
+	for i := range report.Routes {
+		rm := &report.Routes[i]
+		if rm.Pattern == "/ok" {
+			got = rm
+		}
+	}
+	if got == nil {
+		t.Fatal("route /ok not in report")
+	}
+	// The /ok route accumulates across the whole package; assert the delta.
+	var beforeOK *RouteMetrics
+	for i := range before.Routes {
+		rm := &before.Routes[i]
+		if rm.Pattern == "/ok" {
+			rm2 := *rm
+			beforeOK = &rm2
+		}
+	}
+	deltaCount := got.Count
+	if beforeOK != nil {
+		deltaCount -= beforeOK.Count
+	}
+	if deltaCount != 3 {
+		t.Errorf("/ok count delta = %d, want 3", deltaCount)
+	}
+	if n := len(got.Histogram); n != len(latencyBucketsMs)+1 {
+		t.Errorf("histogram bins = %d, want %d", n, len(latencyBucketsMs)+1)
+	}
+	var histTotal int64
+	for _, c := range got.Histogram {
+		histTotal += c
+	}
+	if histTotal != got.Count {
+		t.Errorf("histogram total %d != route count %d", histTotal, got.Count)
+	}
+}
+
 func TestCORSPreflight(t *testing.T) {
 	r := chi.NewRouter()
 	r.Use(CORS([]string{"*"}))
@@ -140,7 +225,6 @@ func TestCORSPreflight(t *testing.T) {
 	req := httptest.NewRequest(http.MethodOptions, "/healthz", nil)
 	req.Header.Set("Origin", "https://whatever.example.com")
 	r.ServeHTTP(rec, req)
-
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}

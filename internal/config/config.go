@@ -23,7 +23,7 @@ type Config struct {
 	// DATABASE_NAME (plus optional POSTGRES_HOST/POSTGRES_PORT).
 	DatabaseURL string
 
-	// JWTSecret signs access+refresh tokens (Phase 3); >= 32 chars.
+	// JWTSecret signs access+refresh tokens; >= 32 chars.
 	JWTSecret     string
 	JWTAccessTTL  time.Duration
 	JWTRefreshTTL time.Duration
@@ -37,10 +37,39 @@ type Config struct {
 	// SEFAZFetchRPS caps how many requests per second the SP NFC-e portal
 	// fetcher may issue (politeness/anti-ban knob).
 	SEFAZFetchRPS int
+	// SEFAZMaxRetries is the number of fetch attempts per receipt (>= 1).
+	SEFAZMaxRetries int
+	// SEFAZTimeout bounds each portal request (retries included).
+	SEFAZTimeout time.Duration
+	// SEFAZBackoffBase is the starting exponential retry delay.
+	SEFAZBackoffBase time.Duration
+	// SEFAZBackoffCap caps each exponential retry delay.
+	SEFAZBackoffCap time.Duration
 
 	// SefazBaseURL overrides the default SP NFC-e consultation QR URL. It is
 	// optional (tests and homologation are the main use cases).
 	SefazBaseURL string
+
+	// PreviewTTL is how long a pending receipt draft stays valid before the
+	// background sweep purges it (the client re-'new's it as a fresh draft).
+	PreviewTTL time.Duration
+	// PreviewGCInterval is how often the background goroutine sweeps expired
+	// drafts (in addition to the write-time sweep).
+	PreviewGCInterval time.Duration
+
+	// RateLimitIPRPS/RateLimitIPBurst shape the global per-IP token bucket
+	// applied to the /api/v1 tree. Zero means "unlimited" per key.
+	RateLimitIPRPS   float64
+	RateLimitIPBurst int
+	// RateLimitUserRPS/RateLimitUserBurst shape the per-user token bucket
+	// applied to authenticated routes (keyed by the JWT subject).
+	RateLimitUserRPS   float64
+	RateLimitUserBurst int
+
+	// EnableOFFEnrich opts in to best-effort Open Food Facts enrichment of
+	// gtin_new lines at draft time (cached per barcode). Off by default:
+	// ingestion stays offline-first and deterministic.
+	EnableOFFEnrich bool
 }
 
 // requiredEnv lists environment variables without which the process must not
@@ -98,6 +127,61 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	sefaRetries, err := envInt(env, "SEFAZ_MAX_RETRIES", 3)
+	if err != nil {
+		return Config{}, err
+	}
+
+	sefaTimeout, err := envDuration(env, "SEFAZ_TIMEOUT", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	sefaBackoffBase, err := envDuration(env, "SEFAZ_BACKOFF_BASE", 200*time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+
+	sefaBackoffCap, err := envDuration(env, "SEFAZ_BACKOFF_CAP", 2*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+
+	previewTTL, err := envDuration(env, "PREVIEWS_TTL", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+
+	previewGC, err := envDuration(env, "PREVIEW_GC_INTERVAL", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+
+	rlIPRPS, err := envFloat(env, "RATE_LIMIT_IP_RPS", 5)
+	if err != nil {
+		return Config{}, err
+	}
+
+	rlIPBurst, err := envInt(env, "RATE_LIMIT_IP_BURST", 300)
+	if err != nil {
+		return Config{}, err
+	}
+
+	rlUserRPS, err := envFloat(env, "RATE_LIMIT_USER_RPS", 20)
+	if err != nil {
+		return Config{}, err
+	}
+
+	rlUserBurst, err := envInt(env, "RATE_LIMIT_USER_BURST", 1000)
+	if err != nil {
+		return Config{}, err
+	}
+
+	enrichOFF, err := envBool(env, "ENRICH_OFF", false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	dsn, err := buildPostgresURL(env)
 	if err != nil {
 		return Config{}, err
@@ -116,6 +200,21 @@ func load(env map[string]string) (Config, error) {
 		AdminPassword: env["ADMIN_PASSWORD"],
 		SEFAZFetchRPS: sefaRPS,
 		SefazBaseURL:  env["SEFAZ_BASE_URL"],
+
+		SEFAZMaxRetries:  sefaRetries,
+		SEFAZTimeout:     sefaTimeout,
+		SEFAZBackoffBase: sefaBackoffBase,
+		SEFAZBackoffCap:  sefaBackoffCap,
+
+		PreviewTTL:        previewTTL,
+		PreviewGCInterval: previewGC,
+
+		RateLimitIPRPS:     rlIPRPS,
+		RateLimitIPBurst:   rlIPBurst,
+		RateLimitUserRPS:   rlUserRPS,
+		RateLimitUserBurst: rlUserBurst,
+
+		EnableOFFEnrich: enrichOFF,
 	}
 	return cfg, cfg.Validate()
 }
@@ -190,6 +289,30 @@ func (c Config) Validate() error {
 	if c.SEFAZFetchRPS < 1 {
 		return fmt.Errorf("config: SEFAZ_FETCH_RPS must be >= 1")
 	}
+	if c.SEFAZMaxRetries < 1 {
+		return fmt.Errorf("config: SEFAZ_MAX_RETRIES must be >= 1")
+	}
+	if c.SEFAZTimeout <= 0 {
+		return fmt.Errorf("config: SEFAZ_TIMEOUT must be a positive duration")
+	}
+	if c.SEFAZBackoffBase < 0 {
+		return fmt.Errorf("config: SEFAZ_BACKOFF_BASE must be >= 0")
+	}
+	if c.SEFAZBackoffCap < c.SEFAZBackoffBase {
+		return fmt.Errorf("config: SEFAZ_BACKOFF_CAP must be >= SEFAZ_BACKOFF_BASE")
+	}
+	if c.PreviewTTL <= 0 {
+		return fmt.Errorf("config: PREVIEWS_TTL must be a positive duration")
+	}
+	if c.PreviewGCInterval <= 0 {
+		return fmt.Errorf("config: PREVIEW_GC_INTERVAL must be a positive duration")
+	}
+	if c.RateLimitIPRPS < 0 || c.RateLimitUserRPS < 0 {
+		return fmt.Errorf("config: RATE_LIMIT_*_RPS must be >= 0")
+	}
+	if c.RateLimitIPBurst < 0 || c.RateLimitUserBurst < 0 {
+		return fmt.Errorf("config: RATE_LIMIT_*_BURST must be >= 0")
+	}
 	if c.SefazBaseURL != "" {
 		u, err := url.Parse(c.SefazBaseURL)
 
@@ -241,6 +364,34 @@ func envInt(env map[string]string, key string, def int) (int, error) {
 	}
 
 	return n, nil
+}
+
+func envFloat(env map[string]string, key string, def float64) (float64, error) {
+	v := env[key]
+	if v == "" {
+		return def, nil
+	}
+
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("config: invalid %s %q: %w", key, v, err)
+	}
+
+	return f, nil
+}
+
+func envBool(env map[string]string, key string, def bool) (bool, error) {
+	v := env[key]
+	if v == "" {
+		return def, nil
+	}
+
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("config: invalid %s %q: %w", key, v, err)
+	}
+
+	return b, nil
 }
 
 func csvSlice(v string) []string {

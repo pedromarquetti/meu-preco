@@ -70,6 +70,11 @@ func TestOFFLookupHit(t *testing.T) {
 	if hits != 1 {
 		t.Errorf("network hits = %d, want 1 (cached)", hits)
 	}
+
+	stats := c.CacheStats()
+	if stats.Hits != 1 || stats.Misses != 1 {
+		t.Errorf("cache stats = %+v, want 1 hit / 1 miss", stats)
+	}
 }
 
 func TestOFFLookupNotFound(t *testing.T) {

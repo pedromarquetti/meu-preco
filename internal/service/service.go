@@ -168,7 +168,10 @@ type Service struct {
 	Log        *slog.Logger
 	PreviewTTL time.Duration
 	Captcha    *CaptchaSupport
-	now        func() time.Time
+	// Enricher augments gtin_new drafts with catalog metadata (opt-in, see
+	// cfg EnableOFFEnrich). Nil disables enrichment.
+	Enricher OFFEnricher
+	now      func() time.Time
 }
 
 // New builds the service. log and captcha may be nil (discarded/disabled).
@@ -189,13 +192,8 @@ func New(stores domain.Stores, res Resolver, log *slog.Logger, captcha *CaptchaS
 // gc sweeps stale previews before a write so the table cannot grow without
 // bound. Best-effort: a failed sweep never fails the request it guards.
 func (s *Service) gc(ctx context.Context) {
-	n, err := s.Stores.Previews().PurgeExpired(ctx)
-	if err != nil {
+	if err := purgeExpired(ctx, s.Log, s.Stores.Previews()); err != nil {
 		s.Log.Debug("service: preview GC failed", "err", err)
-		return
-	}
-	if n > 0 {
-		s.Log.Debug("service: preview GC removed stale plans", "count", n)
 	}
 }
 

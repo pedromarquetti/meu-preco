@@ -6,7 +6,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// Normalized unit vocabulary (PROJECT.md Phase 4). DZ stays DZ at this tier —
+// Normalized unit vocabulary. DZ stays DZ at this tier —
 // collapse to UN happens later at aggregation time, where a dozen is exactly
 // 12 pieces.
 const (

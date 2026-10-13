@@ -56,6 +56,7 @@ func (s *Service) ReportPreview(ctx context.Context, req PreviewRequest) (*Previ
 // draft that won the same (user, access_key) pending slot replays instead.
 func (s *Service) persistDraft(ctx context.Context, userID int64, key nfce.AccessKey, receipt *domain.Nfce) (*PreviewResult, error) {
 	plan, totals := buildPlan(ctx, s.Stores, receipt)
+	s.enrichPlan(ctx, plan)
 
 	itemsJSON, err := json.Marshal(plan)
 	if err != nil {

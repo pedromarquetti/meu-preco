@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"meupreco/internal/product"
@@ -49,6 +50,21 @@ type OFFClient struct {
 	cache   map[string]offCacheEntry
 	ttl     time.Duration // hits
 	missTTL time.Duration // 404/not-found
+
+	hits   atomic.Uint64 // lookups served from the cache
+	misses atomic.Uint64 // lookups that reached the upstream API
+}
+
+// CacheStats reports the cache hit/miss counts since the client was built.
+// The /metrics endpoint exposes them so enrichment cost is observable.
+type CacheStats struct {
+	Hits   uint64 `json:"hits"`
+	Misses uint64 `json:"misses"`
+}
+
+// CacheStats returns the accumulated lookup counters.
+func (c *OFFClient) CacheStats() CacheStats {
+	return CacheStats{Hits: c.hits.Load(), Misses: c.misses.Load()}
 }
 
 type offCacheEntry struct {
@@ -106,11 +122,13 @@ func (c *OFFClient) Lookup(ctx context.Context, gtin string) (*Product, error) {
 	}
 
 	if e, ok := c.get(gtin); ok {
+		c.hits.Add(1)
 		if e.notFound {
 			return nil, ErrProductNotFound
 		}
 		return e.product, nil
 	}
+	c.misses.Add(1)
 
 	u, err := url.Parse(c.baseURL + "/api/v2/product/" + url.PathEscape(gtin))
 	if err != nil {

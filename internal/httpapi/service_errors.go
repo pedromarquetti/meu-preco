@@ -12,7 +12,7 @@ import (
 )
 
 // respondServiceError maps the service's typed failures (and the raw domain
-// sentinels) onto the canonical error envelope. It covers the Phase 7 read and
+// sentinels) onto the canonical error envelope. It covers the read and
 // admin endpoints; the ingestion handlers keep their own richer mapping.
 func respondServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {

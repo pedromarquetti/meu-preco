@@ -4,11 +4,14 @@ package httpapi
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	"meupreco/internal/auth"
 	"meupreco/internal/config"
 	"meupreco/internal/domain"
+	"meupreco/internal/enrich"
 	"meupreco/internal/httpx"
 	"meupreco/internal/middleware"
 	"meupreco/internal/nfce"
@@ -31,18 +34,35 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 		middleware.Logging(log),
 		middleware.PanicRecovery(log),
 		middleware.CORS(cfg.CORSOrigins),
+		middleware.SecurityHeaders,
 	)
 
 	router.NotFound(httpx.NotFound)
 	router.MethodNotAllowed(httpx.MethodNotAllowed)
 
-	// Health checks stay unprefixed; everything else lives under /api/v1/.
+	// A shared Open Food Facts lookup client backs both the opt-in gtin_new
+	// enrichment and the OFF cache-hit stats surfaced on /metrics. Nil when
+	// enrichment is disabled.
+	var offClient *enrich.OFFClient
+	if cfg.EnableOFFEnrich {
+		offClient = enrich.NewOFFClient()
+	}
+
+	// Health checks and metrics stay unprefixed; everything else lives under
+	// /api/v1/.
 	router.Get("/healthz", healthz)
 	router.Get("/readyz", readyz(stores))
+	router.Get("/metrics", metricsHandler(offClient))
 
 	authAPI := newAuthAPI(cfg, stores)
 
 	router.Route("/api/v1", func(r chi.Router) {
+		// A global per-IP token bucket throttles every API request; a
+		// per-user bucket is layered in below on the authenticated groups.
+		// Zero/negative configuration values disable the buckets (tests).
+		r.Use(middleware.KeyedRateLimit(cfg.RateLimitIPRPS, cfg.RateLimitIPBurst, middleware.IPKey))
+		userRL := middleware.KeyedRateLimit(cfg.RateLimitUserRPS, cfg.RateLimitUserBurst, userRateKey)
+
 		if captcha == nil {
 			captcha = newCaptchaSupport(cfg, log)
 		}
@@ -50,6 +70,13 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 		// One service instance drives every group: ingestion, reads and admin
 		// curation all share the same stores + resolver + transaction boundary.
 		svc := service.New(stores, nfceSvc, log, captcha)
+		if cfg.PreviewTTL > 0 {
+			svc.PreviewTTL = cfg.PreviewTTL
+		}
+		if offClient != nil {
+			svc.Enricher = offClient
+		}
+
 		nfceAPI := newNfceAPI(svc, log)
 		productsAPI := newProductsAPI(svc)
 		supermarketsAPI := newSupermarketsAPI(svc)
@@ -61,7 +88,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 		// POST /nfce/delete   — delete a receipt (owner OR admin)
 		// POST /nfce/captcha  — solve a portal challenge into a draft
 		r.Route("/nfce", func(nr chi.Router) {
-			nr.Use(authAPI.mw.RequireAuth)
+			nr.Use(authAPI.mw.RequireAuth, userRL)
 			nr.Post("/new", nfceAPI.draft)
 			nr.Post("/submit", nfceAPI.confirm)
 			nr.Post("/delete", nfceAPI.delete)
@@ -76,14 +103,14 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 			// TODO: check if a logout endpoint should be implemented here
 			ar.Post("/login", authAPI.login)
 			ar.Post("/refresh", authAPI.refreshHandler)
-			ar.With(authAPI.mw.RequireAuth).Get("/me", authAPI.me)
+			ar.With(authAPI.mw.RequireAuth, userRL).Get("/me", authAPI.me)
 			ar.NotFound(httpx.NotFound)
 		})
 
 		// Shared product/supermarket reads, authenticated. Public reads never
 		// surface needs_review rows (the store filters them out).
 		r.Route("/products", func(pr chi.Router) {
-			pr.Use(authAPI.mw.RequireAuth)
+			pr.Use(authAPI.mw.RequireAuth, userRL)
 			pr.Get("/", productsAPI.search)
 			pr.Get("/{id}", productsAPI.get)
 			pr.Get("/{id}/history", productsAPI.history)
@@ -91,7 +118,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 		})
 
 		r.Route("/supermarkets", func(sr chi.Router) {
-			sr.Use(authAPI.mw.RequireAuth)
+			sr.Use(authAPI.mw.RequireAuth, userRL)
 			sr.Get("/", supermarketsAPI.list)
 			sr.Get("/{id}/products", supermarketsAPI.products)
 			sr.With(authAPI.mw.RequireRole("admin")).Delete("/{id}", supermarketsAPI.remove)
@@ -100,14 +127,14 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 
 		// Own-profile alias: /api/v1/users/me mirrors /api/v1/auth/me.
 		r.Route("/users", func(ur chi.Router) {
-			ur.Use(authAPI.mw.RequireAuth)
+			ur.Use(authAPI.mw.RequireAuth, userRL)
 			ur.Get("/me", authAPI.me)
 			ur.NotFound(httpx.NotFound)
 		})
 
 		// Admin curation, everything gated by RequireRole("admin").
 		r.Route("/admin", func(ar chi.Router) {
-			ar.Use(authAPI.mw.RequireRole("admin"))
+			ar.Use(authAPI.mw.RequireRole("admin"), userRL)
 			ar.Get("/", adminStub)
 			ar.Get("/users", adminAPI.listUsers)
 			ar.Patch("/users/{id}/role", adminAPI.patchRole)
@@ -124,6 +151,18 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 	return router
 }
 
+// userRateKey keys the per-user token bucket by the authenticated principal;
+// an unauthenticated request (should not reach these routes) falls back to the
+// client IP.
+func userRateKey(r *http.Request) string {
+	if p := auth.Principal(r.Context()); p != nil {
+		if id, err := auth.SubjectID(p); err == nil {
+			return "user:" + strconv.FormatInt(id, 10)
+		}
+	}
+	return middleware.IPKey(r)
+}
+
 // newCaptchaSupport wires the captcha flow: an in-memory challenge
 // registry shared with the portal source (which registers challenges when the
 // portal demands one) plus a solver that replays typed answers into the
@@ -132,7 +171,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 func newCaptchaSupport(cfg config.Config, log *slog.Logger) *service.CaptchaSupport {
 	return &service.CaptchaSupport{
 		Store:       nfce.NewChallengeStore(),
-		Solver:      nfce.NewHTTPChallengeSolver(nfce.HTTPChallengeSolverOptions{RPS: cfg.SEFAZFetchRPS, Logger: log}),
+		Solver:      nfce.NewHTTPChallengeSolver(nfce.HTTPChallengeSolverOptions{RPS: cfg.SEFAZFetchRPS, Timeout: cfg.SEFAZTimeout, Logger: log}),
 		MaxAttempts: 5,
 	}
 }
@@ -166,9 +205,13 @@ func newNfceResolver(cfg config.Config, log *slog.Logger) nfceResolver {
 		}
 
 		src, err := nfce.NewHTTPSource(nfce.HTTPSourceOptions{
-			BaseURL: baseURL,
-			RPS:     cfg.SEFAZFetchRPS,
-			Logger:  log,
+			BaseURL:     baseURL,
+			RPS:         cfg.SEFAZFetchRPS,
+			MaxRetries:  cfg.SEFAZMaxRetries,
+			Timeout:     cfg.SEFAZTimeout,
+			BackoffBase: cfg.SEFAZBackoffBase,
+			BackoffCap:  cfg.SEFAZBackoffCap,
+			Logger:      log,
 		})
 
 		if err != nil {

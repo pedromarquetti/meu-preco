@@ -40,6 +40,15 @@ type HTTPSourceOptions struct {
 	Logger *slog.Logger
 	// MaxRetries is the number of attempts per fetch (>= 1). Defaults to 3.
 	MaxRetries int
+	// Timeout bounds each portal request (including retries of the same
+	// attempt sequence). Defaults to 30s.
+	Timeout time.Duration
+	// BackoffBase is the exponential retry delay for the first retry. Defaults
+	// to 200ms.
+	BackoffBase time.Duration
+	// BackoffCap caps every exponential retry delay. Defaults to 2s. Values
+	// below BackoffBase make the backoff flat (always at the cap).
+	BackoffCap time.Duration
 	// ChallengeStore records captcha challenges for later resolution.
 	// Defaults to a fresh store.
 	ChallengeStore *ChallengeStore
@@ -48,13 +57,15 @@ type HTTPSourceOptions struct {
 // HTTPSource fetches raw NFC-e pages from a state fiscal portal that renders
 // the DANFE through its "qrcode" view for an access key or QR payload.
 type HTTPSource struct {
-	baseURL    string
-	limit      *rateLimiter
-	user_agent string
-	client     *http.Client
-	log        *slog.Logger
-	retries    int
-	challenges *ChallengeStore
+	baseURL     string
+	limit       *rateLimiter
+	user_agent  string
+	client      *http.Client
+	log         *slog.Logger
+	retries     int
+	backoffBase time.Duration
+	backoffCap  time.Duration
+	challenges  *ChallengeStore
 }
 
 func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
@@ -72,6 +83,23 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 
 	if opts.MaxRetries < 1 {
 		opts.MaxRetries = 3
+	}
+
+	if opts.Timeout <= 0 {
+		opts.Timeout = 30 * time.Second
+	}
+
+	if opts.BackoffBase < 0 {
+		opts.BackoffBase = 0
+	}
+	if opts.BackoffCap <= 0 {
+		opts.BackoffCap = 2 * time.Second
+	}
+	if opts.BackoffBase == 0 {
+		opts.BackoffBase = 200 * time.Millisecond
+	}
+	if opts.BackoffCap < opts.BackoffBase {
+		opts.BackoffCap = opts.BackoffBase
 	}
 
 	if opts.ChallengeStore == nil {
@@ -92,7 +120,7 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 				TLSHandshakeTimeout: 10 * time.Second,
 				TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 			},
-			Timeout: 30 * time.Second,
+			Timeout: opts.Timeout,
 		}
 	}
 
@@ -101,13 +129,15 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 	}
 
 	return &HTTPSource{
-		baseURL:    opts.BaseURL,
-		limit:      newRateLimiter(opts.RPS),
-		user_agent: opts.UserAgent,
-		client:     opts.HTTPClient,
-		log:        opts.Logger,
-		retries:    opts.MaxRetries,
-		challenges: opts.ChallengeStore,
+		baseURL:     opts.BaseURL,
+		limit:       newRateLimiter(opts.RPS),
+		user_agent:  opts.UserAgent,
+		client:      opts.HTTPClient,
+		log:         opts.Logger,
+		retries:     opts.MaxRetries,
+		backoffBase: opts.BackoffBase,
+		backoffCap:  opts.BackoffCap,
+		challenges:  opts.ChallengeStore,
 	}, nil
 }
 
@@ -136,7 +166,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 				return nil, ctx.Err()
 			}
 			if attempt < s.retries {
-				if !sleepCtx(ctx, backoff(attempt)) {
+				if !sleepCtx(ctx, s.backoff(attempt)) {
 					return nil, ctx.Err()
 				}
 				continue
@@ -148,7 +178,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 		case status >= 500 || status == http.StatusTooManyRequests:
 			lastErr = fmt.Errorf("nfce: portal answered HTTP %d", status)
 			if attempt < s.retries {
-				if !sleepCtx(ctx, backoff(attempt)) {
+				if !sleepCtx(ctx, s.backoff(attempt)) {
 					return nil, ctx.Err()
 				}
 				continue
@@ -310,13 +340,16 @@ func pageHasDANFE(body []byte) bool {
 }
 
 // backoff returns an exponential delay with jitter for a retry attempt
-// (attempt counting from 1). Caps at 2s.
-func backoff(attempt int) time.Duration {
-	d := 200 * time.Millisecond << (attempt - 1)
-	if attempt > 4 {
-		d = 2 * time.Second
+// (attempt counting from 1). It doubles from backoffBase every retry and caps
+// at backoffCap.
+func (s *HTTPSource) backoff(attempt int) time.Duration {
+	d := s.backoffBase << (attempt - 1)
+	if d > s.backoffCap {
+		d = s.backoffCap
 	}
+
 	d += time.Duration(rand.Int64N(int64(d)/4 + 1))
+
 	return d
 }
 

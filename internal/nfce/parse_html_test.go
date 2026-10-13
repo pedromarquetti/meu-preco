@@ -66,7 +66,7 @@ func TestParseGroceryReceipt(t *testing.T) {
 		}
 	}
 
-	// GTIN candidates are surfaced raw (validation is Phase 4).
+	// GTIN candidates are surfaced raw (validation happens later).
 	if n.Items[1].Code != "7896008038717" {
 		t.Errorf("GTIN candidate missing on item 2: %q", n.Items[1].Code)
 	}

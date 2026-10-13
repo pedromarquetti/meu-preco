@@ -40,7 +40,7 @@ type Line struct {
 }
 
 // Decision is the outcome of classifying one receipt line against the
-// catalog. It is a pure value: consumers (the Phase 5 commit transaction)
+// catalog. It is a pure value: consumers (the commit transaction)
 // translate it into products/price_logs rows.
 type Decision struct {
 	Status          string

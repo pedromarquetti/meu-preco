@@ -39,6 +39,8 @@ type HTTPChallengeSolver struct {
 
 // HTTPChallengeSolverOptions configures the solver. Zero values fall back to
 // sane defaults.
+// Private keys for this one only: HTTPClient/UserAgent/Logger/RPS plus a
+// Timeout knob mirroring the fetcher's portal budget.
 type HTTPChallengeSolverOptions struct {
 	// HTTPClient is used verbatim when set (inject a transport for tests).
 	HTTPClient *http.Client
@@ -48,6 +50,8 @@ type HTTPChallengeSolverOptions struct {
 	Logger *slog.Logger
 	// RPS caps portal requests per second. Defaults to 1 (shared politeness).
 	RPS int
+	// Timeout bounds each solve/image request. Defaults to 30s.
+	Timeout time.Duration
 }
 
 // NewHTTPChallengeSolver builds a solver sharing the portal's polite pacing.
@@ -56,7 +60,10 @@ func NewHTTPChallengeSolver(opts HTTPChallengeSolverOptions) *HTTPChallengeSolve
 		opts.UserAgent = defaultUserAgent
 	}
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+		if opts.Timeout <= 0 {
+			opts.Timeout = 30 * time.Second
+		}
+		opts.HTTPClient = &http.Client{Timeout: opts.Timeout}
 	}
 	if opts.RPS < 1 {
 		opts.RPS = 1

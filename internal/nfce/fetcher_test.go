@@ -202,6 +202,49 @@ func TestHTTPSourceContextCancel(t *testing.T) {
 	}
 }
 
+func TestHTTPSourceCapsRetryBurst(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	src, _ := NewHTTPSource(HTTPSourceOptions{BaseURL: srv.URL, RPS: 1000, MaxRetries: 2})
+	if src.retries != 2 {
+		t.Errorf("retries = %d, want 2", src.retries)
+	}
+	key, _ := ParseAccessKey(senateKey)
+	_, _ = src.Fetch(context.Background(), key, "")
+	if calls != 2 {
+		t.Errorf("server calls = %d, want 2", calls)
+	}
+}
+
+func TestHTTPSourceBackoffKnobs(t *testing.T) {
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:     "https://portal.example",
+		RPS:         100,
+		MaxRetries:  5,
+		Timeout:     5 * time.Second,
+		BackoffBase: 100 * time.Millisecond,
+		BackoffCap:  300 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.client.Timeout != 5*time.Second {
+		t.Errorf("client timeout = %v, want 5s", src.client.Timeout)
+	}
+	if src.backoffBase != 100*time.Millisecond || src.backoffCap != 300*time.Millisecond {
+		t.Errorf("backoff = %v/%v", src.backoffBase, src.backoffCap)
+	}
+	// Attempt 3 would need 400ms; the 300ms cap clamps it, jitter keeps it >= cap.
+	if d := src.backoff(3); d < 300*time.Millisecond || d > 375*time.Millisecond {
+		t.Errorf("backoff(3) = %v, want clamped to ~300ms", d)
+	}
+}
+
 func TestRateLimiterPaces(t *testing.T) {
 	rl := newRateLimiter(10) // 100ms between tokens
 	ctx := context.Background()

@@ -9,6 +9,7 @@
   - [Getting started](#getting-started)
     - [Run with make](#run-with-make)
     - [env](#env)
+    - [Hardening & operations](#hardening-operations)
     - [Container image:](#container-image)
   - [Documentation](#documentation)
   - [Inspiration](#inspiration)
@@ -102,7 +103,7 @@ make test     # go test ./... -race
 make lint     # gofmt + go vet (+ staticcheck if installed)
 make build    # bin/server
 
-# Database (Phase 2): migrate up/down against POSTGRES_* + DATABASE_NAME
+# Database: migrate up/down against POSTGRES_* + DATABASE_NAME
 export POSTGRES_USERNAME='dev' POSTGRES_PASSWORD='dev' DATABASE_NAME='meupreco'
 make migrate-up
 make migrate-down
@@ -124,24 +125,35 @@ go test ./internal/enrich/... -run TestOFFLookupLive -v
 
 The server expects some env. vars to be set.
 
-| Var               | Required | Default   | Accepted values                                                        |
-| ----------------- | -------- | --------- | ---------------------------------------------------------------------- |
-| PORT              | no       | 8080      | 1–65535                                                                |
-| LOG_LEVEL         | no       | info      | `debug` \| `info` \| `warn` \| `error`                                 |
-| LOG_FORMAT        | no       | pretty    | `pretty` \| `json`                                                     |
-| CORS_ORIGINS      | no       | \*        | comma-separated origins, or `*`                                        |
-| SEFAZ_FETCH_RPS   | no       | 1         | integer ≥ 1                                                            |
-| SEFAZ_BASE_URL    | no       | SP prod   | https URL (overrides the SP QR consultation endpoint for test proxies) |
-| POSTGRES_USERNAME | yes      | —         | postgres login (builds the DSN)                                        |
-| POSTGRES_PASSWORD | yes      | —         | postgres password (builds the DSN; never logged/committed)             |
-| DATABASE_NAME     | yes      | —         | database name, e.g. `meupreco`                                         |
-| POSTGRES_HOST     | no       | localhost | postgres host                                                          |
-| POSTGRES_PORT     | no       | 5432      | postgres port (1–65535)                                                |
-| JWT_ACCESS_TTL    | no       | 15m       | Go duration (e.g. `15m`)                                               |
-| JWT_REFRESH_TTL   | no       | 720h      | Go duration (e.g. `720h`)                                              |
-| JWT_SECRET        | yes      | —         | ≥ 32 chars; signs access + refresh tokens                              |
-| ADMIN_EMAIL       | yes      | —         | seeds the first admin (role `admin`) at boot when `users` is empty     |
-| ADMIN_PASSWORD    | yes      | —         | seeds the first admin password (bcrypt-hashed at boot)                 |
+| Var                   | Required | Default   | Accepted values                                                        |
+| --------------------- | -------- | --------- | ---------------------------------------------------------------------- |
+| PORT                  | no       | 8080      | 1–65535                                                                |
+| LOG_LEVEL             | no       | info      | `debug` \| `info` \| `warn` \| `error`                                 |
+| LOG_FORMAT            | no       | pretty    | `pretty` \| `json`                                                     |
+| CORS_ORIGINS          | no       | \*        | comma-separated origins, or `*`                                        |
+| SEFAZ_FETCH_RPS       | no       | 1         | integer ≥ 1                                                            |
+| SEFAZ_MAX_RETRIES     | no       | 3         | integer ≥ 1 (fetch attempts per receipt)                               |
+| SEFAZ_TIMEOUT         | no       | 30s       | Go duration (per portal request)                                       |
+| SEFAZ_BACKOFF_BASE    | no       | 200ms     | Go duration ≥ 0 (start of the exponential retry delay)                 |
+| SEFAZ_BACKOFF_CAP     | no       | 2s        | Go duration ≥ `SEFAZ_BACKOFF_BASE` (cap per retry delay)               |
+| SEFAZ_BASE_URL        | no       | SP prod   | https URL (overrides the SP QR consultation endpoint for test proxies) |
+| PREVIEWS_TTL          | no       | 15m       | Go duration > 0 (pending draft lifetime)                               |
+| PREVIEW_GC_INTERVAL   | no       | 5m        | Go duration > 0 (background sweep period)                              |
+| RATE_LIMIT_IP_RPS     | no       | 5         | float ≥ 0 (0 disables the per-IP bucket)                               |
+| RATE_LIMIT_IP_BURST   | no       | 300       | integer ≥ 0 (per-IP burst)                                             |
+| RATE_LIMIT_USER_RPS   | no       | 20        | float ≥ 0 (0 disables the per-user bucket)                             |
+| RATE_LIMIT_USER_BURST | no       | 1000      | integer ≥ 0 (per-user burst)                                           |
+| ENRICH_OFF            | no       | false     | `true`/`false` (best-effort Open Food Facts enrichment of `gtin_new`)  |
+| POSTGRES_USERNAME     | yes      | —         | postgres login (builds the DSN)                                        |
+| POSTGRES_PASSWORD     | yes      | —         | postgres password (builds the DSN; never logged/committed)             |
+| DATABASE_NAME         | yes      | —         | database name, e.g. `meupreco`                                         |
+| POSTGRES_HOST         | no       | localhost | postgres host                                                          |
+| POSTGRES_PORT         | no       | 5432      | postgres port (1–65535)                                                |
+| JWT_ACCESS_TTL        | no       | 15m       | Go duration (e.g. `15m`)                                               |
+| JWT_REFRESH_TTL       | no       | 720h      | Go duration (e.g. `720h`)                                              |
+| JWT_SECRET            | yes      | —         | ≥ 32 chars; signs access + refresh tokens                              |
+| ADMIN_EMAIL           | yes      | —         | seeds the first admin (role `admin`) at boot when `users` is empty     |
+| ADMIN_PASSWORD        | yes      | —         | seeds the first admin password (bcrypt-hashed at boot)                 |
 
 The DSN is built as `postgres://USER:PASS@HOST:PORT/DATABASE?sslmode=disable`.
 Missing DB vars (or a too-short `JWT_SECRET`, or a missing `ADMIN_EMAIL`/
@@ -160,6 +172,27 @@ Without `.env`, vars must be exported in the shell. In Docker the platform
 injects environment directly (`env_file`/`-e`) — the compiled binary never reads
 `.env` itself.
 
+### Hardening & operations
+
+- **Rate limiting** — a global per-IP token bucket guards the whole `/api/v1`
+  tree; an authenticated per-user bucket is layered on the protected routes
+  (keyed by the JWT subject). A throttled request answers `429` with the
+  canonical envelope (`error.code = "rate_limited"`) and a `Retry-After` header.
+  Set the relevant `RATE_LIMIT_*` var to `0` to disable that bucket.
+- **Preview GC** — expired drafts are purged on write _and_ by a background
+  goroutine every `PREVIEW_GC_INTERVAL`, so the `previews` table stays bounded
+  even on an idle server.
+- **Security headers** — every response carries
+  `X-Content-Type-Options:
+  nosniff`, `X-Frame-Options: DENY` and
+  `Referrer-Policy: no-referrer`; JSON responses (and the captcha image proxy)
+  are sent `Cache-Control: no-store`.
+- **Metrics** — `GET /metrics` (unauthenticated) returns per-route request
+  counters, a latency histogram, auth-failure counts and, when
+  `ENRICH_OFF=true`, the Open Food Facts cache hit/miss counters as JSON.
+- **Contract** — `api/openapi.yaml` is the versioned source of truth for the
+  HTTP surface; the SPA consumes only that.
+
 ### Container image:
 
 ```sh
@@ -171,11 +204,7 @@ TODO: implement docker-compose that pulls dockerhub image?
 
 ## Documentation
 
-- [PROJECT.md](PROJECT.md) — full design: receipt ingestion flow, product
-  identity strategy, data sources, data model, API, and the phased
-  implementation plan.
-- `api/openapi.yaml` — versioned API contract (added in Phase 8; the SPA
-  consumes only this).
+- `api/openapi.yaml` — versioned API contract (the SPA consumes only this).
 
 ## Inspiration
 

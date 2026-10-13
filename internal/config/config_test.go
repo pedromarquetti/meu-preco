@@ -51,6 +51,23 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SEFAZFetchRPS != 1 {
 		t.Errorf("SEFAZFetchRPS = %d, want 1", cfg.SEFAZFetchRPS)
 	}
+	if cfg.SEFAZMaxRetries != 3 || cfg.SEFAZTimeout != 30*time.Second {
+		t.Errorf("SEFAZ retry knobs = %d/%v, want 3/30s", cfg.SEFAZMaxRetries, cfg.SEFAZTimeout)
+	}
+	if cfg.SEFAZBackoffBase != 200*time.Millisecond || cfg.SEFAZBackoffCap != 2*time.Second {
+		t.Errorf("SEFAZ backoff = %v/%v, want 200ms/2s", cfg.SEFAZBackoffBase, cfg.SEFAZBackoffCap)
+	}
+	if cfg.PreviewTTL != 15*time.Minute || cfg.PreviewGCInterval != 5*time.Minute {
+		t.Errorf("preview lifecycle = %v/%v, want 15m/5m", cfg.PreviewTTL, cfg.PreviewGCInterval)
+	}
+	if cfg.RateLimitIPRPS != 5 || cfg.RateLimitIPBurst != 300 ||
+		cfg.RateLimitUserRPS != 20 || cfg.RateLimitUserBurst != 1000 {
+		t.Errorf("rate limits = %v/%v %v/%v, want 5/300 20/1000",
+			cfg.RateLimitIPRPS, cfg.RateLimitIPBurst, cfg.RateLimitUserRPS, cfg.RateLimitUserBurst)
+	}
+	if cfg.EnableOFFEnrich {
+		t.Errorf("EnableOFFEnrich = true, want false default")
+	}
 	if cfg.SefazBaseURL != "" {
 		t.Errorf("SefazBaseURL = %q, want empty default", cfg.SefazBaseURL)
 	}
@@ -231,6 +248,92 @@ func TestLoadBadRPS(t *testing.T) {
 	_, err := load(env(map[string]string{"SEFAZ_FETCH_RPS": "0"}))
 	if err == nil || !strings.Contains(err.Error(), "SEFAZ_FETCH_RPS") {
 		t.Fatalf("expected SEFAZ_FETCH_RPS error, got %v", err)
+	}
+}
+
+func TestLoadSefazTuning(t *testing.T) {
+	cfg, err := load(env(map[string]string{
+		"SEFAZ_MAX_RETRIES":  "5",
+		"SEFAZ_TIMEOUT":      "10s",
+		"SEFAZ_BACKOFF_BASE": "50ms",
+		"SEFAZ_BACKOFF_CAP":  "1s",
+	}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.SEFAZMaxRetries != 5 || cfg.SEFAZTimeout != 10*time.Second ||
+		cfg.SEFAZBackoffBase != 50*time.Millisecond || cfg.SEFAZBackoffCap != time.Second {
+		t.Errorf("tuning = %d/%v/%v/%v", cfg.SEFAZMaxRetries, cfg.SEFAZTimeout,
+			cfg.SEFAZBackoffBase, cfg.SEFAZBackoffCap)
+	}
+}
+
+func TestLoadBadSefazTuning(t *testing.T) {
+	cases := []struct {
+		env   string
+		value string
+	}{
+		{"SEFAZ_MAX_RETRIES", "0"}, {"SEFAZ_TIMEOUT", "0s"},
+		{"SEFAZ_BACKOFF_CAP", "100ms"}, {"SEFAZ_BACKOFF_BASE", "-1ms"},
+		{"SEFAZ_BACKOFF_BASE", "soon"},
+	}
+	for _, c := range cases {
+		_, err := load(env(map[string]string{c.env: c.value}))
+		if err == nil {
+			t.Errorf("%s=%q: expected error", c.env, c.value)
+		}
+	}
+}
+
+func TestLoadPreviewLifecycle(t *testing.T) {
+	cfg, err := load(env(map[string]string{
+		"PREVIEWS_TTL":        "30m",
+		"PREVIEW_GC_INTERVAL": "90s",
+	}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.PreviewTTL != 30*time.Minute || cfg.PreviewGCInterval != 90*time.Second {
+		t.Errorf("preview = %v/%v", cfg.PreviewTTL, cfg.PreviewGCInterval)
+	}
+	_, err = load(env(map[string]string{"PREVIEWS_TTL": "0s"}))
+	if err == nil {
+		t.Error("PREVIEWS_TTL=0s accepted")
+	}
+}
+
+func TestLoadRateLimits(t *testing.T) {
+	cfg, err := load(env(map[string]string{
+		"RATE_LIMIT_IP_RPS":     "2.5",
+		"RATE_LIMIT_IP_BURST":   "50",
+		"RATE_LIMIT_USER_RPS":   "10",
+		"RATE_LIMIT_USER_BURST": "200",
+	}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.RateLimitIPRPS != 2.5 || cfg.RateLimitIPBurst != 50 ||
+		cfg.RateLimitUserRPS != 10 || cfg.RateLimitUserBurst != 200 {
+		t.Errorf("limits = %v/%v %v/%v", cfg.RateLimitIPRPS, cfg.RateLimitIPBurst,
+			cfg.RateLimitUserRPS, cfg.RateLimitUserBurst)
+	}
+	_, err = load(env(map[string]string{"RATE_LIMIT_IP_RPS": "abc"}))
+	if err == nil || !strings.Contains(err.Error(), "RATE_LIMIT_IP_RPS") {
+		t.Error("bad RATE_LIMIT_IP_RPS accepted")
+	}
+}
+
+func TestLoadEnableOFFEnrich(t *testing.T) {
+	cfg, err := load(env(map[string]string{"ENRICH_OFF": "true"}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.EnableOFFEnrich {
+		t.Error("EnableOFFEnrich = false, want true")
+	}
+	_, err = load(env(map[string]string{"ENRICH_OFF": "maybe"}))
+	if err == nil || !strings.Contains(err.Error(), "ENRICH_OFF") {
+		t.Error("bad ENRICH_OFF accepted")
 	}
 }
 
