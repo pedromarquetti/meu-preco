@@ -110,7 +110,7 @@ func (s *Service) SolveCaptcha(ctx context.Context, req SolveCaptchaRequest) (*P
 	if err != nil {
 		return nil, err
 	}
-	return s.persistDraft(ctx, req.UserID, key, receipt)
+	return s.persistDraft(ctx, req.UserID, key, ch.Payload, receipt)
 }
 
 // ChallengeStatus reports a challenge's current state for the GET /captcha

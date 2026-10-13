@@ -24,6 +24,7 @@ import (
 	"meupreco/internal/config"
 	"meupreco/internal/domain"
 	"meupreco/internal/nfce"
+	"meupreco/internal/product"
 	"meupreco/internal/service"
 	pstore "meupreco/internal/store/postgres"
 	"meupreco/migrations"
@@ -393,5 +394,149 @@ func TestNfceTwoPhaseIngestion(t *testing.T) {
 		`{"preview_id":`+strconvItoa(preview4)+`,"confirm":true}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("expired submit status = %d, want 422 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestNfceCommitPersistsCreatedProductIDs pins the product↔price_log
+// relationship for the auto-save tiers. ensureProduct used to return p.ID in
+// the same statement that created the row (`return p.ID, Create(...)`); Go does
+// not order the non-call operand p.ID against the Create call, so a compiler is
+// free to read the pre-scan id (0) and hand price_logs a 0 product_id, which
+// trips the foreign key and rolls back the whole receipt. The fix splits the
+// create from the return. This drives a receipt whose two lines are a brand-new
+// barcode and a GTIN-less commodity through the real postgres commit path and
+// asserts each price_log joins to the product row its identity created.
+func TestNfceCommitPersistsCreatedProductIDs(t *testing.T) {
+	st := integrationStore(t)
+	if st == nil {
+		return
+	}
+	truncatePG(t, st.Pool())
+
+	ctx := context.Background()
+	u := &domain.User{Email: "user@example.com", PasswordHash: "h", Role: "user"}
+	if err := st.Users().Create(ctx, u); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	// Line 1: a barcode absent from the catalog → gtin_new (creates a product).
+	// Line 2: a GTIN-less commodity the seed vocabulary knows → the
+	// commodity_fingerprint tier (also creates a product).
+	receipt := &domain.Nfce{
+		AccessKey:     senateKey,
+		Supermarket:   domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO BOM PRECO LTDA"},
+		Number:        "300",
+		Series:        "001",
+		Protocol:      "135241234567890",
+		Environment:   "Producao",
+		PaymentMethod: "Dinheiro",
+		Total:         decimal.RequireFromString("21.99"),
+		Items: []domain.NfceItem{
+			{
+				Line: 1, Code: "7896008038717", Description: "ARROZ INTEGRAL TIO JOAO 1KG",
+				Qty: decimal.RequireFromString("1"), Unit: "UN",
+				UnitPrice: decimal.RequireFromString("9.99"), TotalPrice: decimal.RequireFromString("9.99"),
+			},
+			{
+				Line: 2, Code: "", Description: "BANANA PRATA",
+				Qty: decimal.RequireFromString("1.5"), Unit: "KG",
+				UnitPrice: decimal.RequireFromString("8.00"), TotalPrice: decimal.RequireFromString("12.00"),
+			},
+		},
+	}
+	router := ingestionRouter(t, st, pgResolver{receipt: receipt}, u.ID)
+
+	do := func(method, path, body string) (*httptest.ResponseRecorder, map[string]any) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		var out map[string]any
+		if rec.Body.Len() > 0 {
+			_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		}
+		return rec, out
+	}
+
+	rec, plan := do(http.MethodPost, "/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("new status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	statuses := map[string]int{}
+	for _, it := range plan["items"].([]any) {
+		statuses[it.(map[string]any)["status"].(string)]++
+	}
+	if statuses["gtin_new"] != 1 || statuses["commodity_fingerprint"] != 1 {
+		t.Fatalf("plan statuses = %v, want 1 gtin_new + 1 commodity_fingerprint", statuses)
+	}
+
+	previewID := int64(plan["preview_id"].(float64))
+	rec, out := do(http.MethodPost, "/api/v1/nfce/submit",
+		`{"preview_id":`+strconvItoa(previewID)+`,"confirm":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("commit status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if out["written"].(float64) != 2 || out["auto_saved"].(float64) != 2 {
+		t.Errorf("commit result = %v, want 2 written / 2 auto_saved", out)
+	}
+
+	gtinKey, ok := product.NormalizeGTIN("7896008038717")
+	if !ok {
+		t.Fatal("test fixture GTIN failed to normalize")
+	}
+	commodityKey := product.CommodityKey("banana prata", "KG")
+
+	type logRow struct {
+		Line           int
+		IdentityStatus string
+		ProductID      int64
+		ProductKey     string
+	}
+	rows, err := st.Pool().Query(ctx,
+		`SELECT pl.line, pl.identity_status, pl.product_id, p.product_key
+		   FROM price_logs pl
+		   JOIN products p ON p.id = pl.product_id
+		  ORDER BY pl.line`)
+	if err != nil {
+		t.Fatalf("query logs: %v", err)
+	}
+	defer rows.Close()
+
+	var got []logRow
+	for rows.Next() {
+		var lr logRow
+		if err := rows.Scan(&lr.Line, &lr.IdentityStatus, &lr.ProductID, &lr.ProductKey); err != nil {
+			t.Fatalf("scan log: %v", err)
+		}
+		got = append(got, lr)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("joined logs = %d rows, want 2 (FK must link every auto-save)", len(got))
+	}
+	want := map[int]struct {
+		status string
+		key    string
+	}{
+		1: {"gtin_new", gtinKey},
+		2: {"commodity_fingerprint", commodityKey},
+	}
+	for _, lr := range got {
+		w, ok := want[lr.Line]
+		if !ok {
+			t.Errorf("unexpected line %d", lr.Line)
+			continue
+		}
+		if lr.ProductID == 0 {
+			t.Errorf("line %d product_id = 0 (the created-before-insert bug)", lr.Line)
+		}
+		if lr.IdentityStatus != w.status || lr.ProductKey != w.key {
+			t.Errorf("line %d = status:%s key:%s, want status:%s key:%s",
+				lr.Line, lr.IdentityStatus, lr.ProductKey, w.status, w.key)
+		}
 	}
 }

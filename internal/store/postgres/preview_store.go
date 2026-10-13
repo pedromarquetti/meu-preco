@@ -10,10 +10,10 @@ type previewRepo struct{ db queryer }
 
 func (r previewRepo) Create(ctx context.Context, p *domain.Preview) error {
 	err := r.db.QueryRow(ctx,
-		`INSERT INTO previews (user_id, access_key, plan_items, plan_totals, status, ttl)
-		 VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
+		`INSERT INTO previews (user_id, access_key, qr_payload, plan_items, plan_totals, status, ttl)
+		 VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
 		 RETURNING id, created_at`,
-		p.UserID, p.AccessKey, p.PlanItems, p.PlanTotals, p.Status, p.TTL,
+		p.UserID, p.AccessKey, p.QRPayload, p.PlanItems, p.PlanTotals, p.Status, p.TTL,
 	).Scan(&p.ID, &p.CreatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -27,9 +27,9 @@ func (r previewRepo) Create(ctx context.Context, p *domain.Preview) error {
 func (r previewRepo) GetByID(ctx context.Context, id int64) (*domain.Preview, error) {
 	p := &domain.Preview{}
 	err := r.db.QueryRow(ctx,
-		`SELECT id, user_id, access_key, plan_items, plan_totals, status, ttl, created_at
+		`SELECT id, user_id, access_key, qr_payload, plan_items, plan_totals, status, ttl, created_at
 		 FROM previews WHERE id = $1`, id,
-	).Scan(&p.ID, &p.UserID, &p.AccessKey, &p.PlanItems, &p.PlanTotals, &p.Status,
+	).Scan(&p.ID, &p.UserID, &p.AccessKey, &p.QRPayload, &p.PlanItems, &p.PlanTotals, &p.Status,
 		&p.TTL, &p.CreatedAt)
 	if err != nil {
 		return nil, translateError(err)
@@ -40,9 +40,9 @@ func (r previewRepo) GetByID(ctx context.Context, id int64) (*domain.Preview, er
 func (r previewRepo) GetPendingByUserAccessKey(ctx context.Context, userID int64, accessKey string) (*domain.Preview, error) {
 	p := &domain.Preview{}
 	err := r.db.QueryRow(ctx,
-		`SELECT id, user_id, access_key, plan_items, plan_totals, status, ttl, created_at
+		`SELECT id, user_id, access_key, qr_payload, plan_items, plan_totals, status, ttl, created_at
 		 FROM previews WHERE user_id = $1 AND access_key = $2 AND status = 'pending'`, userID, accessKey,
-	).Scan(&p.ID, &p.UserID, &p.AccessKey, &p.PlanItems, &p.PlanTotals, &p.Status,
+	).Scan(&p.ID, &p.UserID, &p.AccessKey, &p.QRPayload, &p.PlanItems, &p.PlanTotals, &p.Status,
 		&p.TTL, &p.CreatedAt)
 	if err != nil {
 		return nil, translateError(err)

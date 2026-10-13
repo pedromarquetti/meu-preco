@@ -42,16 +42,28 @@ func respondServiceError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // readPager parses the shared ?page=&limit= query pair. Defaults: page=1,
-// limit=20. Invalid numeric values or out-of-range limits -> 400.
+// limit=20, applied only when the parameter is absent. A malformed or
+// non-positive page is a 400 (the service contract rejects invalid filters
+// rather than silently rewriting the request); a non-integer limit is a 400.
 func readPager(w http.ResponseWriter, r *http.Request) (page, limit int, ok bool) {
-	page, err := strconv.Atoi(r.URL.Query().Get("page"))
-	if err != nil || page < 1 {
+	q := r.URL.Query()
+
+	if s := q.Get("page"); s != "" {
+		var err error
+		page, err = strconv.Atoi(s)
+		if err != nil || page < 1 {
+			httpx.Error(w, r, http.StatusBadRequest, "invalid_filter", "page must be a positive integer")
+			return 0, 0, false
+		}
+	} else {
 		page = 1
 	}
-	limitS := r.URL.Query().Get("limit")
+
+	limitS := q.Get("limit")
 	if limitS == "" {
 		limit = 20
 	} else {
+		var err error
 		limit, err = strconv.Atoi(limitS)
 		if err != nil {
 			httpx.Error(w, r, http.StatusBadRequest, "invalid_filter", "limit must be an integer")

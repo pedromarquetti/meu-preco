@@ -222,6 +222,9 @@ func (s *Service) GetProduct(ctx context.Context, id int64) (*ProductView, error
 		}
 		return nil, err
 	}
+	if p.NeedsReview {
+		return nil, ErrProductNotFound
+	}
 	v := toProductView(*p)
 	return &v, nil
 }
@@ -240,6 +243,9 @@ func (s *Service) ProductHistory(ctx context.Context, id int64, from, to *time.T
 			return nil, ErrProductNotFound
 		}
 		return nil, err
+	}
+	if p.NeedsReview {
+		return nil, ErrProductNotFound
 	}
 
 	points, err := s.Stores.PriceLogs().HistoryByProduct(ctx, id, from, to)

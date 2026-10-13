@@ -22,7 +22,7 @@ import (
 // invisible here: it simply gets a fresh draft and the subsequent submit is a
 // silent no-op.
 func (s *Service) ReportPreview(ctx context.Context, req PreviewRequest) (*PreviewResult, error) {
-	key, _, err := parseReceiptRequest(req.AccessKey, req.QRPayload)
+	key, payload, err := parseReceiptRequest(req.AccessKey, req.QRPayload)
 	if err != nil {
 		return nil, err
 	}
@@ -47,14 +47,14 @@ func (s *Service) ReportPreview(ctx context.Context, req PreviewRequest) (*Previ
 		return nil, err
 	}
 
-	return s.persistDraft(ctx, req.UserID, key, receipt)
+	return s.persistDraft(ctx, req.UserID, key, payload, receipt)
 }
 
 // persistDraft writes a pending previews row for (userID, key) from an
 // already-resolved receipt — the tail of the draft path, shared by
 // POST /nfce/new (ReportPreview) and the captcha solve handler. A concurrent
 // draft that won the same (user, access_key) pending slot replays instead.
-func (s *Service) persistDraft(ctx context.Context, userID int64, key nfce.AccessKey, receipt *domain.Nfce) (*PreviewResult, error) {
+func (s *Service) persistDraft(ctx context.Context, userID int64, key nfce.AccessKey, payload string, receipt *domain.Nfce) (*PreviewResult, error) {
 	plan, totals := buildPlan(ctx, s.Stores, receipt)
 	s.enrichPlan(ctx, plan)
 
@@ -70,6 +70,7 @@ func (s *Service) persistDraft(ctx context.Context, userID int64, key nfce.Acces
 	p := &domain.Preview{
 		UserID:     userID,
 		AccessKey:  key.String(),
+		QRPayload:  payload,
 		PlanItems:  itemsJSON,
 		PlanTotals: totalsJSON,
 		Status:     "pending",

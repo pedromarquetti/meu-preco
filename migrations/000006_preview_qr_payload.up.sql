@@ -1,0 +1,1 @@
+ALTER TABLE previews ADD COLUMN qr_payload TEXT NOT NULL DEFAULT '';

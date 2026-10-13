@@ -79,7 +79,7 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 
 	// Re-fetch the receipt so the shared rows are written from the current
 	// normalized document for the same access key the preview was built on.
-	receipt, err := s.resolveReceipt(ctx, preview.AccessKey, "")
+	receipt, err := s.resolveReceipt(ctx, preview.AccessKey, preview.QRPayload)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +272,11 @@ func ensureProduct(ctx context.Context, tx domain.Stores, pi *PlanItem) (int64, 
 		p.Brand = &brand
 	}
 
-	return p.ID, tx.Products().Create(ctx, p)
+	if err := tx.Products().Create(ctx, p); err != nil {
+		return 0, err
+	}
+
+	return p.ID, nil
 }
 
 // indexResolutions normalizes the resolutions array into a per-line map,

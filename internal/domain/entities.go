@@ -72,6 +72,7 @@ type Preview struct {
 	ID         int64
 	UserID     int64
 	AccessKey  string
+	QRPayload  string
 	PlanItems  json.RawMessage // JSON array
 	PlanTotals json.RawMessage // JSON object
 	Status     string          // "pending" | "committed" | "expired"

@@ -169,12 +169,20 @@ func TestSharedReads(t *testing.T) {
 		t.Errorf("q filter status = %d", rec.Code)
 	}
 
-	// Invalid filter: a bad unit token and oversized limit are 400 invalid_filter.
-	for _, q := range []string{"unit=d%C3%BAzia", "limit=999"} {
+	// Invalid filter: a bad unit token, an oversized limit and malformed /
+	// non-positive page values are 400 invalid_filter (page must be rejected,
+	// not silently rebuilt into page 1).
+	for _, q := range []string{"unit=d%C3%BAzia", "limit=999", "page=abc", "page=0", "page=-1"} {
 		rec, out = do(t, router, http.MethodGet, "/api/v1/products?"+q, "")
 		if rec.Code != http.StatusBadRequest || out["error"].(map[string]any)["code"] != "invalid_filter" {
 			t.Errorf("filter %q = %d (%s)", q, rec.Code, rec.Body.String())
 		}
+	}
+	// A well-formed page is accepted; the request is honored, not rewritten.
+	if rec, out = do(t, router, http.MethodGet, "/api/v1/products?page=2", ""); rec.Code != http.StatusOK {
+		t.Errorf("page=2 = %d (%s)", rec.Code, rec.Body.String())
+	} else if jint(out["page"].(map[string]any)["page"]) != 2 {
+		t.Errorf("page echo = %v, want 2", out["page"])
 	}
 
 	// One product by id; a missing one is a 404 not_found.

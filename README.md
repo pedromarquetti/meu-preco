@@ -213,5 +213,6 @@ TODO: implement docker-compose that pulls dockerhub image?
 ## Non-goals
 
 - **Frontend** - this is server-only
-- **multi-state** - For now, only São Paulo receipts will be implemented, other
-  states return 500 HTTP status
+- **multi-state** - For now, only São Paulo receipts will be implemented; other
+  states return `501 unsupported_uf` (the registry/UF capability matrix is the
+  seam for adding them).
