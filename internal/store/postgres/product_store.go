@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+
 	"meupreco/internal/domain"
 )
 
@@ -37,6 +39,163 @@ func (r productRepo) GetByID(ctx context.Context, id int64) (*domain.Product, er
 		return nil, translateError(err)
 	}
 	return p, nil
+}
+
+const productColumns = `id, product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by, created_at`
+
+// scanProduct decodes a product row; pass sim!=nil to also read the trailing
+// similarity column used by rank-ordered queries.
+func (r productRepo) scanProduct(row pgx.Row, sim *float64) (*domain.Product, error) {
+	p := &domain.Product{}
+	dests := []any{&p.ID, &p.ProductKey, &p.GTIN, &p.Name, &p.Brand, &p.Unit,
+		&p.CanonicalStem, &p.NeedsReview, &p.CreatedBy, &p.CreatedAt}
+
+	if sim != nil {
+		dests = append(dests, sim)
+	}
+
+	err := row.Scan(dests...)
+	if err != nil {
+		return nil, translateError(err)
+	}
+
+	return p, nil
+}
+
+// SearchFiltered implements domain.ProductStore.SearchFiltered: it filters the
+// catalog with the non-empty ProductFilter fields, never exposing needs_review
+// rows, and returns the page plus its total for stable pagination. The two
+// queries share the same WHERE so the count always matches what a follow-up
+// page would yield.
+func (r productRepo) SearchFiltered(ctx context.Context, f domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	wheres := []string{"needs_review = false"}
+	args := []any{}
+
+	if q := strings.TrimSpace(f.Query); q != "" {
+		args = append(args, q)
+		n := len(args)
+		sim := fmt.Sprintf(
+			"greatest(similarity(name, $%d), similarity(COALESCE(brand, ''), $%d), similarity(COALESCE(canonical_stem, ''), $%d))",
+			n, n, n)
+		wheres = append(wheres, sim+" > 0.1")
+	}
+	if gtin := strings.TrimSpace(f.GTIN); gtin != "" {
+		args = append(args, gtin)
+		n := len(args)
+
+		// gtin is stored 14-digit zero-padded; strip the pad so a bare barcode
+		// prefix (e.g. "7831") still matches "07891000412855".
+		wheres = append(wheres, fmt.Sprintf(`ltrim(COALESCE(gtin, ''), '0') LIKE $%d || '%%'`, n))
+	}
+
+	if unit := strings.TrimSpace(f.Unit); unit != "" {
+		args = append(args, unit)
+		n := len(args)
+		wheres = append(wheres, fmt.Sprintf("unit = $%d", n))
+	}
+
+	if brand := strings.TrimSpace(f.Brand); brand != "" {
+		args = append(args, brand, brand)
+		n := len(args)
+		wheres = append(wheres, fmt.Sprintf("(brand ILIKE '%%' || $%d || '%%' OR name ILIKE '%%' || $%d || '%%')", n-1, n))
+	}
+
+	where := strings.Join(wheres, " AND ")
+	order := "name"
+	selectExtra := ""
+	withSim := false
+	if strings.Contains(where, "similarity") {
+		order = "sim DESC, name"
+		withSim = true
+		selectExtra = `, greatest(
+			similarity(name, $1),
+			similarity(COALESCE(brand, ''), $1),
+			similarity(COALESCE(canonical_stem, ''), $1)
+		) AS sim`
+	}
+
+	var total int64
+	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM products WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	countArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := r.db.Query(ctx,
+		`SELECT `+productColumns+selectExtra+` FROM products WHERE `+where+`
+		 ORDER BY `+order+`
+		 LIMIT $`+fmt.Sprint(len(args)+1)+` OFFSET $`+fmt.Sprint(len(args)+2), countArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	defer rows.Close()
+
+	out := make([]domain.Product, 0, limit)
+	for rows.Next() {
+		var sim *float64
+		if withSim {
+			sim = new(float64)
+		}
+		p, err := r.scanProduct(rows, sim)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, *p)
+	}
+
+	return out, total, rows.Err()
+}
+
+// Update applies the non-nil patch fields to a product (admin curation).
+// Brand set with an explicit empty pointer clears the column.
+func (r productRepo) Update(ctx context.Context, id int64, patch domain.ProductPatch) error {
+	sets := []string{}
+	args := []any{id}
+	if patch.Name != nil {
+		args = append(args, *patch.Name)
+		sets = append(sets, fmt.Sprintf("name = $%d", len(args)))
+	}
+	if patch.Brand != nil {
+		args = append(args, *patch.Brand)
+		sets = append(sets, fmt.Sprintf("brand = NULLIF($%d, '')", len(args)))
+	}
+	if patch.Unit != nil {
+		args = append(args, *patch.Unit)
+		sets = append(sets, fmt.Sprintf("unit = $%d", len(args)))
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+
+	tag, err := r.db.Exec(ctx,
+		`UPDATE products SET `+strings.Join(sets, ", ")+` WHERE id = $1`, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// Delete removes a product row. The caller (service) re-points or purges its
+// price_logs first; with rows still referencing the product the FK aborts.
+func (r productRepo) Delete(ctx context.Context, id int64) error {
+	tag, err := r.db.Exec(ctx, `DELETE FROM products WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 func (r productRepo) GetByKey(ctx context.Context, key string) (*domain.Product, error) {

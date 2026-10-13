@@ -62,3 +62,23 @@ func PricePerUnit(rawUnit string, qty, total decimal.Decimal) (decimal.Decimal, 
 	}
 	return total.Div(qty), true
 }
+
+// ComparableUnit maps a normalized unit onto the aggregation basis: DZ
+// collapses into UN (a dozen is exactly 12 pieces) so mixed-DZ/UN curves are
+// comparable; every other normalized unit compares against itself.
+func ComparableUnit(unit string) string {
+	if unit == UnitDZ {
+		return UnitUN
+	}
+	return unit
+}
+
+// ComparePricePerUnit converts a per-unit price to the aggregation basis: a
+// per-dozen price divides by 12 so the DZ point joins the UN series at the
+// per-piece rate. Non-DZ units are returned unchanged.
+func ComparePricePerUnit(unit string, pricePerUnit decimal.Decimal) decimal.Decimal {
+	if unit == UnitDZ {
+		return pricePerUnit.Div(decimal.NewFromInt(12))
+	}
+	return pricePerUnit
+}

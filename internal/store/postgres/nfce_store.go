@@ -57,6 +57,19 @@ func (r nfceRepo) GetByAccessKey(ctx context.Context, accessKey string) (*domain
 	return n, nil
 }
 
+// Delete removes a receipt row, or ErrNotFound. Callers must clear its
+// price_logs and preview drafts first (service runs the unit in one Tx).
+func (r nfceRepo) Delete(ctx context.Context, id int64) error {
+	tag, err := r.db.Exec(ctx, `DELETE FROM nfces WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 // scanOne runs the shared Nfce select (with supermarket joined) for a single
 // row and decodes numbers as text→decimal.
 func (r nfceRepo) scanOne(ctx context.Context, where string, arg any, n *domain.Nfce) error {

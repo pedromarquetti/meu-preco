@@ -153,6 +153,7 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 				ProductID:           productID,
 				Line:                pi.Line,
 				DescriptionSnapshot: item.Description,
+				StoreCode:           item.Code,
 				Qty:                 item.Qty,
 				Unit:                item.Unit,
 				NormalizedUnit:      unitPtr(pi.Unit),

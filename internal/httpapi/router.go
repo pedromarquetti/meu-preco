@@ -47,16 +47,24 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 			captcha = newCaptchaSupport(cfg, log)
 		}
 
-		nfceAPI := newNfceAPI(stores, nfceSvc, log, captcha)
+		// One service instance drives every group: ingestion, reads and admin
+		// curation all share the same stores + resolver + transaction boundary.
+		svc := service.New(stores, nfceSvc, log, captcha)
+		nfceAPI := newNfceAPI(svc, log)
+		productsAPI := newProductsAPI(svc)
+		supermarketsAPI := newSupermarketsAPI(svc)
+		adminAPI := newAdminAPI(svc)
 
-		// Two-phase receipt ingestion, both steps authenticated:
-		// POST /nfce/new    — draft: fetch + classify, persist only a plan
-		// POST /nfce/submit — commit: apply the confirmed plan atomically
-		// POST /nfce/captcha — solve a portal challenge into a draft
+		// Two-phase receipt ingestion + receipt lifecycle, authenticated:
+		// POST /nfce/new      — draft: fetch + classify, persist only a plan
+		// POST /nfce/submit   — commit the confirmed plan atomically
+		// POST /nfce/delete   — delete a receipt (owner OR admin)
+		// POST /nfce/captcha  — solve a portal challenge into a draft
 		r.Route("/nfce", func(nr chi.Router) {
 			nr.Use(authAPI.mw.RequireAuth)
 			nr.Post("/new", nfceAPI.draft)
 			nr.Post("/submit", nfceAPI.confirm)
+			nr.Post("/delete", nfceAPI.delete)
 			nr.Get("/captcha", nfceAPI.captcha.state)
 			nr.Post("/captcha", nfceAPI.captcha.solve)
 			nr.Get("/captcha/image/{challenge_id}", nfceAPI.captcha.image)
@@ -72,15 +80,45 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 			ar.NotFound(httpx.NotFound)
 		})
 
-		// The admin group exists and is gated (401 without
-		// token, 403 for non-admin, 200 for admin).
+		// Shared product/supermarket reads, authenticated. Public reads never
+		// surface needs_review rows (the store filters them out).
+		r.Route("/products", func(pr chi.Router) {
+			pr.Use(authAPI.mw.RequireAuth)
+			pr.Get("/", productsAPI.search)
+			pr.Get("/{id}", productsAPI.get)
+			pr.Get("/{id}/history", productsAPI.history)
+			pr.NotFound(httpx.NotFound)
+		})
+
+		r.Route("/supermarkets", func(sr chi.Router) {
+			sr.Use(authAPI.mw.RequireAuth)
+			sr.Get("/", supermarketsAPI.list)
+			sr.Get("/{id}/products", supermarketsAPI.products)
+			sr.With(authAPI.mw.RequireRole("admin")).Delete("/{id}", supermarketsAPI.remove)
+			sr.NotFound(httpx.NotFound)
+		})
+
+		// Own-profile alias: /api/v1/users/me mirrors /api/v1/auth/me.
+		r.Route("/users", func(ur chi.Router) {
+			ur.Use(authAPI.mw.RequireAuth)
+			ur.Get("/me", authAPI.me)
+			ur.NotFound(httpx.NotFound)
+		})
+
+		// Admin curation, everything gated by RequireRole("admin").
 		r.Route("/admin", func(ar chi.Router) {
 			ar.Use(authAPI.mw.RequireRole("admin"))
 			ar.Get("/", adminStub)
+			ar.Get("/users", adminAPI.listUsers)
+			ar.Patch("/users/{id}/role", adminAPI.patchRole)
+			ar.Get("/products/needs-review", adminAPI.needsReview)
+			ar.Post("/products/batch-assign", adminAPI.batchAssign)
+			ar.Post("/products/merge", adminAPI.mergeProducts)
+			ar.Patch("/products/{id}", adminAPI.patchProduct)
+			ar.Delete("/products/{id}", adminAPI.deleteProduct)
+			ar.Post("/supermarkets/merge", adminAPI.mergeSupermarkets)
 			ar.NotFound(httpx.NotFound)
 		})
-
-		r.Mount("/products", http.HandlerFunc(httpx.NotImplemented))
 	})
 
 	return router

@@ -84,3 +84,13 @@ func (r previewRepo) PurgeExpired(ctx context.Context) (int64, error) {
 	}
 	return tag.RowsAffected(), nil
 }
+
+// DeleteByAccessKey removes every pending/committed draft of a receipt across
+// all users (the receipt itself is being deleted); returns the count removed.
+func (r previewRepo) DeleteByAccessKey(ctx context.Context, accessKey string) (int64, error) {
+	tag, err := r.db.Exec(ctx, `DELETE FROM previews WHERE access_key = $1`, accessKey)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

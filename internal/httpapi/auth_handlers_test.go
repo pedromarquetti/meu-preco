@@ -71,6 +71,42 @@ func (s *memUserStore) CountAdmin(context.Context) (int64, error) {
 	return int64(len(s.byID)), nil
 }
 
+func (s *memUserStore) List(_ context.Context, limit, offset int) ([]domain.User, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	users := make([]domain.User, 0, len(s.byID))
+	for _, u := range s.byID {
+		users = append(users, *u)
+	}
+	// newest first (mirrors the pg ORDER BY created_at DESC, id DESC)
+	for i, j := 0, len(users)-1; i < j; i, j = i+1, j-1 {
+		users[i], users[j] = users[j], users[i]
+	}
+	total := int64(len(users))
+	end := offset + limit
+	if limit <= 0 || offset < 0 {
+		return nil, 0, nil
+	}
+	if offset >= len(users) {
+		return []domain.User{}, total, nil
+	}
+	if end > len(users) {
+		end = len(users)
+	}
+	return users[offset:end], total, nil
+}
+
+func (s *memUserStore) UpdateRole(_ context.Context, id int64, role string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	u.Role = role
+	return nil
+}
+
 // memRefreshStore is an in-memory domain.RefreshTokenStore mirroring the pg
 // Rotate semantics (unknown hash -> ErrNotFound, already-revoked -> ErrConflict).
 type memRefreshStore struct {

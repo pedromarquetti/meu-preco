@@ -59,6 +59,35 @@ func (s *memUserStore) CountAdmin(context.Context) (int64, error) {
 	return int64(len(s.byID)), nil
 }
 
+func (s *memUserStore) List(_ context.Context, limit, offset int) ([]domain.User, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	users := make([]domain.User, 0, len(s.byID))
+	for _, u := range s.byID {
+		users = append(users, *u)
+	}
+	total := int64(len(users))
+	if total == 0 || offset >= int(total) {
+		return []domain.User{}, total, nil
+	}
+	end := offset + limit
+	if end > int(total) {
+		end = int(total)
+	}
+	return users[offset:end], total, nil
+}
+
+func (s *memUserStore) UpdateRole(_ context.Context, id int64, role string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	u.Role = role
+	return nil
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -150,4 +179,10 @@ func (failingUserStore) GetByEmail(context.Context, string) (*domain.User, error
 }
 func (failingUserStore) CountAdmin(context.Context) (int64, error) {
 	return 0, errors.New("db down")
+}
+func (failingUserStore) List(context.Context, int, int) ([]domain.User, int64, error) {
+	return nil, 0, errors.New("db down")
+}
+func (failingUserStore) UpdateRole(context.Context, int64, string) error {
+	return errors.New("db down")
 }

@@ -22,11 +22,11 @@ type nfceResolver interface {
 	Resolve(ctx context.Context, key nfce.AccessKey, payload string) (*domain.Nfce, error)
 }
 
-// nfceAPI serves the two-phase ingestion endpoints, both behind
-// RequireAuth:
+// nfceAPI serves the ingestion endpoints, all behind RequireAuth:
 //
-//	POST /api/v1/nfce/new    — draft: fetch + classify, persist only a plan
-//	POST /api/v1/nfce/submit — commit: apply the confirmed plan atomically
+//	POST /api/v1/nfce/new      — draft: fetch + classify, persist only a plan
+//	POST /api/v1/nfce/submit   — commit: apply the confirmed plan atomically
+//	POST /api/v1/nfce/delete   — delete a receipt (owner OR admin)
 //
 // The fetch is the draft step, and /nfce/submit is strictly the confirmation.
 // captcha may be nil to disable the endpoints.
@@ -35,8 +35,7 @@ type nfceAPI struct {
 	captcha *captchaAPI
 }
 
-func newNfceAPI(stores domain.Stores, res nfceResolver, log *slog.Logger, captcha *service.CaptchaSupport) *nfceAPI {
-	svc := service.New(stores, res, log, captcha)
+func newNfceAPI(svc *service.Service, log *slog.Logger) *nfceAPI {
 	return &nfceAPI{
 		svc:     svc,
 		captcha: newCaptchaAPI(svc, log),
@@ -129,6 +128,35 @@ func (api *nfceAPI) confirm(writer http.ResponseWriter, req *http.Request) {
 	httpx.Respond(writer, http.StatusOK, res)
 }
 
+// delete implements POST /api/v1/nfce/delete: deletes the receipt plus its
+// price_logs and preview drafts. Guarded by ownership (the caller who committed
+// the receipt) OR an admin caller.
+func (api *nfceAPI) delete(writer http.ResponseWriter, req *http.Request) {
+	req.Body = http.MaxBytesReader(writer, req.Body, maxNfceBody)
+
+	var body service.DeleteReceiptRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		httpx.Error(writer, req, http.StatusBadRequest, "invalid_request",
+			`body must be valid JSON: {"access_key"}`)
+		return
+	}
+
+	userID, ok := subjectID(writer, req)
+	if !ok {
+		return
+	}
+	claims := auth.Principal(req.Context())
+	callerIsAdmin := claims != nil && claims.Role == service.UserRoleAdmin
+
+	res, err := api.svc.DeleteReceipt(req.Context(), userID, body, callerIsAdmin)
+	if err != nil {
+		api.respondError(writer, req, err)
+		return
+	}
+
+	httpx.Respond(writer, http.StatusOK, res)
+}
+
 // respondError maps the service's typed failures (and the portal resolver's)
 // onto the canonical error envelope.
 func (api *nfceAPI) respondError(writer http.ResponseWriter, req *http.Request, err error) {
@@ -144,6 +172,12 @@ func (api *nfceAPI) respondError(writer http.ResponseWriter, req *http.Request, 
 			"preview not found")
 	case errors.Is(err, service.ErrInvalidResolution):
 		httpx.Error(writer, req, http.StatusBadRequest, "invalid_resolution", err.Error())
+	case errors.Is(err, service.ErrReceiptNotFound),
+		errors.Is(err, service.ErrForbidden),
+		errors.Is(err, service.ErrInUse),
+		errors.Is(err, service.ErrInvalidFilter):
+		// Phase 7 receipt-lifecycle failures share the read/admin envelope.
+		respondServiceError(writer, req, err)
 	default:
 		respondResolveError(writer, req, err)
 	}

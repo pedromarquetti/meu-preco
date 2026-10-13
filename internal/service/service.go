@@ -32,6 +32,29 @@ var (
 	// assign without product_id, product_id not in the plan, or a resolution
 	// for a line that does not need one). The API maps it to 400.
 	ErrInvalidResolution = errors.New("invalid resolution")
+	// ErrProductNotFound reports one product id that does not exist. 404.
+	ErrProductNotFound = errors.New("product not found")
+	// ErrSupermarketNotFound reports one supermarket that does not exist. 404.
+	ErrSupermarketNotFound = errors.New("supermarket not found")
+	// ErrReceiptNotFound reports an access key that was never ingested. 404.
+	ErrReceiptNotFound = errors.New("receipt not found")
+	// ErrUserNotFound reports a target user id that does not exist. 404.
+	ErrUserNotFound = errors.New("user not found")
+	// ErrForbidden reports an operation the caller may not perform (deleting
+	// someone else's receipt, self-demotion). 403.
+	ErrForbidden = errors.New("forbidden")
+	// ErrInUse reports a guarded delete refused because rows still reference
+	// the target (a product still carried by price_logs, a supermarket still
+	// owning receipts) when no purge was requested. 409.
+	ErrInUse = errors.New("resource in use")
+	// ErrInvalidFilter reports an unparseable read query (bad page/limit or an
+	// unknown unit/gtin token). 400.
+	ErrInvalidFilter = errors.New("invalid filter")
+	// ErrInvalidAssignment reports a malformed admin assignment/merge (no
+	// price_log_id, missing product_id, unknown action, self-merge). 400.
+	ErrInvalidAssignment = errors.New("invalid assignment")
+	// ErrInvalidRole reports a role value outside {"user","admin"}. 400.
+	ErrInvalidRole = errors.New("invalid role")
 )
 
 // Resolver is the fetch+parse slice every submit path needs: given a chave

@@ -13,10 +13,6 @@ import (
 	"meupreco/internal/domain"
 )
 
-// stubGroups are the endpoint groups that are still full placeholders; both
-// answer 501 for any method until their owning phase lands.
-var stubGroups = []string{"/api/v1/products"}
-
 // fakeStores is an in-memory domain.Stores for httptest router creation. The
 // repositories it does not exercise are the embedded nil interface (they
 // panic if called); auth tests swap real in-memory fakes in via the fields.
@@ -81,31 +77,6 @@ func TestNotFoundEnvelope(t *testing.T) {
 		}
 		if body.Error.Code != "not_found" {
 			t.Errorf("%s: code = %q", path, body.Error.Code)
-		}
-	}
-}
-
-func TestStubGroups(t *testing.T) {
-	for _, prefix := range stubGroups {
-		for _, path := range []string{prefix, prefix + "/login", prefix + "/x/y"} {
-			rec := httptest.NewRecorder()
-			testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
-			if rec.Code != http.StatusNotImplemented {
-				t.Errorf("%s: status = %d, want 501", path, rec.Code)
-				continue
-			}
-			var body struct {
-				Error struct {
-					Code string `json:"code"`
-				} `json:"error"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Errorf("%s: unmarshal: %v", path, err)
-				continue
-			}
-			if body.Error.Code != "not_implemented" {
-				t.Errorf("%s: code = %q", path, body.Error.Code)
-			}
 		}
 	}
 }

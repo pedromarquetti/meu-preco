@@ -119,6 +119,18 @@ func (m *memPreviewStore) PurgeExpired(_ context.Context) (int64, error) {
 	return n, nil
 }
 
+func (m *memPreviewStore) DeleteByAccessKey(_ context.Context, accessKey string) (int64, error) {
+	var n int64
+	for id, p := range m.rows {
+		if p.AccessKey == accessKey {
+			delete(m.rows, id)
+			delete(m.pending, m.pendingKey(p.UserID, p.AccessKey))
+			n++
+		}
+	}
+	return n, nil
+}
+
 // nilProductStore is a product master that knows nothing.
 type nilProductStore struct{}
 
@@ -139,6 +151,13 @@ func (*nilProductStore) UpsertMany(context.Context, []*domain.Product) (int, err
 func (*nilProductStore) NearestMatch(context.Context, string, float64) (*domain.Product, float64, error) {
 	return nil, 0, domain.ErrNotFound
 }
+func (*nilProductStore) SearchFiltered(context.Context, domain.ProductFilter, int, int) ([]domain.Product, int64, error) {
+	return nil, 0, nil
+}
+func (*nilProductStore) Update(context.Context, int64, domain.ProductPatch) error {
+	return domain.ErrNotFound
+}
+func (*nilProductStore) Delete(context.Context, int64) error { return domain.ErrNotFound }
 
 // nilSynonymStore is a produce taxonomy that knows nothing.
 type nilSynonymStore struct{}
