@@ -4,7 +4,7 @@ BIN := bin/server
 # injects environment directly, so the binary never reads .env itself.
 ENV_LOAD := if [ -f .env ]; then set -a; . ./.env; set +a; fi;
 
-.PHONY: run build test lint vet fmtcheck staticcheck tidy clean migrate-up migrate-down migrate-version openapi-json openapi-check
+.PHONY: run build test lint vet fmtcheck staticcheck tidy clean-web clean-bin migrate-up migrate-down migrate-version openapi-json openapi-check
 
 run:
 	@$(ENV_LOAD) go run ./cmd/server
@@ -56,11 +56,19 @@ openapi-check:
 openapi-diff:
 	cd web && npm run check-diff
 
+bundle:
+	cd web && node scripts/build-bundle.mjs
+
+clean:	clean-web clean-bin
+
+clean-web:
+	rm -rf dist/web
+
+clean-bin:
+	rm -rf $(BIN)
+
 tidy:
 	go mod tidy
-
-clean:
-	rm -rf $(BIN)
 
 # Migrations build the DSN from POSTGRES_USERNAME/POSTGRES_PASSWORD/DATABASE_NAME.
 migrate-up:
