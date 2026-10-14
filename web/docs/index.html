@@ -8,7 +8,7 @@
   <link
     rel="stylesheet"
     type="text/css"
-    href="./swagger-ui.css"
+    href="./assets/swagger-ui.css"
   />
 
   <style>
@@ -64,23 +64,21 @@
 <body>
   <div id="swagger-ui"></div>
 
-  <script src="./swagger-ui-bundle.js"></script>
+  <script src="./assets/swagger-ui-bundle.js"></script>
   <script>
     window.onload = function() {
       const ui = SwaggerUIBundle({
-        url: "./openapi.json",
+        // TODO: this is looking for 'openapi.json' in web/docs/index.html -> on final commit, check where the json will live
+        url: "openapi.json",
         dom_id: "#swagger-ui",
-        presets: [
-          SwaggerUIBundle.presets.apis,
-          SwaggerUIStandalonePreset
-        ],
-        layout: "StandaloneLayout",
+        presets: SwaggerUIBundle.presets.apis,
         validatorUrl: null,
         deepLinking: true,
         showExtensions: true,
         showCommonExtensions: true,
         filter: true,
         persistAuthorization: false,
+        tryItOutEnabledByDefault: false,
         requestInterceptor: function(request) {
           if (request.url && request.url.startsWith("/auth")) {
             const token = localStorage.getItem("bearer_token");
