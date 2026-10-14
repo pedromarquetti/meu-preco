@@ -132,8 +132,9 @@ type PreviewResult struct {
 }
 
 // Resolution tells the commit what to do with one uid_uncertain line.
-// Action is one of "skip" (default; writes nothing), "needs_review"
-// (private row with no product) or "assign" (existing product_id only).
+// Action is one of "needs_review" (the default when omitted; persists a
+// private row with no product), "skip" (explicit opt-out; writes nothing) or
+// "assign" (existing product_id only).
 type Resolution struct {
 	Line      int    `json:"line"`
 	Action    string `json:"action"`

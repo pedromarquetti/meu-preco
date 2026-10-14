@@ -13,16 +13,22 @@ import (
 
 // Resolution actions.
 const (
-	ActionSkip        = "skip"         // default; writes nothing
-	ActionNeedsReview = "needs_review" // private row, no product
-	ActionAssign      = "assign"       // attach an existing product_id
+	// ActionSkip is the explicit opt-out: the line writes nothing.
+	ActionSkip = "skip"
+	// ActionNeedsReview is the default for an unresolved uid_uncertain line:
+	// it persists a private row with no product so an admin can resolve it.
+	ActionNeedsReview = "needs_review"
+	// ActionAssign attaches an existing product_id to the line.
+	ActionAssign = "assign"
 )
 
 // CommitPreview implements the commit half of the two-phase commit: it
 // validates the preview and, when confirm is true, applies the plan inside a
 // single database transaction — auto-saving barcoded/commodity lines and
-// honoring per-line uid_uncertain resolutions (skip | assign | needs_review),
-// upserting the supermarket by CNPJ and the receipt by access key, inserting
+// honoring per-line uid_uncertain resolutions (needs_review | skip | assign).
+// A uid_uncertain line with no resolution defaults to needs_review; skip must
+// be requested explicitly. It then upserts the supermarket by CNPJ and the
+// receipt by access key, inserting
 // price_logs (UNIQUE(nfce_id, line) makes duplicates no-ops) and finally
 // flipping the preview to committed. Any error rolls the whole unit back.
 //
@@ -143,7 +149,8 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 				return err
 			}
 			if productID == nil && !needsReview {
-				// uid_uncertain resolved to "skip" (or a parse_error line).
+				// uid_uncertain explicitly resolved to "skip" (or a
+				// parse_error line, which never writes).
 				res.Skipped++
 				continue
 			}
@@ -211,8 +218,9 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 // resolveLineProduct decides what a plan line writes. For auto-save statuses
 // it ensures the products row exists (creating gtin_new / commodity_fingerprint
 // identities inside the tx) and returns its id. For uid_uncertain it applies
-// the line's resolution. parse_error lines and "skip" resolutions produce no
-// row (nil id, needsReview=false).
+// the line's resolution, defaulting to needs_review when none was submitted.
+// parse_error lines and an explicit "skip" produce no row (nil id,
+// needsReview=false).
 func resolveLineProduct(ctx context.Context, tx domain.Stores, req CommitRequest, pi *PlanItem, resolutions map[int]Resolution) (productID *int64, needsReview bool, err error) {
 	switch pi.Status {
 	case product.StatusGtinKnown, product.StatusGtinNew, product.StatusCommodityFingerprint:
@@ -220,12 +228,15 @@ func resolveLineProduct(ctx context.Context, tx domain.Stores, req CommitRequest
 		if err != nil {
 			return nil, false, err
 		}
+
 		return &id, false, nil
+
 	case product.StatusUIDUncertain:
 		r := resolutions[pi.Line]
 		if r.Action == "" {
-			r.Action = ActionSkip // the default resolution: write nothing
+			r.Action = ActionNeedsReview // defaults to needs_review
 		}
+
 		switch r.Action {
 		case ActionSkip:
 			return nil, false, nil
@@ -280,16 +291,19 @@ func ensureProduct(ctx context.Context, tx domain.Stores, pi *PlanItem) (int64, 
 }
 
 // indexResolutions normalizes the resolutions array into a per-line map,
-// collapsing duplicate lines (last one wins).
+// collapsing duplicate lines (last one wins). An entry without an action
+// defaults to needs_review, mirroring the unresolved-line default.
 func indexResolutions(res []Resolution) map[int]Resolution {
 	m := make(map[int]Resolution, len(res))
 	for _, r := range res {
 		if r.Line <= 0 {
 			continue
 		}
+
 		if r.Action == "" {
-			r.Action = ActionSkip
+			r.Action = ActionNeedsReview
 		}
+
 		m[r.Line] = r
 	}
 	return m

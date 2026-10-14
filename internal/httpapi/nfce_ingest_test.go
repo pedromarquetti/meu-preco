@@ -290,11 +290,11 @@ func TestNfceTwoPhaseIngestion(t *testing.T) {
 	}
 	assertCounts(0, 0, 0)
 
-	// 4. Confirm persists supermarket + nfce + the gtin_known autosave; the
-	// GTIN-less "saco de lixo" line defaults to skip.
+	// 4. Confirm persists supermarket + nfce + the gtin_known autosave. The
+	// GTIN-less "saco de lixo" line is explicitly skipped, so it writes nothing.
 	_, out = do(routerA, http.MethodPost, "/api/v1/nfce/submit",
-		`{"preview_id":`+strconvItoa(previewID)+`,"confirm":true}`)
-	if out["written"].(float64) != 1 || out["auto_saved"].(float64) != 1 || out["skipped"].(float64) != 1 {
+		`{"preview_id":`+strconvItoa(previewID)+`,"confirm":true,"resolutions":[{"line":2,"action":"skip"}]}`)
+	if out["written"].(float64) != 1 || out["auto_saved"].(float64) != 1 || out["skipped"].(float64) != 1 || out["needs_review"].(float64) != 0 {
 		t.Errorf("commit result = %v", out)
 	}
 	assertCounts(1, 1, 1)
@@ -333,7 +333,7 @@ func TestNfceTwoPhaseIngestion(t *testing.T) {
 		t.Fatalf("user B replayed user A's preview id %d, want an independent draft", previewB)
 	}
 	recB, outB := do(routerB, http.MethodPost, "/api/v1/nfce/submit",
-		`{"preview_id":`+strconvItoa(previewB)+`,"confirm":true}`)
+		`{"preview_id":`+strconvItoa(previewB)+`,"confirm":true,"resolutions":[{"line":2,"action":"skip"}]}`)
 	if recB.Code != http.StatusOK {
 		t.Fatalf("user B submit status = %d, body = %s", recB.Code, recB.Body.String())
 	}
@@ -345,7 +345,9 @@ func TestNfceTwoPhaseIngestion(t *testing.T) {
 	}
 	assertCounts(1, 1, 1)
 
-	// 7. needs_review keeps a private (product-less) row.
+	// 7. A request that omits resolutions must default the uid_uncertain line
+	// to needs_review: a private (product-less) row is written and the counter
+	// reflects it. This is the backend-enforced safe default for API clients.
 	rec, plan3 := do(routerA, http.MethodPost, "/api/v1/nfce/new",
 		`{"access_key":"`+senateKey+`"}`)
 	if rec.Code != http.StatusOK {
@@ -353,23 +355,31 @@ func TestNfceTwoPhaseIngestion(t *testing.T) {
 	}
 	preview3 := int64(plan3["preview_id"].(float64))
 	_, out = do(routerA, http.MethodPost, "/api/v1/nfce/submit",
-		`{"preview_id":`+strconvItoa(preview3)+`,"confirm":true,"resolutions":[{"line":2,"action":"needs_review"}]}`)
-	if out["needs_review"].(float64) != 1 {
-		t.Errorf("needs_review result = %v", out)
+		`{"preview_id":`+strconvItoa(preview3)+`,"confirm":true}`)
+	if out["needs_review"].(float64) != 1 || out["skipped"].(float64) != 1 || out["written"].(float64) != 1 {
+		t.Errorf("default-resolution result = %v, want 1 written / 1 needs_review / 1 skipped(dup)", out)
 	}
 	assertCounts(1, 2, 1)
 
 	var review struct {
-		ProductID   *int64
-		NeedsReview bool
+		ProductID      *int64
+		IdentityStatus string
+		NeedsReview    bool
+		ResolutionNote *string
 	}
 	if err := st.Pool().QueryRow(context.Background(),
-		`SELECT product_id, needs_review FROM price_logs WHERE line = 2`).
-		Scan(&review.ProductID, &review.NeedsReview); err != nil {
+		`SELECT product_id, identity_status, needs_review, resolution_note FROM price_logs WHERE line = 2`).
+		Scan(&review.ProductID, &review.IdentityStatus, &review.NeedsReview, &review.ResolutionNote); err != nil {
 		t.Fatalf("scan review: %v", err)
 	}
 	if review.ProductID != nil || !review.NeedsReview {
 		t.Errorf("needs_review row = product:%v needs_review:%v", review.ProductID, review.NeedsReview)
+	}
+	if review.IdentityStatus != "uid_uncertain" {
+		t.Errorf("identity_status = %q, want uid_uncertain", review.IdentityStatus)
+	}
+	if review.ResolutionNote == nil || *review.ResolutionNote != "needs_review" {
+		t.Errorf("resolution_note = %v, want needs_review", review.ResolutionNote)
 	}
 
 	// 8. Assign to a non-existent product is a clean 400.

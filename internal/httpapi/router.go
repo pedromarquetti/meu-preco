@@ -26,6 +26,7 @@ func New(cfg config.Config, log *slog.Logger, stores domain.Stores) http.Handler
 
 // newRouter assembles the router with the given nfce resolver (kept injectable
 // for httptest tests).
+// TODO: handle PostgreSQL errors correctly: the server should at least log the error so the server admin can see what is going on (nfceAPI currently returns http 500 if there is a postgres err)
 func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores domain.Stores, captcha *service.CaptchaSupport) http.Handler {
 	router := chi.NewRouter()
 

@@ -207,6 +207,11 @@ paths:
         writing. Cross-user re-submits and already-ingested receipts are the
         silent dedup path (200, `written:0`). Confirming the same `preview_id`
         twice answers `409`.
+
+        Each `uid_uncertain` line with no matching entry in `resolutions`
+        defaults to `needs_review`: a private price log with `product_id` NULL
+        that an admin can resolve later. A line is written nothing and counted
+        under `skipped` only when `skip` is requested explicitly.
       requestBody:
         required: true
         content:
@@ -800,10 +805,19 @@ components:
         totals: { $ref: "#/components/schemas/PlanTotals" }
     Resolution:
       type: object
+      description: >
+        Per-line decision for a `uid_uncertain` line. `needs_review` (the
+        backend default when the line is omitted) persists a private row with
+        no product; `skip` discards the line and must be requested explicitly;
+        `assign` links an existing `product_id`.
       required: [line, action]
       properties:
         line: { type: integer }
-        action: { type: string, enum: [skip, needs_review, assign] }
+        action:
+          type: string
+          enum: [needs_review, skip, assign]
+          description: >
+            Defaults to `needs_review` when a line has no resolution at all.
         product_id: { type: integer }
     CommitRequest:
       type: object
@@ -813,17 +827,36 @@ components:
         confirm: { type: boolean }
         resolutions:
           type: array
+          description: >
+            Optional per-line resolutions for `uid_uncertain` lines. Lines left
+            out default to `needs_review`; submit `skip` explicitly to drop one.
           items: { $ref: "#/components/schemas/Resolution" }
     CommitResult:
       type: object
       properties:
         preview_id: { type: integer }
         confirmed: { type: boolean }
-        written: { type: integer }
-        auto_saved: { type: integer }
-        assigned: { type: integer }
-        needs_review: { type: integer }
-        skipped: { type: integer }
+        written:
+          type: integer
+          description: Total price_log rows inserted.
+        auto_saved:
+          type: integer
+          description: Barcoded/commodity rows written automatically.
+        assigned:
+          type: integer
+          description: >
+            `uid_uncertain` rows resolved to an existing product via an explicit
+            `assign` resolution.
+        needs_review:
+          type: integer
+          description: >
+            `uid_uncertain` rows persisted as private review rows (the default
+            for unresolved lines).
+        skipped:
+          type: integer
+          description: >
+            Lines that wrote nothing: explicit `skip`, unparseable lines, or
+            already-logged duplicates.
         nfce_id: { type: integer }
         access_key: { type: string }
     DeleteReceiptResult:

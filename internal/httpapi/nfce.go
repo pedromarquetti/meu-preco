@@ -76,6 +76,7 @@ func (api *nfceAPI) draft(writer http.ResponseWriter, req *http.Request) {
 		AccessKey: body.AccessKey,
 		QRPayload: body.QRPayload,
 	})
+
 	if err != nil {
 		api.respondError(writer, req, err)
 		return

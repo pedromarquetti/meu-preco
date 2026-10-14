@@ -36,9 +36,9 @@ users**; users contribute logs and read everything.
   deterministic **commodity key**; ambiguous matches are flagged for admin
   review instead of polluting the catalog.
 - **No silent writes** — receipts go through a two-phase **preview → confirm**
-  flow with human-readable per-line explanations; `uid_uncertain` items are
-  skipped by default unless the user assigns a known product or marks them for
-  review.
+  flow with human-readable per-line explanations; `uid_uncertain` items default
+  to private `needs_review` rows (invisible to public history until an admin
+  resolves them) and are discarded only when `skip` is requested explicitly.
 - **Idempotent, correct ingestion** — re-submitting the same receipt is a no-op;
   a price log exists at most once per unique `(access key, line)`.
 - **Polite and certificate-free scraping** — the server, never the browser,

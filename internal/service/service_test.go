@@ -234,7 +234,10 @@ func TestCommitConfirmFalseWritesNothing(t *testing.T) {
 	}
 }
 
-func TestCommitAutoSavesAndSkips(t *testing.T) {
+// TestCommitDefaultsUnresolvedToNeedsReview: an unresolved uid_uncertain line
+// (no resolutions array at all) is persisted as a private review row rather
+// than silently skipped — skip is opt-in only.
+func TestCommitDefaultsUnresolvedToNeedsReview(t *testing.T) {
 	m := newMemStores()
 	m.seedKnownProduct()
 	svc := newTestService(m)
@@ -246,22 +249,46 @@ func TestCommitAutoSavesAndSkips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	if out.Written != 1 || out.AutoSaved != 1 || out.Skipped != 1 {
-		t.Errorf("commit result = %+v, want 1 written(auto) + 1 skipped", out)
+	if out.Written != 2 || out.AutoSaved != 1 || out.Review != 1 || out.Skipped != 0 {
+		t.Errorf("commit result = %+v, want 2 written (1 auto, 1 review), 0 skipped", out)
 	}
 	if out.NfceID == 0 {
 		t.Error("nfce_id not set")
 	}
 
-	if len(m.priceLogs) != 1 {
-		t.Fatalf("price_logs = %d, want 1", len(m.priceLogs))
+	if len(m.priceLogs) != 2 {
+		t.Fatalf("price_logs = %d, want 2", len(m.priceLogs))
 	}
-	log := m.priceLogs[0]
-	if log.Line != 1 || log.IdentityStatus != product.StatusGtinKnown || log.ProductID == nil {
-		t.Errorf("log = %+v", log)
+
+	var auto, review *domain.PriceLog
+	for _, l := range m.priceLogs {
+		switch l.Line {
+		case 1:
+			auto = l
+		case 2:
+			review = l
+		}
 	}
-	if log.NeedsReview {
-		t.Error("barcoded line flagged needs_review")
+	if auto == nil || auto.ProductID == nil || auto.IdentityStatus != product.StatusGtinKnown || auto.NeedsReview {
+		t.Errorf("line 1 log = %+v, want auto-saved gtin_known", auto)
+	}
+	if review == nil {
+		t.Fatal("line 2 log missing")
+	}
+	if review.ProductID != nil {
+		t.Errorf("review log product = %v, want nil", review.ProductID)
+	}
+	if !review.NeedsReview {
+		t.Error("unresolved uid_uncertain line not flagged needs_review")
+	}
+	if review.IdentityStatus != product.StatusUIDUncertain {
+		t.Errorf("identity_status = %q, want uid_uncertain", review.IdentityStatus)
+	}
+	if review.ResolutionNote == nil || *review.ResolutionNote != ActionNeedsReview {
+		t.Errorf("resolution_note = %v, want needs_review", review.ResolutionNote)
+	}
+	if len(m.products) != 1 {
+		t.Errorf("needs_review created a product: %d rows", len(m.products))
 	}
 
 	if len(m.nfces) != 1 {
@@ -274,6 +301,94 @@ func TestCommitAutoSavesAndSkips(t *testing.T) {
 	p, _ := m.Previews().GetByID(context.Background(), res.PreviewID)
 	if p.Status != "committed" {
 		t.Errorf("status = %q, want committed", p.Status)
+	}
+}
+
+// TestCommitExplicitSkipWritesNothing: skip remains the only way to discard a
+// uid_uncertain line, and it writes no row.
+func TestCommitExplicitSkipWritesNothing(t *testing.T) {
+	m := newMemStores()
+	m.seedKnownProduct()
+	svc := newTestService(m)
+	res := previewForTest(t, svc, m, 1)
+
+	out, err := svc.CommitPreview(context.Background(), CommitRequest{
+		UserID: 1, PreviewID: res.PreviewID, Confirm: true,
+		Resolutions: []Resolution{{Line: 2, Action: ActionSkip}},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if out.Written != 1 || out.AutoSaved != 1 || out.Skipped != 1 || out.Review != 0 {
+		t.Errorf("commit result = %+v, want 1 auto-written / 1 skipped / 0 review", out)
+	}
+	for _, l := range m.priceLogs {
+		if l.Line == 2 {
+			t.Errorf("explicit skip wrote a line-2 row: %+v", l)
+		}
+	}
+}
+
+// TestCommittedReviewRowCanBeAssigned: a review row persisted by an unresolved
+// commit is surfaced in the admin queue and can be resolved through the
+// existing batch-assign path, clearing needs_review and recording the resolver.
+func TestCommittedReviewRowCanBeAssigned(t *testing.T) {
+	m := newMemStores()
+	m.seedKnownProduct()
+	admin := &domain.User{Email: "admin@example.com", Role: "admin"}
+	if err := m.Users().Create(context.Background(), admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	svc := newTestService(m)
+	res := previewForTest(t, svc, m, 1)
+
+	if _, err := svc.CommitPreview(context.Background(), CommitRequest{
+		UserID: 1, PreviewID: res.PreviewID, Confirm: true,
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	target := &domain.Product{ProductKey: "limao", Name: "LIMÃO TAHITI", Unit: "KG"}
+	if err := m.Products().Create(context.Background(), target); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	q, err := svc.NeedsReviewQueue(context.Background(), 1, 20)
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if len(q.Items) != 1 || q.Items[0].Line != 2 {
+		t.Fatalf("review queue = %+v, want the line-2 review row", q.Items)
+	}
+
+	if _, err := svc.BatchAssign(context.Background(), admin.ID, BatchAssignRequest{
+		Assignments: []Assignment{{ID: q.Items[0].PriceLogID, Action: "existing", ProductID: target.ID}},
+	}); err != nil {
+		t.Fatalf("batch assign: %v", err)
+	}
+
+	var assigned *domain.PriceLog
+	for _, l := range m.priceLogs {
+		if l.Line == 2 {
+			assigned = l
+		}
+	}
+	if assigned == nil || assigned.ProductID == nil || *assigned.ProductID != target.ID {
+		t.Fatalf("line 2 = %+v, want product %d", assigned, target.ID)
+	}
+	if assigned.NeedsReview {
+		t.Error("assigned review row still flagged needs_review")
+	}
+	if assigned.ResolvedBy == nil || *assigned.ResolvedBy != admin.ID {
+		t.Errorf("resolved_by = %v, want admin %d", assigned.ResolvedBy, admin.ID)
+	}
+
+	after, err := svc.NeedsReviewQueue(context.Background(), 1, 20)
+	if err != nil {
+		t.Fatalf("queue after assign: %v", err)
+	}
+	if len(after.Items) != 0 {
+		t.Errorf("review queue still has %d items after assignment", len(after.Items))
 	}
 }
 
@@ -466,8 +581,8 @@ func TestCommitReingestIsNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first commit: %v", err)
 	}
-	if firstCommit.Written != 1 {
-		t.Fatalf("first commit wrote %d, want 1", firstCommit.Written)
+	if firstCommit.Written != 2 {
+		t.Fatalf("first commit wrote %d, want 2", firstCommit.Written)
 	}
 	logsBefore := len(m.priceLogs)
 
