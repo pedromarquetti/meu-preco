@@ -136,7 +136,6 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 		// Admin curation, everything gated by RequireRole("admin").
 		r.Route("/admin", func(ar chi.Router) {
 			ar.Use(authAPI.mw.RequireRole("admin"), userRL)
-			ar.Get("/", adminStub)
 			ar.Get("/users", adminAPI.listUsers)
 			ar.Patch("/users/{id}/role", adminAPI.patchRole)
 			ar.Get("/products/needs-review", adminAPI.needsReview)
@@ -175,12 +174,6 @@ func newCaptchaSupport(cfg config.Config, log *slog.Logger) *service.CaptchaSupp
 		Solver:      nfce.NewHTTPChallengeSolver(nfce.HTTPChallengeSolverOptions{RPS: cfg.SEFAZFetchRPS, Timeout: cfg.SEFAZTimeout, Logger: log}),
 		MaxAttempts: 5,
 	}
-}
-
-// adminStub is the admin-gated placeholder; it answers 200 only when
-// an admin token passed the RequireRole gate.
-func adminStub(w http.ResponseWriter, _ *http.Request) {
-	httpx.Respond(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // newNfceResolver wires a per-UF dispatch table from the nfce registry.

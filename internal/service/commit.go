@@ -39,7 +39,7 @@ const (
 // confirm=false is a dry run: it returns the commit summary without writing.
 func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*CommitResult, error) {
 	if req.PreviewID == 0 {
-		return nil, fmt.Errorf("preview_id is required")
+		return nil, fmt.Errorf("%w: preview_id is required", ErrInvalidRequest)
 	}
 
 	preview, err := s.Stores.Previews().GetByID(ctx, req.PreviewID)

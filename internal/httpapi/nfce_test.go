@@ -351,3 +351,38 @@ func TestNfceSubmitExpiredIs422(t *testing.T) {
 		t.Errorf("code = %q", code)
 	}
 }
+
+// TestNfceSubmitMissingPreviewIDIs400: a request with a declared confirm but no
+// preview_id is a client error, not an internal one.
+func TestNfceSubmitMissingPreviewIDIs400(t *testing.T) {
+	rec := postNfce(t, nfceRouter(t, stubResolver{}, nil), "/api/v1/nfce/submit",
+		`{"confirm":true}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "invalid_request" {
+		t.Errorf("code = %q, want invalid_request", code)
+	}
+}
+
+// TestNfceSubmitMissingConfirmIs400: confirm is required; an omitted field must
+// not be silently interpreted as confirm=false (a dry run).
+func TestNfceSubmitMissingConfirmIs400(t *testing.T) {
+	st := newStubStores()
+	if err := st.Previews().Create(context.Background(), &domain.Preview{
+		UserID: 1, AccessKey: senateKey,
+		PlanItems: json.RawMessage(`[{"line":1,"status":"uid_uncertain"}]`),
+		Status:    "pending", TTL: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("seed preview: %v", err)
+	}
+
+	rec := postNfce(t, nfceRouter(t, stubResolver{}, st), "/api/v1/nfce/submit",
+		`{"preview_id":1}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "invalid_request" {
+		t.Errorf("code = %q, want invalid_request", code)
+	}
+}

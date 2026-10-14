@@ -96,9 +96,12 @@ func (api *nfceAPI) draft(writer http.ResponseWriter, req *http.Request) {
 func (api *nfceAPI) confirm(writer http.ResponseWriter, req *http.Request) {
 	req.Body = http.MaxBytesReader(writer, req.Body, maxNfceBody)
 
+	// Confirm is a pointer so an omitted field is distinguishable from an
+	// explicit false: the commit contract requires the caller to state it,
+	// otherwise a client that forgot it would silently get a dry run.
 	var body struct {
 		PreviewID   int64                `json:"preview_id"`
-		Confirm     bool                 `json:"confirm"`
+		Confirm     *bool                `json:"confirm"`
 		Resolutions []service.Resolution `json:"resolutions"`
 	}
 
@@ -106,6 +109,12 @@ func (api *nfceAPI) confirm(writer http.ResponseWriter, req *http.Request) {
 		// TODO: make this more verbose: a failing req should return a explanation for the error
 		httpx.Error(writer, req, http.StatusBadRequest, "invalid_request",
 			`body must be valid JSON: {"preview_id","confirm","resolutions"}`)
+		return
+	}
+
+	if body.Confirm == nil {
+		httpx.Error(writer, req, http.StatusBadRequest, "invalid_request",
+			`confirm is required: send true to commit or false for a dry run`)
 		return
 	}
 
@@ -117,7 +126,7 @@ func (api *nfceAPI) confirm(writer http.ResponseWriter, req *http.Request) {
 	res, err := api.svc.CommitPreview(req.Context(), service.CommitRequest{
 		UserID:      userID,
 		PreviewID:   body.PreviewID,
-		Confirm:     body.Confirm,
+		Confirm:     *body.Confirm,
 		Resolutions: body.Resolutions,
 	})
 
@@ -171,6 +180,8 @@ func (api *nfceAPI) respondError(writer http.ResponseWriter, req *http.Request, 
 	case errors.Is(err, service.ErrPreviewNotFound):
 		httpx.Error(writer, req, http.StatusNotFound, "preview_not_found",
 			"preview not found")
+	case errors.Is(err, service.ErrInvalidRequest):
+		httpx.Error(writer, req, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, service.ErrInvalidResolution):
 		httpx.Error(writer, req, http.StatusBadRequest, "invalid_resolution", err.Error())
 	case errors.Is(err, service.ErrReceiptNotFound),

@@ -370,7 +370,7 @@ func TestAdminGate(t *testing.T) {
 	ctx := context.Background()
 
 	// Nobody without a token.
-	if rec := doJSON(t, h, http.MethodGet, "/api/v1/admin/", "", ""); rec.Code != http.StatusUnauthorized {
+	if rec := doJSON(t, h, http.MethodGet, "/api/v1/admin/users", "", ""); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no token: status=%d want 401", rec.Code)
 	}
 
@@ -394,7 +394,7 @@ func TestAdminGate(t *testing.T) {
 	if adminPair.User.Role != "admin" {
 		t.Fatalf("admin login role = %q", adminPair.User.Role)
 	}
-	if rec := doJSON(t, h, http.MethodGet, "/api/v1/admin/", "", adminPair.AccessToken); rec.Code != http.StatusOK {
+	if rec := doJSON(t, h, http.MethodGet, "/api/v1/admin/users", "", adminPair.AccessToken); rec.Code != http.StatusOK {
 		t.Errorf("admin: status=%d want 200 body=%s", rec.Code, rec.Body.String())
 	}
 
@@ -405,7 +405,7 @@ func TestAdminGate(t *testing.T) {
 		`{"email":"user@example.com","password":"long-enough-password"}`, "")
 	var userPair tokenPair
 	decodeBody(t, userLogin, &userPair)
-	if rec := doJSON(t, h, http.MethodGet, "/api/v1/admin/", "", userPair.AccessToken); rec.Code != http.StatusForbidden {
+	if rec := doJSON(t, h, http.MethodGet, "/api/v1/admin/users", "", userPair.AccessToken); rec.Code != http.StatusForbidden {
 		t.Errorf("non-admin: status=%d want 403", rec.Code)
 	}
 }

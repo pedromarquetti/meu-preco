@@ -234,6 +234,18 @@ func TestCommitConfirmFalseWritesNothing(t *testing.T) {
 	}
 }
 
+// TestCommitMissingPreviewIDIsInvalidRequest: the guard returns a typed
+// ErrInvalidRequest so the HTTP layer answers 400, not a generic 500.
+func TestCommitMissingPreviewIDIsInvalidRequest(t *testing.T) {
+	m := newMemStores()
+	svc := newTestService(m)
+
+	_, err := svc.CommitPreview(context.Background(), CommitRequest{UserID: 1, Confirm: true})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+}
+
 // TestCommitDefaultsUnresolvedToNeedsReview: an unresolved uid_uncertain line
 // (no resolutions array at all) is persisted as a private review row rather
 // than silently skipped — skip is opt-in only.

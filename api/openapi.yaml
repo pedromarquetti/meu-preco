@@ -35,6 +35,9 @@ paths:
   /healthz:
     get:
       tags: [health]
+      servers:
+        - url: /
+          description: Process root (no API prefix)
       summary: Liveness probe
       security: []
       responses:
@@ -46,6 +49,9 @@ paths:
   /readyz:
     get:
       tags: [health]
+      servers:
+        - url: /
+          description: Process root (no API prefix)
       summary: Readiness probe (database ping)
       security: []
       responses:
@@ -656,6 +662,9 @@ paths:
   /metrics:
     get:
       tags: [metrics]
+      servers:
+        - url: /
+          description: Process root (no API prefix)
       summary: Runtime metrics (unauthenticated)
       security: []
       responses:
@@ -773,7 +782,17 @@ components:
         description: { type: string }
         status:
           type: string
-          enum: [gtin_known, gtin_new, uid_uncertain, skip]
+          description: >
+            Identity verdict for the line (the price_logs.identity_status
+            CHECK set). `commodity_fingerprint` and `parse_error` are emitted
+            by the classifier alongside `gtin_known`, `gtin_new` and
+            `uid_uncertain`.
+          enum:
+            - gtin_known
+            - gtin_new
+            - commodity_fingerprint
+            - uid_uncertain
+            - parse_error
         message: { type: string }
         product_key: { type: string }
         product_name: { type: string }

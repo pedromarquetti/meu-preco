@@ -32,6 +32,9 @@ var (
 	// assign without product_id, product_id not in the plan, or a resolution
 	// for a line that does not need one). The API maps it to 400.
 	ErrInvalidResolution = errors.New("invalid resolution")
+	// ErrInvalidRequest reports a malformed commit input (missing preview_id).
+	// The API maps it to 400 invalid_request rather than a generic 500.
+	ErrInvalidRequest = errors.New("invalid request")
 	// ErrProductNotFound reports one product id that does not exist. 404.
 	ErrProductNotFound = errors.New("product not found")
 	// ErrSupermarketNotFound reports one supermarket that does not exist. 404.
