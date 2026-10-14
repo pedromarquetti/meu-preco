@@ -18,11 +18,9 @@ if (!fs.existsSync(openapiJsonPath)) {
   process.exit(1);
 }
 
-// Ensure dist directory exists
+fs.rmSync(distWebPath, { recursive: true, force: true });
 const assetsDir = path.join(distWebPath, "assets");
-if (!fs.existsSync(assetsDir)) {
-  fs.mkdirSync(assetsDir, { recursive: true });
-}
+fs.mkdirSync(assetsDir, { recursive: true });
 
 // Copy OpenAPI YAML
 fs.copyFileSync(openapiYamlPath, path.join(distWebPath, "openapi.yaml"));

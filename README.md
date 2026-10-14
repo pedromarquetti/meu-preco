@@ -6,6 +6,7 @@
   - [Goals](#goals)
   - [How it works](#how-it-works)
   - [Stack](#stack)
+  - [Features](#features)
   - [Getting started](#getting-started)
     - [Run with make](#run-with-make)
     - [env](#env)
@@ -88,6 +89,56 @@ price_logs ──► products history, supermarket comparison API
 - pgx v5 (`database/sql` + pool).
 - HTTP handler → service → store layering with interfaces keeps the scraper and
   storage independently testable.
+
+## Features
+
+- [ ] Docker image — TODO: Docker will be implemented soon
+- [x] API Docs — OpenAPI validation & JSON generation via GitHub Actions, GitHub
+      Pages deployment, `make openapi-generate/check/diff/bundle/static` targets
+- [x] Receipt ingestion pipeline — QR-code/Access key parsing, SEFAZ portal
+      scraping (DANFE), HTML parsing for products/prices, two-phase commit
+      (draft → submit), idempotent ingestion, draft preview with TTL
+- [ ] Receipt parsing for other states — For now, it only supports São Paulo
+- [x] Captcha handling — challenges proxied to user, state & image proxy
+      endpoints, retry budget tracking
+- [x] Product identity resolution — GTIN-based canonical keys, commodity
+      fallback for unbarcoded goods, similarity scoring, preview item statuses
+      (gtin_known, gtin_new, commodity_fingerprint, uid_uncertain, parse_error)
+- [x] Product catalog API — search with fuzzy name/GTIN/unit/brand filters,
+      product history with price curves, review queue for uncertain matches
+- [x] Product administration — curation (name/brand/unit), guarded delete,
+      merge, batch-review resolution, admin user management
+- [x] Supermarket API — list emitters, fetch products with latest prices, single
+      supermarket details
+- [x] Supermarket administration — admin-only deletion with receipt guards,
+      CNPJ-based merge
+- [x] Authentication — register, login, refresh tokens, profile endpoint, bcrypt
+      passwords, JWT access+refresh with rotation & reuse detection
+- [x] Data enrichment — Open Food Facts BR integration, background seeding from
+      bulk dumps, cache tracking, configurable via
+      `ENRICH_OFF`/`MEUPRECO_LIVE_OFF`
+- [x] Price log storage — shared across users, per-unit tracking with aggregates
+      (min/avg/max/last), commodity code & CNPJ base extraction for supermarket
+      comparisons
+- [x] Background jobs — preview garbage collection, Open Food Facts cache
+      management
+- [x] Rate limiting — global per-IP token bucket, authenticated per-user bucket,
+      429 with `Retry-After` header
+- [x] Security headers — `X-Content-Type-Options`, `X-Frame-Options`,
+      `Referrer-Policy`, `Cache-Control: no-store`
+- [x] Health & metrics — `/healthz` liveness, `/readyz` readiness, `/metrics`
+      with route counters, latency histogram, auth failures, OFF cache stats
+- [x] Database & migrations — PostgreSQL with `pg_trgm`, `golang-migrate` with
+      embedded migrations, initial schema + commodity synonyms seeding
+- [x] Configuration — env var + `.env` file, configurable
+      timeouts/retries/backoff for SEFAZ, CORS origins, log level/format
+- [x] Operational features — structured `log/slog` logging, pgx v5 connection
+      pool, throttled SEFAZ requests with exponential backoff, cookie jar for
+      portal sessions
+- [x] Testing — race detection (`go test -race`), stub stores, mem stores,
+      Postgres integration tests, live OFF test
+- [x] CI/CD — GitHub Actions for OpenAPI validation, JSON generation, test &
+      lint workflows
 
 ## Getting started
 
@@ -205,6 +256,28 @@ TODO: implement docker-compose that pulls dockerhub image?
 ## Documentation
 
 - `api/openapi.yaml` — versioned API contract (the SPA consumes only this).
+- Local interactive API documentation is available at `/docs/` (or `/`) when the
+  server is running. The raw contract is available at `/openapi.yaml` and
+  `/openapi.json`.
+- Web tooling lives under `web/`; `web/node_modules/` is local-only and must not
+  be committed. From the repository root, run:
+
+  ```sh
+  make openapi-check      # validate the contract
+  make openapi-generate   # regenerate api/openapi.json
+  make openapi-diff       # fail if generated JSON is stale
+  make bundle             # build dist/web for static hosting
+  make static             # refresh embedded Go documentation assets
+  ```
+
+  `api/openapi.yaml` is the only hand-maintained contract. The JSON file,
+  `dist/web/`, and `internal/httpapi/static/` are generated outputs. Run
+  `make static` after changing the contract or documentation assets so the
+  embedded local documentation stays current.
+- GitHub Pages is deployed by `.github/workflows/pages.yml` from the same
+  `dist/web/` bundle. The workflow validates the contract, generates JSON,
+  builds the static bundle, and publishes both the interactive documentation and
+  raw YAML/JSON specifications.
 
 ## Inspiration
 

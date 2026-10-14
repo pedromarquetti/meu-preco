@@ -7,11 +7,12 @@
   "scripts": {
     "generate": "node scripts/build-openapi.mjs",
     "check": "node scripts/validate-openapi.mjs",
-    "check-diff": "node scripts/check-diff.mjs"
+    "check-diff": "node scripts/check-diff.mjs",
+    "bundle": "node scripts/build-bundle.mjs"
   },
   "dependencies": {
     "@redocly/openapi-core": "^1.27.2",
     "json-schema-resolver": "^3.0.0",
-    "yaml": "^2.6.0"
+    "yaml": "^2.9.1"
   }
 }

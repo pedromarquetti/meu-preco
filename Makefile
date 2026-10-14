@@ -4,7 +4,7 @@ BIN := bin/server
 # injects environment directly, so the binary never reads .env itself.
 ENV_LOAD := if [ -f .env ]; then set -a; . ./.env; set +a; fi;
 
-.PHONY: run build test lint vet fmtcheck staticcheck tidy clean-web clean-bin migrate-up migrate-down migrate-version openapi-json openapi-check
+.PHONY: run build test lint vet fmtcheck staticcheck tidy clean-web clean-bin migrate-up migrate-down migrate-version openapi-generate openapi-check openapi-diff bundle static
 
 run: static
 	@$(ENV_LOAD) go run ./cmd/server

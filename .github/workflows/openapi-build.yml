@@ -1,0 +1,43 @@
+name: OpenAPI Build and Validation
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: cd web && npm ci
+
+      - name: Validate OpenAPI contract
+        run: cd web && npm run check
+
+      - name: Generate OpenAPI JSON
+        run: cd web && npm run generate
+
+      - name: Verify JSON is up to date
+        run: cd web && npm run check-diff
+
+      - name: Upload OpenAPI JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi.json
+          path: api/openapi.json
+          retention-days: 7
