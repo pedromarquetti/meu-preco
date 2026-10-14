@@ -18,7 +18,15 @@ info:
       and a `Retry-After` header.
 servers:
   - url: /api/v1
-    description: API root
+    description: >
+      Versioned API root. Every authenticated operation (auth, nfce, captcha,
+      products, supermarkets, users, admin) is served under this prefix and is
+      rate limited per client IP and, once authenticated, per user.
+  - url: /
+    description: >
+      Process root. Operational endpoints only: /healthz, /readyz and /metrics
+      are served here without the /api/v1 prefix and without authentication.
+      Each of those operations overrides the server list to this root.
 security:
   - bearerAuth: []
 tags:
@@ -87,11 +95,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "400":
+          description: Malformed JSON body (`invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "422":
           description: Invalid email or weak password (`invalid_email` / `invalid_password`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /auth/login:
     post:
       tags: [auth]
@@ -108,11 +123,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuthPair" }
+        "400":
+          description: Malformed JSON body (`invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401":
           description: Bad credentials (`invalid_credentials`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /auth/refresh:
     post:
       tags: [auth]
@@ -133,11 +155,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuthPair" }
+        "400":
+          description: Malformed JSON body (`invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401":
           description: Invalid/expired refresh token, or reuse detected (`invalid_refresh_token` / `refresh_reuse_detected`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /auth/me:
     get:
       tags: [auth]
@@ -150,6 +179,8 @@ paths:
               schema: { $ref: "#/components/schemas/UserResponse" }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /nfce/new:
     post:
@@ -177,6 +208,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: No receipt for the key (`receipt_not_found`)
           content:
@@ -234,6 +267,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: Preview not found (`preview_not_found`)
           content:
@@ -271,6 +306,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeleteReceiptResult" }
+        "400":
+          description: Malformed body or blank access key (`invalid_request` / `invalid_filter`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           description: Not the owner nor an admin (`forbidden`)
           content:
@@ -299,11 +341,25 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaptchaState" }
+        "400":
+          description: Missing challenge_id (`invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: Unknown challenge (`challenge_not_found`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: Challenge expired (`challenge_expired`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
     post:
       tags: [captcha]
       summary: Submit a captcha solution
@@ -327,6 +383,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PreviewResult" }
+        "400":
+          description: Malformed body (`invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: Unknown challenge (`challenge_not_found`)
           content:
@@ -366,11 +429,20 @@ paths:
           description: Image bytes
           content:
             image/png: {}
+        "400":
+          description: Missing challenge id (`invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: Unknown challenge (`challenge_not_found`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /products:
     get:
@@ -390,10 +462,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProductPage" }
         "400":
-          description: Bad pager (`invalid_filter`)
+          description: Bad pager or invalid gtin/unit filter (`invalid_filter`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
   /products/{id}:
@@ -408,11 +482,20 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProductView" }
+        "400":
+          description: Non-positive id (`invalid_filter`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: Not found (`not_found`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /products/{id}/history:
     get:
       tags: [products]
@@ -428,15 +511,19 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProductHistory" }
         "400":
-          description: Bad window (`invalid_filter`)
+          description: Bad window or non-positive id (`invalid_filter`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: Not found (`not_found`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /supermarkets:
     get:
@@ -451,6 +538,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SupermarketPage" }
+        "400":
+          description: Bad pager (`invalid_filter`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /supermarkets/{id}/products:
     get:
       tags: [supermarkets]
@@ -465,11 +561,20 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SupermarketProductsPage" }
+        "400":
+          description: Bad pager or non-positive id (`invalid_filter`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "404":
           description: Not found (`not_found`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /supermarkets/{id}:
     delete:
       tags: [supermarkets]
@@ -479,8 +584,20 @@ paths:
       responses:
         "204":
           description: Deleted
+        "400":
+          description: Non-positive id (`invalid_filter`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           description: Not an admin (`forbidden`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Not found (`not_found`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -489,6 +606,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /users/me:
     get:
@@ -502,6 +621,8 @@ paths:
               schema: { $ref: "#/components/schemas/UserResponse" }
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /admin/users:
     get:
@@ -516,8 +637,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UserPage" }
+        "400":
+          description: Bad pager (`invalid_filter`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /admin/users/{id}/role:
     patch:
       tags: [admin]
@@ -537,7 +667,14 @@ paths:
         "204":
           description: Role updated
         "400":
-          description: Invalid role (`invalid_role`)
+          description: Invalid role or malformed body (`invalid_role` / `invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Not an admin, or self role change (`forbidden`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -546,6 +683,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /admin/products/needs-review:
     get:
       tags: [admin]
@@ -559,6 +698,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ReviewQueuePage" }
+        "400":
+          description: Bad pager (`invalid_filter`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /admin/products/batch-assign:
     post:
       tags: [admin]
@@ -575,10 +725,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/BatchAssignResult" }
         "400":
-          description: Invalid assignment (`invalid_assignment`)
+          description: Invalid assignment or malformed body (`invalid_assignment` / `invalid_request`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /admin/products/merge:
     post:
       tags: [admin]
@@ -599,6 +755,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MergeResult" }
+        "400":
+          description: Invalid merge pair or malformed body (`invalid_assignment` / `invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: A product was not found (`not_found`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /admin/products/{id}:
     patch:
       tags: [admin]
@@ -617,10 +789,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProductView" }
         "400":
-          description: Empty patch or malformed body (`invalid_request`)
+          description: Empty patch, malformed body or bad unit (`invalid_request` / `invalid_filter`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Product not found (`not_found`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
     delete:
       tags: [admin]
       summary: Guarded product delete (admin)
@@ -633,11 +816,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeleteProductResult" }
-        "409":
-          description: Still referenced (`in_use`)
+        "400":
+          description: Non-positive id (`invalid_filter`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Product not found (`not_found`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Still referenced and no purge requested (`in_use`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /admin/supermarkets/merge:
     post:
       tags: [admin]
@@ -658,6 +857,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/MergeSupermarketsResult" }
+        "400":
+          description: Invalid CNPJ pair or malformed body (`invalid_assignment` / `invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: An emitter was not found (`not_found`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /metrics:
     get:
@@ -741,8 +956,16 @@ components:
             image_url: { type: string }
     Status:
       type: object
+      required: [status]
       properties:
-        status: { type: string }
+        status:
+          type: string
+          description: "`ok` on success; `unavailable` on a failed readiness check."
+        reason:
+          type: string
+          description: >
+            Present only on a `503` readiness response: why the process is not
+            ready (e.g. "database not configured", "database unreachable").
     Credentials:
       type: object
       required: [email, password]
