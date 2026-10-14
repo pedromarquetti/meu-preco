@@ -1,0 +1,2873 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "meupreco API",
+    "version": "1.0.0",
+    "description": "meupreco ingests Brazilian NFC-e (fiscal receipts), matches each line to a\ncanonical product and tracks per-unit price history across supermarkets.\n\nConventions:\n- Every error is the canonical envelope: `{\"error\":{\"code\",\"message\"}}`.\n  A few codes (captcha challenges, rate limiting) add sibling fields.\n- Money is always transported as a decimal **string**, never a float.\n- All receipt/read/admin endpoints require a bearer access token; a\n  reissue pair is obtained from `/auth/login` and rotated via\n  `/auth/refresh`.\n- Requests are rate limited per client IP and, once authenticated, per\n  user. A throttled request answers `429` with `error.code = \"rate_limited\"`\n  and a `Retry-After` header.\n"
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "Versioned API root. Every authenticated operation (auth, nfce, captcha, products, supermarkets, users, admin) is served under this prefix and is rate limited per client IP and, once authenticated, per user.\n"
+    },
+    {
+      "url": "/",
+      "description": "Process root. Operational endpoints only: /healthz, /readyz and /metrics are served here without the /api/v1 prefix and without authentication. Each of those operations overrides the server list to this root.\n"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "health"
+    },
+    {
+      "name": "auth"
+    },
+    {
+      "name": "nfce"
+    },
+    {
+      "name": "captcha"
+    },
+    {
+      "name": "products"
+    },
+    {
+      "name": "supermarkets"
+    },
+    {
+      "name": "admin"
+    },
+    {
+      "name": "metrics"
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Process root (no API prefix)"
+          }
+        ],
+        "summary": "Liveness probe",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Process root (no API prefix)"
+          }
+        ],
+        "summary": "Readiness probe (database ping)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Create an account (role \"user\")",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body (`invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email already registered (`user_exists`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid email or weak password (`invalid_email` / `invalid_password`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Authenticate and obtain an access+refresh pair",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body (`invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad credentials (`invalid_credentials`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Rotate a refresh token into a new pair",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "refresh_token"
+                ],
+                "properties": {
+                  "refresh_token": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New token pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthPair"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body (`invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid/expired refresh token, or reuse detected (`invalid_refresh_token` / `refresh_reuse_detected`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The authenticated user (from token claims)",
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/nfce/new": {
+      "post": {
+        "tags": [
+          "nfce"
+        ],
+        "summary": "Draft a receipt (fetch + classify; nothing committed)",
+        "description": "Normalizes the access key (or the QR payload embedding it), fetches the\nDANFE from the issuing portal and returns an itemized plan bound to a\npending preview. Re-drafting the same receipt while a pending preview\nexists replays that plan (200) without a refetch. May answer `412` with\na captcha challenge that must be solved first.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Drafted plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body (`invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "No receipt for the key (`receipt_not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Portal requires a captcha (`captcha_required`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptchaChallenge"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid key or QR payload (`invalid_access_key` / `invalid_qr_payload`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "501": {
+            "description": "Unsupported issuing state (`unsupported_uf`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Portal failure (`upstream_error`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nfce/submit": {
+      "post": {
+        "tags": [
+          "nfce"
+        ],
+        "summary": "Confirm a preview and commit it atomically",
+        "description": "With `confirm=false` it reports what a commit *would* write without\nwriting. Cross-user re-submits and already-ingested receipts are the\nsilent dedup path (200, `written:0`). Confirming the same `preview_id`\ntwice answers `409`.\n\nEach `uid_uncertain` line with no matching entry in `resolutions`\ndefaults to `needs_review`: a private price log with `product_id` NULL\nthat an admin can resolve later. A line is written nothing and counted\nunder `skipped` only when `skip` is requested explicitly.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Commit (or dry-run) result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body or bad resolution (`invalid_request` / `invalid_resolution`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Preview not found (`preview_not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preview already committed (`preview_already_committed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Preview expired (`preview_expired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/nfce/delete": {
+      "post": {
+        "tags": [
+          "nfce"
+        ],
+        "summary": "Delete a receipt, its price logs and its drafts",
+        "description": "Allowed for the user who committed the receipt or for an admin.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "access_key"
+                ],
+                "properties": {
+                  "access_key": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deletion report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteReceiptResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body or blank access key (`invalid_request` / `invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the owner nor an admin (`forbidden`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Receipt not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/nfce/captcha": {
+      "get": {
+        "tags": [
+          "captcha"
+        ],
+        "summary": "Captcha challenge state",
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Challenge state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptchaState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing challenge_id (`invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Unknown challenge (`challenge_not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Challenge expired (`challenge_expired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "captcha"
+        ],
+        "summary": "Submit a captcha solution",
+        "description": "A correct answer yields the pending preview the receipt was blocked on.\nWrong answers answer `412` with the remaining attempt budget; a locked\nchallenge `429`s; a reused one `409`s.\n",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "challenge_id",
+                  "solution"
+                ],
+                "properties": {
+                  "challenge_id": {
+                    "type": "string"
+                  },
+                  "solution": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Solved; returns the draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body (`invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Unknown challenge (`challenge_not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Challenge already solved (`challenge_used`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Wrong solution, retries remain (`captcha_wrong_solution`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptchaWrongSolution"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Challenge expired (`challenge_expired`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Challenge locked or per-IP budget spent (`challenge_locked` / `rate_limited`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nfce/captcha/image/{challenge_id}": {
+      "get": {
+        "tags": [
+          "captcha"
+        ],
+        "summary": "Challenge image proxy (no-store)",
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image bytes",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "400": {
+            "description": "Missing challenge id (`invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Unknown challenge (`challenge_not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/products": {
+      "get": {
+        "tags": [
+          "products"
+        ],
+        "summary": "Search the shared product catalog",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "fuzzy name query (pg_trgm)"
+          },
+          {
+            "name": "gtin",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "unit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "brand",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result page (needs_review rows are never surfaced)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad pager or invalid gtin/unit filter (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/products/{id}": {
+      "get": {
+        "tags": [
+          "products"
+        ],
+        "summary": "Fetch one product",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Product",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Non-positive id (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/products/{id}/history": {
+      "get": {
+        "tags": [
+          "products"
+        ],
+        "summary": "Price curve + per-unit aggregate for a product",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "YYYY-MM-DD or RFC3339"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "YYYY-MM-DD or RFC3339"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Price history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad window or non-positive id (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/supermarkets": {
+      "get": {
+        "tags": [
+          "supermarkets"
+        ],
+        "summary": "List emitters",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Store page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupermarketPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad pager (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/supermarkets/{id}/products": {
+      "get": {
+        "tags": [
+          "supermarkets"
+        ],
+        "summary": "Products + latest logged price at one store",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-store catalog page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupermarketProductsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad pager or non-positive id (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/supermarkets/{id}": {
+      "delete": {
+        "tags": [
+          "supermarkets"
+        ],
+        "summary": "Delete a supermarket (admin only, guarded by receipts)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Non-positive id (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not an admin (`forbidden`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still referenced (`in_use`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/users/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Alias of /auth/me",
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "List users (admin)",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad pager (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/admin/users/{id}/role": {
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Promote/demote a user (admin)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "role"
+                ],
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "admin"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Role updated"
+          },
+          "400": {
+            "description": "Invalid role or malformed body (`invalid_role` / `invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not an admin, or self role change (`forbidden`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/admin/products/needs-review": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Needs-review queue (admin)",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Queue page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewQueuePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad pager (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/admin/products/batch-assign": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Resolve needs-review rows (admin)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchAssignRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchAssignResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assignment or malformed body (`invalid_assignment` / `invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/admin/products/merge": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Merge two products (admin)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "from_id",
+                  "to_id"
+                ],
+                "properties": {
+                  "from_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "to_id": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Merge report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid merge pair or malformed body (`invalid_assignment` / `invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "A product was not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/admin/products/{id}": {
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Curate a product's name/brand/unit (admin)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated product",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty patch, malformed body or bad unit (`invalid_request` / `invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Product not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Guarded product delete (admin)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "purge",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "cascade delete referencing price logs"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delete report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteProductResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Non-positive id (`invalid_filter`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Product not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Still referenced and no purge requested (`in_use`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/admin/supermarkets/merge": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Merge two emitters by CNPJ (admin)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "from_cnpj",
+                  "to_cnpj"
+                ],
+                "properties": {
+                  "from_cnpj": {
+                    "type": "string"
+                  },
+                  "to_cnpj": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Merge report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeSupermarketsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid CNPJ pair or malformed body (`invalid_assignment` / `invalid_request`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "An emitter was not found (`not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "servers": [
+          {
+            "url": "/",
+            "description": "Process root (no API prefix)"
+          }
+        ],
+        "summary": "Runtime metrics (unauthenticated)",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Per-route request counters, latency histogram and auth-failure\ncounts; when OFF enrichment is enabled, `off_cache` holds the\nOpen Food Facts hit/miss counters.\n",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Metrics"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing or invalid bearer token (`unauthorized`)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Authenticated but not permitted (`forbidden`)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Client exceeded its request budget (`rate_limited`)",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Seconds to wait before retrying"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "CaptchaChallenge": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "challenge_id",
+              "image_url"
+            ],
+            "properties": {
+              "code": {
+                "const": "captcha_required"
+              },
+              "message": {
+                "type": "string"
+              },
+              "challenge_id": {
+                "type": "string"
+              },
+              "image_url": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "CaptchaWrongSolution": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "challenge_id",
+              "attempts_left",
+              "image_url"
+            ],
+            "properties": {
+              "code": {
+                "const": "captcha_wrong_solution"
+              },
+              "message": {
+                "type": "string"
+              },
+              "challenge_id": {
+                "type": "string"
+              },
+              "attempts_left": {
+                "type": "integer"
+              },
+              "image_url": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`ok` on success; `unavailable` on a failed readiness check."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Present only on a `503` readiness response: why the process is not ready (e.g. \"database not configured\", \"database unreachable\").\n"
+          }
+        }
+      },
+      "Credentials": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "admin"
+            ]
+          }
+        }
+      },
+      "UserResponse": {
+        "type": "object",
+        "required": [
+          "user"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        }
+      },
+      "AuthPair": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "user"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        }
+      },
+      "DraftRequest": {
+        "type": "object",
+        "description": "Provide `access_key`, or `qr_payload` (which embeds the key).",
+        "properties": {
+          "access_key": {
+            "type": "string"
+          },
+          "qr_payload": {
+            "type": "string"
+          }
+        }
+      },
+      "PreviewItem": {
+        "type": "object",
+        "required": [
+          "line",
+          "description",
+          "status"
+        ],
+        "properties": {
+          "line": {
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "Identity verdict for the line (the price_logs.identity_status CHECK set). `commodity_fingerprint` and `parse_error` are emitted by the classifier alongside `gtin_known`, `gtin_new` and `uid_uncertain`.\n",
+            "enum": [
+              "gtin_known",
+              "gtin_new",
+              "commodity_fingerprint",
+              "uid_uncertain",
+              "parse_error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "product_key": {
+            "type": "string"
+          },
+          "product_name": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "gtin": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "price_per_unit": {
+            "type": "string"
+          },
+          "similarity": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "PlanTotals": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "integer"
+          },
+          "auto_save": {
+            "type": "integer"
+          },
+          "uid_uncertain": {
+            "type": "integer"
+          },
+          "needs_review": {
+            "type": "integer"
+          },
+          "parse_errors": {
+            "type": "integer"
+          },
+          "estimated_total": {
+            "type": "string"
+          }
+        }
+      },
+      "PreviewResult": {
+        "type": "object",
+        "required": [
+          "preview_id",
+          "status",
+          "access_key",
+          "expires_at",
+          "items",
+          "totals"
+        ],
+        "properties": {
+          "preview_id": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "access_key": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviewItem"
+            }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/PlanTotals"
+          }
+        }
+      },
+      "Resolution": {
+        "type": "object",
+        "description": "Per-line decision for a `uid_uncertain` line. `needs_review` (the backend default when the line is omitted) persists a private row with no product; `skip` discards the line and must be requested explicitly; `assign` links an existing `product_id`.\n",
+        "required": [
+          "line",
+          "action"
+        ],
+        "properties": {
+          "line": {
+            "type": "integer"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "needs_review",
+              "skip",
+              "assign"
+            ],
+            "description": "Defaults to `needs_review` when a line has no resolution at all.\n"
+          },
+          "product_id": {
+            "type": "integer"
+          }
+        }
+      },
+      "CommitRequest": {
+        "type": "object",
+        "required": [
+          "preview_id",
+          "confirm"
+        ],
+        "properties": {
+          "preview_id": {
+            "type": "integer"
+          },
+          "confirm": {
+            "type": "boolean"
+          },
+          "resolutions": {
+            "type": "array",
+            "description": "Optional per-line resolutions for `uid_uncertain` lines. Lines left out default to `needs_review`; submit `skip` explicitly to drop one.\n",
+            "items": {
+              "$ref": "#/components/schemas/Resolution"
+            }
+          }
+        }
+      },
+      "CommitResult": {
+        "type": "object",
+        "properties": {
+          "preview_id": {
+            "type": "integer"
+          },
+          "confirmed": {
+            "type": "boolean"
+          },
+          "written": {
+            "type": "integer",
+            "description": "Total price_log rows inserted."
+          },
+          "auto_saved": {
+            "type": "integer",
+            "description": "Barcoded/commodity rows written automatically."
+          },
+          "assigned": {
+            "type": "integer",
+            "description": "`uid_uncertain` rows resolved to an existing product via an explicit `assign` resolution.\n"
+          },
+          "needs_review": {
+            "type": "integer",
+            "description": "`uid_uncertain` rows persisted as private review rows (the default for unresolved lines).\n"
+          },
+          "skipped": {
+            "type": "integer",
+            "description": "Lines that wrote nothing: explicit `skip`, unparseable lines, or already-logged duplicates.\n"
+          },
+          "nfce_id": {
+            "type": "integer"
+          },
+          "access_key": {
+            "type": "string"
+          }
+        }
+      },
+      "DeleteReceiptResult": {
+        "type": "object",
+        "properties": {
+          "access_key": {
+            "type": "string"
+          },
+          "nfce_id": {
+            "type": "integer"
+          },
+          "logs_deleted": {
+            "type": "integer"
+          },
+          "previews_deleted": {
+            "type": "integer"
+          }
+        }
+      },
+      "CaptchaState": {
+        "type": "object",
+        "properties": {
+          "challenge_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "solved",
+              "locked"
+            ]
+          },
+          "attempts_left": {
+            "type": "integer"
+          },
+          "max_attempts": {
+            "type": "integer"
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Page": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_pages": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ProductView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "product_key": {
+            "type": "string"
+          },
+          "gtin": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string",
+            "nullable": true
+          },
+          "unit": {
+            "type": "string"
+          },
+          "canonical_stem": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProductPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductView"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "SupermarketView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "cnpj": {
+            "type": "string"
+          },
+          "legal_name": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SupermarketRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "cnpj": {
+            "type": "string"
+          },
+          "legal_name": {
+            "type": "string"
+          }
+        }
+      },
+      "SupermarketPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupermarketView"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "SupermarketProductView": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "$ref": "#/components/schemas/ProductView"
+          },
+          "price_log_id": {
+            "type": "integer"
+          },
+          "qty": {
+            "type": "string"
+          },
+          "normalized_unit": {
+            "type": "string",
+            "nullable": true
+          },
+          "price_per_unit": {
+            "type": "string",
+            "nullable": true
+          },
+          "unit_price": {
+            "type": "string"
+          },
+          "total_price": {
+            "type": "string"
+          },
+          "last_issued_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "last_logged_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SupermarketProductsPage": {
+        "type": "object",
+        "properties": {
+          "supermarket": {
+            "$ref": "#/components/schemas/SupermarketView"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupermarketProductView"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "PricePointView": {
+        "type": "object",
+        "properties": {
+          "access_key": {
+            "type": "string"
+          },
+          "supermarket": {
+            "$ref": "#/components/schemas/SupermarketRef"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "qty": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "normalized_unit": {
+            "type": "string",
+            "nullable": true
+          },
+          "price_per_unit": {
+            "type": "string",
+            "nullable": true
+          },
+          "comparable_unit": {
+            "type": "string"
+          },
+          "comparable_price_per_unit": {
+            "type": "string",
+            "nullable": true
+          },
+          "unit_price": {
+            "type": "string"
+          },
+          "total_price": {
+            "type": "string"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "logged_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UnitStats": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "min": {
+            "type": "string",
+            "nullable": true
+          },
+          "avg": {
+            "type": "string",
+            "nullable": true
+          },
+          "max": {
+            "type": "string",
+            "nullable": true
+          },
+          "last": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ProductHistory": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "$ref": "#/components/schemas/ProductView"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PricePointView"
+            }
+          },
+          "aggregate": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnitStats"
+            }
+          }
+        }
+      },
+      "ReviewItemView": {
+        "type": "object",
+        "properties": {
+          "price_log_id": {
+            "type": "integer"
+          },
+          "nfce_id": {
+            "type": "integer"
+          },
+          "access_key": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "store_code": {
+            "type": "string"
+          },
+          "cnpj_base": {
+            "type": "string"
+          },
+          "store_name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "qty": {
+            "type": "string"
+          },
+          "price_per_unit": {
+            "type": "string",
+            "nullable": true
+          },
+          "unit_price": {
+            "type": "string"
+          },
+          "total_price": {
+            "type": "string"
+          },
+          "suggested_stem": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReviewQueuePage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewItemView"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "Assignment": {
+        "type": "object",
+        "required": [
+          "id",
+          "action"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "price_log_id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "existing",
+              "create"
+            ]
+          },
+          "product_id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
+      "BatchAssignRequest": {
+        "type": "object",
+        "required": [
+          "assignments"
+        ],
+        "properties": {
+          "assignments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Assignment"
+            }
+          }
+        }
+      },
+      "BatchAssignResult": {
+        "type": "object",
+        "properties": {
+          "assigned": {
+            "type": "integer"
+          },
+          "created": {
+            "type": "integer"
+          }
+        }
+      },
+      "MergeResult": {
+        "type": "object",
+        "properties": {
+          "from_id": {
+            "type": "integer"
+          },
+          "to_id": {
+            "type": "integer"
+          },
+          "logs_moved": {
+            "type": "integer"
+          },
+          "dup_removed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MergeSupermarketsResult": {
+        "type": "object",
+        "properties": {
+          "from_id": {
+            "type": "integer"
+          },
+          "to_id": {
+            "type": "integer"
+          },
+          "nfces_moved": {
+            "type": "integer"
+          },
+          "dup_removed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeleteProductResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "logs_deleted": {
+            "type": "integer"
+          }
+        }
+      },
+      "ProductPatch": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
+      "UserView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "role": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UserPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UserView"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/Page"
+          }
+        }
+      },
+      "Metrics": {
+        "type": "object",
+        "properties": {
+          "requests": {
+            "$ref": "#/components/schemas/MetricsReport"
+          },
+          "off_cache": {
+            "type": "object",
+            "description": "Present only when OFF enrichment is enabled.",
+            "properties": {
+              "hits": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "misses": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          }
+        }
+      },
+      "MetricsReport": {
+        "type": "object",
+        "properties": {
+          "total_requests": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_duration_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "auth_failures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "by_status": {
+            "type": "object",
+            "description": "Request counts keyed by status class (2xx/4xx/5xx/...).",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RouteMetrics"
+            }
+          },
+          "latency_buckets_ms": {
+            "type": "array",
+            "description": "Upper bound of each histogram bin, in milliseconds.",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
+      "RouteMetrics": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "errors": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "auth_failures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "histogram": {
+            "type": "array",
+            "description": "Count per bin; one extra overflow bin at the end.",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      }
+    }
+  }
+}

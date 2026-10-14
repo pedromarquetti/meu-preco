@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"meupreco/internal/config"
@@ -55,6 +56,71 @@ func TestReadyz(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
+	}
+}
+
+func TestDocumentationRoutes(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		wantStatus  int
+		wantType    string
+		wantContain string
+	}{
+		{
+			name:        "root redirects to docs",
+			path:        "/",
+			wantStatus:  http.StatusFound,
+			wantType:    "",
+			wantContain: "/docs/",
+		},
+		{
+			name:        "docs page",
+			path:        "/docs/",
+			wantStatus:  http.StatusOK,
+			wantType:    "text/html",
+			wantContain: "meupreco API Documentation",
+		},
+		{
+			name:        "yaml contract",
+			path:        "/openapi.yaml",
+			wantStatus:  http.StatusOK,
+			wantType:    "application/yaml",
+			wantContain: "openapi: 3.1.0",
+		},
+		{
+			name:        "json contract",
+			path:        "/openapi.json",
+			wantStatus:  http.StatusOK,
+			wantType:    "application/json",
+			wantContain: `"openapi": "3.1.0"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if tt.wantType != "" && !strings.HasPrefix(rec.Header().Get("Content-Type"), tt.wantType) {
+				t.Errorf("content type = %q, want prefix %q", rec.Header().Get("Content-Type"), tt.wantType)
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantContain) {
+				t.Errorf("body does not contain %q", tt.wantContain)
+			}
+		})
+	}
+}
+
+func TestDocumentationMissingAsset(t *testing.T) {
+	rec := httptest.NewRecorder()
+	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/docs/missing.js", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 

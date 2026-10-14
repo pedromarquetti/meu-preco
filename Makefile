@@ -6,10 +6,10 @@ ENV_LOAD := if [ -f .env ]; then set -a; . ./.env; set +a; fi;
 
 .PHONY: run build test lint vet fmtcheck staticcheck tidy clean-web clean-bin migrate-up migrate-down migrate-version openapi-json openapi-check
 
-run:
+run: static
 	@$(ENV_LOAD) go run ./cmd/server
 
-build:
+build: static
 	go build -o $(BIN) ./cmd/server
 
 test:
@@ -58,6 +58,10 @@ openapi-diff:
 
 bundle:
 	cd web && node scripts/build-bundle.mjs
+
+static: bundle
+	rm -rf internal/httpapi/static
+	cp -r dist internal/httpapi/static
 
 clean:	clean-web clean-bin
 

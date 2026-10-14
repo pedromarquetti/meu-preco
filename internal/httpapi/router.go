@@ -55,15 +55,9 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 	router.Get("/readyz", readyz(stores))
 	router.Get("/metrics", metricsHandler(offClient))
 
-	// Redirect root to /docs/
-	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/docs/", http.StatusFound)
-	})
-
-	// Serve documentation from the static bundle.
-	router.Mount("/docs/", http.StripPrefix("/docs/", http.FileServer(http.Dir("dist"))))
-	router.Get("/openapi.yaml", http.FileServer(http.Dir("dist")).ServeHTTP)
-	router.Get("/openapi.json", http.FileServer(http.Dir("dist")).ServeHTTP)
+	if err := documentationRoutes(router); err != nil {
+		panic("httpapi: initialize embedded documentation: " + err.Error())
+	}
 
 	authAPI := newAuthAPI(cfg, stores)
 
