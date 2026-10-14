@@ -62,7 +62,7 @@ bundle:
 clean:	clean-web clean-bin
 
 clean-web:
-	rm -rf dist/web
+	rm -rf dist
 
 clean-bin:
 	rm -rf $(BIN)
