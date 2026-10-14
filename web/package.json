@@ -1,0 +1,15 @@
+{
+  "name": "meupreco-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenAPI documentation and validation tooling for meupreco",
+  "type": "module",
+  "scripts": {
+    "generate": "node scripts/build-openapi.mjs",
+    "check": "node scripts/validate-openapi.mjs"
+  },
+  "dependencies": {
+    "@redocly/openapi-core": "^1.27.2",
+    "yaml": "^2.6.0"
+  }
+}

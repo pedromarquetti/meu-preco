@@ -4,7 +4,7 @@ BIN := bin/server
 # injects environment directly, so the binary never reads .env itself.
 ENV_LOAD := if [ -f .env ]; then set -a; . ./.env; set +a; fi;
 
-.PHONY: run build test lint vet fmtcheck staticcheck tidy clean migrate-up migrate-down migrate-version
+.PHONY: run build test lint vet fmtcheck staticcheck tidy clean migrate-up migrate-down migrate-version openapi-json openapi-check
 
 run:
 	@$(ENV_LOAD) go run ./cmd/server
@@ -46,6 +46,12 @@ staticcheck:
 	else \
 		echo "staticcheck not installed; skipping (go install honnef.co/go/tools/cmd/staticcheck@latest)"; \
 	fi
+
+openapi-generate:
+	cd web && npm run generate
+
+openapi-check:
+	cd web && npm run check
 
 tidy:
 	go mod tidy

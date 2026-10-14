@@ -2,3 +2,6 @@ bin/
 *.log
 .env
 .DS_Store
+web/node_modules/
+dist/
+api/openapi.json
