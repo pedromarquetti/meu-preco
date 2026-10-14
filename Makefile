@@ -53,6 +53,9 @@ openapi-generate:
 openapi-check:
 	cd web && npm run check
 
+openapi-diff:
+	cd web && npm run check-diff
+
 tidy:
 	go mod tidy
 
