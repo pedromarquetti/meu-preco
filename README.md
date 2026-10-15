@@ -255,6 +255,10 @@ TODO: implement docker-compose that pulls dockerhub image?
 
 ## Documentation
 
+> [!NOTE]
+> The Swagger API docs can be found
+> [here](https://pedromarquetti.github.io/meu-preco/)
+
 - `api/openapi.yaml` — versioned API contract (the SPA consumes only this).
 - Local interactive API documentation is available at `/docs/` (or `/`) when the
   server is running. The raw contract is available at `/openapi.yaml` and
