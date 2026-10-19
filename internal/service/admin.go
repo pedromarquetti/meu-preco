@@ -91,6 +91,7 @@ type DeleteProductResult struct {
 // UserView is the admin users-list projection (never exposes password_hash).
 type UserView struct {
 	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
 	Email     string    `json:"email"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
@@ -472,7 +473,7 @@ func (s *Service) ListUsers(ctx context.Context, page, limit int) (*UserPage, er
 	}
 	out := make([]UserView, 0, len(items))
 	for _, u := range items {
-		out = append(out, UserView{ID: u.ID, Email: u.Email, Role: u.Role, CreatedAt: u.CreatedAt})
+		out = append(out, UserView{ID: u.ID, Name: u.Name, Email: u.Email, Role: u.Role, CreatedAt: u.CreatedAt})
 	}
 	return &UserPage{Items: out, Page: newPage(page, limit, total)}, nil
 }

@@ -118,7 +118,7 @@ func TestSharedReads(t *testing.T) {
 	truncatePG(t, st.Pool())
 	ctx := context.Background()
 
-	user := &domain.User{Email: "reader@example.com", PasswordHash: "h", Role: "user"}
+	user := &domain.User{Name: "Reader", Email: "reader@example.com", PasswordHash: "h", Role: "user"}
 	if err := st.Users().Create(ctx, user); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestRoleGating(t *testing.T) {
 	truncatePG(t, st.Pool())
 	ctx := context.Background()
 
-	user := &domain.User{Email: "plain@example.com", PasswordHash: "h", Role: "user"}
+	user := &domain.User{Name: "Plain", Email: "plain@example.com", PasswordHash: "h", Role: "user"}
 	if err := st.Users().Create(ctx, user); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -326,8 +326,8 @@ func TestAdminCuration(t *testing.T) {
 	truncatePG(t, st.Pool())
 	ctx := context.Background()
 
-	admin := &domain.User{Email: "root@example.com", PasswordHash: "h", Role: "admin"}
-	other := &domain.User{Email: "other@example.com", PasswordHash: "h", Role: "user"}
+	admin := &domain.User{Name: "Root", Email: "root@example.com", PasswordHash: "h", Role: "admin"}
+	other := &domain.User{Name: "Other", Email: "other@example.com", PasswordHash: "h", Role: "user"}
 	if err := st.Users().Create(ctx, admin); err != nil {
 		t.Fatalf("create admin: %v", err)
 	}
@@ -489,9 +489,9 @@ func TestAdminCuration(t *testing.T) {
 		}
 		switch m["email"] {
 		case "root@example.com":
-			foundAdmin = m["role"] == "admin"
+			foundAdmin = m["role"] == "admin" && m["name"] == "Root"
 		case "other@example.com":
-			foundOther = m["role"] == "user"
+			foundOther = m["role"] == "user" && m["name"] == "Other"
 		}
 	}
 	if !foundAdmin || !foundOther {

@@ -53,6 +53,17 @@ func (s *memUserStore) GetByEmail(_ context.Context, email string) (*domain.User
 	return nil, domain.ErrNotFound
 }
 
+func (s *memUserStore) GetByLogin(_ context.Context, login string) (*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, u := range s.byID {
+		if u.Email == login || u.Name == login {
+			return u, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
 func (s *memUserStore) CountAdmin(context.Context) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,7 +120,10 @@ func TestSeedAdminEmptyTable(t *testing.T) {
 
 	got, err := users.GetByEmail(ctx, "ops@example.com")
 	if err != nil {
-		t.Fatalf("admin not created: %v", err)
+		t.Fatalf("seed: %v", err)
+	}
+	if got.Name != "ops" {
+		t.Errorf("seeded name = %q, want ops", got.Name)
 	}
 	if got.Role != "admin" {
 		t.Errorf("role = %q, want admin", got.Role)
@@ -145,7 +159,7 @@ func TestSeedAdminSkipsWhenUsersExist(t *testing.T) {
 	ctx := context.Background()
 	users := newMemUserStore()
 
-	u := &domain.User{Email: "alice@example.com", PasswordHash: "h", Role: "user"}
+	u := &domain.User{Name: "Alice", Email: "alice@example.com", PasswordHash: "h", Role: "user"}
 	if err := users.Create(ctx, u); err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +189,9 @@ func (failingUserStore) GetByID(context.Context, int64) (*domain.User, error) {
 	return nil, domain.ErrNotFound
 }
 func (failingUserStore) GetByEmail(context.Context, string) (*domain.User, error) {
+	return nil, domain.ErrNotFound
+}
+func (failingUserStore) GetByLogin(context.Context, string) (*domain.User, error) {
 	return nil, domain.ErrNotFound
 }
 func (failingUserStore) CountAdmin(context.Context) (int64, error) {

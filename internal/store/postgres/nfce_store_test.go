@@ -14,7 +14,7 @@ import (
 // seedUser creates a user for FK-dependent tests.
 func seedUser(t *testing.T, s *Store) *domain.User {
 	t.Helper()
-	u := &domain.User{Email: "seed@example.com", PasswordHash: "h", Role: "user"}
+	u := &domain.User{Name: "Seed", Email: "seed@example.com", PasswordHash: "h", Role: "user"}
 	if err := s.Users().Create(context.Background(), u); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}

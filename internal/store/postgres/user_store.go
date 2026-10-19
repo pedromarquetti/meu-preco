@@ -10,10 +10,10 @@ type userRepo struct{ db queryer }
 
 func (r userRepo) Create(ctx context.Context, u *domain.User) error {
 	err := r.db.QueryRow(ctx,
-		`INSERT INTO users (email, password_hash, role)
-		 VALUES ($1, $2, COALESCE(NULLIF($3, ''), 'user'))
+		`INSERT INTO users (name, email, password_hash, role)
+		 VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'user'))
 		 RETURNING id, created_at`,
-		u.Email, u.PasswordHash, u.Role,
+		u.Name, u.Email, u.PasswordHash, u.Role,
 	).Scan(&u.ID, &u.CreatedAt)
 
 	if err != nil {
@@ -29,8 +29,8 @@ func (r userRepo) Create(ctx context.Context, u *domain.User) error {
 func (r userRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) {
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx,
-		`SELECT id, email, password_hash, role, created_at FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+		`SELECT id, name, email, password_hash, role, created_at FROM users WHERE id = $1`, id,
+	).Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
 
 	if err != nil {
 		return nil, translateError(err)
@@ -42,8 +42,25 @@ func (r userRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) {
 func (r userRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	u := &domain.User{}
 	err := r.db.QueryRow(ctx,
-		`SELECT id, email, password_hash, role, created_at FROM users WHERE email = $1`, email,
-	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+		`SELECT id, name, email, password_hash, role, created_at FROM users WHERE email = $1`, email,
+	).Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	return u, nil
+}
+
+// GetByLogin resolves the identifier to a single account: the email is matched
+// case-insensitively (COALESCE at write time stores lowercase), the name
+// exactly. An email match wins when a name coincides with another email.
+func (r userRepo) GetByLogin(ctx context.Context, login string) (*domain.User, error) {
+	u := &domain.User{}
+	err := r.db.QueryRow(ctx,
+		`SELECT id, name, email, password_hash, role, created_at FROM users
+		 WHERE email = lower($1) OR name = $1
+		 ORDER BY (email = lower($1)) DESC, id
+		 LIMIT 1`, login,
+	).Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
 	if err != nil {
 		return nil, translateError(err)
 	}
@@ -72,7 +89,7 @@ func (r userRepo) List(ctx context.Context, limit, offset int) ([]domain.User, i
 	}
 
 	rows, err := r.db.Query(ctx,
-		`SELECT id, email, password_hash, role, created_at FROM users
+		`SELECT id, name, email, password_hash, role, created_at FROM users
 		 ORDER BY created_at DESC, id
 		 LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
@@ -83,7 +100,7 @@ func (r userRepo) List(ctx context.Context, limit, offset int) ([]domain.User, i
 	out := make([]domain.User, 0, limit)
 	for rows.Next() {
 		u := domain.User{}
-		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, u)

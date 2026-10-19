@@ -176,35 +176,36 @@ go test ./internal/enrich/... -run TestOFFLookupLive -v
 
 The server expects some env. vars to be set.
 
-| Var                   | Required | Default   | Accepted values                                                        |
-| --------------------- | -------- | --------- | ---------------------------------------------------------------------- |
-| PORT                  | no       | 8080      | 1–65535                                                                |
-| LOG_LEVEL             | no       | info      | `debug` \| `info` \| `warn` \| `error`                                 |
-| LOG_FORMAT            | no       | pretty    | `pretty` \| `json`                                                     |
-| CORS_ORIGINS          | no       | \*        | comma-separated origins, or `*`                                        |
-| SEFAZ_FETCH_RPS       | no       | 1         | integer ≥ 1                                                            |
-| SEFAZ_MAX_RETRIES     | no       | 3         | integer ≥ 1 (fetch attempts per receipt)                               |
-| SEFAZ_TIMEOUT         | no       | 30s       | Go duration (per portal request)                                       |
-| SEFAZ_BACKOFF_BASE    | no       | 200ms     | Go duration ≥ 0 (start of the exponential retry delay)                 |
-| SEFAZ_BACKOFF_CAP     | no       | 2s        | Go duration ≥ `SEFAZ_BACKOFF_BASE` (cap per retry delay)               |
-| SEFAZ_BASE_URL        | no       | SP prod   | https URL (overrides the SP QR consultation endpoint for test proxies) |
-| PREVIEWS_TTL          | no       | 15m       | Go duration > 0 (pending draft lifetime)                               |
-| PREVIEW_GC_INTERVAL   | no       | 5m        | Go duration > 0 (background sweep period)                              |
-| RATE_LIMIT_IP_RPS     | no       | 5         | float ≥ 0 (0 disables the per-IP bucket)                               |
-| RATE_LIMIT_IP_BURST   | no       | 300       | integer ≥ 0 (per-IP burst)                                             |
-| RATE_LIMIT_USER_RPS   | no       | 20        | float ≥ 0 (0 disables the per-user bucket)                             |
-| RATE_LIMIT_USER_BURST | no       | 1000      | integer ≥ 0 (per-user burst)                                           |
-| ENRICH_OFF            | no       | false     | `true`/`false` (best-effort Open Food Facts enrichment of `gtin_new`)  |
-| POSTGRES_USERNAME     | yes      | —         | postgres login (builds the DSN)                                        |
-| POSTGRES_PASSWORD     | yes      | —         | postgres password (builds the DSN; never logged/committed)             |
-| DATABASE_NAME         | yes      | —         | database name, e.g. `meupreco`                                         |
-| POSTGRES_HOST         | no       | localhost | postgres host                                                          |
-| POSTGRES_PORT         | no       | 5432      | postgres port (1–65535)                                                |
-| JWT_ACCESS_TTL        | no       | 15m       | Go duration (e.g. `15m`)                                               |
-| JWT_REFRESH_TTL       | no       | 720h      | Go duration (e.g. `720h`)                                              |
-| JWT_SECRET            | yes      | —         | ≥ 32 chars; signs access + refresh tokens                              |
-| ADMIN_EMAIL           | yes      | —         | seeds the first admin (role `admin`) at boot when `users` is empty     |
-| ADMIN_PASSWORD        | yes      | —         | seeds the first admin password (bcrypt-hashed at boot)                 |
+| Var                   | Required | Default          | Accepted values                                                        |
+| --------------------- | -------- | ---------------- | ---------------------------------------------------------------------- |
+| PORT                  | no       | 8080             | 1–65535                                                                |
+| LOG_LEVEL             | no       | info             | `debug` \| `info` \| `warn` \| `error`                                 |
+| LOG_FORMAT            | no       | pretty           | `pretty` \| `json`                                                     |
+| CORS_ORIGINS          | no       | \*               | comma-separated origins, or `*`                                        |
+| SEFAZ_FETCH_RPS       | no       | 1                | integer ≥ 1                                                            |
+| SEFAZ_MAX_RETRIES     | no       | 3                | integer ≥ 1 (fetch attempts per receipt)                               |
+| SEFAZ_TIMEOUT         | no       | 30s              | Go duration (per portal request)                                       |
+| SEFAZ_BACKOFF_BASE    | no       | 200ms            | Go duration ≥ 0 (start of the exponential retry delay)                 |
+| SEFAZ_BACKOFF_CAP     | no       | 2s               | Go duration ≥ `SEFAZ_BACKOFF_BASE` (cap per retry delay)               |
+| SEFAZ_BASE_URL        | no       | SP prod          | https URL (overrides the SP QR consultation endpoint for test proxies) |
+| PREVIEWS_TTL          | no       | 15m              | Go duration > 0 (pending draft lifetime)                               |
+| PREVIEW_GC_INTERVAL   | no       | 5m               | Go duration > 0 (background sweep period)                              |
+| RATE_LIMIT_IP_RPS     | no       | 5                | float ≥ 0 (0 disables the per-IP bucket)                               |
+| RATE_LIMIT_IP_BURST   | no       | 300              | integer ≥ 0 (per-IP burst)                                             |
+| RATE_LIMIT_USER_RPS   | no       | 20               | float ≥ 0 (0 disables the per-user bucket)                             |
+| RATE_LIMIT_USER_BURST | no       | 1000             | integer ≥ 0 (per-user burst)                                           |
+| ENRICH_OFF            | no       | false            | `true`/`false` (best-effort Open Food Facts enrichment of `gtin_new`)  |
+| POSTGRES_USERNAME     | yes      | —                | postgres login (builds the DSN)                                        |
+| POSTGRES_PASSWORD     | yes      | —                | postgres password (builds the DSN; never logged/committed)             |
+| DATABASE_NAME         | yes      | —                | database name, e.g. `meupreco`                                         |
+| POSTGRES_HOST         | no       | localhost        | postgres host                                                          |
+| POSTGRES_PORT         | no       | 5432             | postgres port (1–65535)                                                |
+| JWT_ACCESS_TTL        | no       | 15m              | Go duration (e.g. `15m`)                                               |
+| JWT_REFRESH_TTL       | no       | 720h             | Go duration (e.g. `720h`)                                              |
+| JWT_SECRET            | yes      | —                | ≥ 32 chars; signs access + refresh tokens                              |
+| ADMIN_EMAIL           | yes      | —                | seeds the first admin (role `admin`) at boot when `users` is empty     |
+| ADMIN_PASSWORD        | yes      | —                | seeds the first admin password (bcrypt-hashed at boot)                 |
+| ADMIN_NAME            | no       | email local part | seeds the first admin name (unique)                                    |
 
 The DSN is built as `postgres://USER:PASS@HOST:PORT/DATABASE?sslmode=disable`.
 Missing DB vars (or a too-short `JWT_SECRET`, or a missing `ADMIN_EMAIL`/

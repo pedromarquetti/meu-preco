@@ -7,10 +7,12 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE users (
 id            BIGSERIAL PRIMARY KEY,
+name          TEXT NOT NULL UNIQUE,
 email         TEXT NOT NULL UNIQUE,
 password_hash TEXT NOT NULL,
 role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
-created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+CONSTRAINT users_name_not_blank CHECK (btrim(name) <> '')
 );
 
 CREATE TABLE supermarkets (

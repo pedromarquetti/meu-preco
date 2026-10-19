@@ -28,9 +28,11 @@ type Config struct {
 	JWTAccessTTL  time.Duration
 	JWTRefreshTTL time.Duration
 
-	// AdminEmail/AdminPassword seed the first admin account at boot when the
-	// users table is empty, so the admin is available before the server starts
-	// serving. Both are required (see requiredEnv).
+	// AdminName/AdminEmail/AdminPassword seed the first admin account at boot
+	// when no admin exists, so the admin is available before the server starts
+	// serving. Email and password are required (see requiredEnv); AdminName is
+	// optional and defaults to the email's local part.
+	AdminName     string
 	AdminEmail    string
 	AdminPassword string
 
@@ -198,6 +200,7 @@ func load(env map[string]string) (Config, error) {
 		JWTRefreshTTL: jwtRefreshTTL,
 		AdminEmail:    env["ADMIN_EMAIL"],
 		AdminPassword: env["ADMIN_PASSWORD"],
+		AdminName:     env["ADMIN_NAME"],
 		SEFAZFetchRPS: sefaRPS,
 		SefazBaseURL:  env["SEFAZ_BASE_URL"],
 

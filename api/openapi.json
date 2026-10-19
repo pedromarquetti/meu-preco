@@ -123,7 +123,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Credentials"
+                "$ref": "#/components/schemas/RegisterRequest"
               }
             }
           }
@@ -150,7 +150,7 @@
             }
           },
           "409": {
-            "description": "Email already registered (`user_exists`)",
+            "description": "Name or email already registered (`user_exists`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -160,7 +160,7 @@
             }
           },
           "422": {
-            "description": "Invalid email or weak password (`invalid_email` / `invalid_password`)",
+            "description": "Invalid name, email or weak password (`invalid_name` / `invalid_email` / `invalid_password`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -187,7 +187,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Credentials"
+                "$ref": "#/components/schemas/LoginRequest"
               }
             }
           }
@@ -296,7 +296,7 @@
         "tags": [
           "auth"
         ],
-        "summary": "The authenticated user (from token claims)",
+        "summary": "The authenticated user (name, email, role, created_at)",
         "responses": {
           "200": {
             "description": "Current user",
@@ -1957,16 +1957,45 @@
           }
         }
       },
-      "Credentials": {
+      "RegisterRequest": {
         "type": "object",
         "required": [
+          "name",
           "email",
           "password"
         ],
         "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Display name; unique across accounts."
+          },
           "email": {
             "type": "string",
             "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "description": "Authenticate with `login` (an email OR a name) and `password`. The legacy `email` field is still accepted as an alias for `login`.\n",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "login": {
+            "type": "string",
+            "description": "Email address or account name."
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Legacy alias for `login`."
           },
           "password": {
             "type": "string",
@@ -1978,12 +2007,17 @@
         "type": "object",
         "required": [
           "id",
+          "name",
           "email",
-          "role"
+          "role",
+          "created_at"
         ],
         "properties": {
           "id": {
             "type": "integer"
+          },
+          "name": {
+            "type": "string"
           },
           "email": {
             "type": "string",
@@ -1995,6 +2029,10 @@
               "user",
               "admin"
             ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -2744,6 +2782,9 @@
         "properties": {
           "id": {
             "type": "integer"
+          },
+          "name": {
+            "type": "string"
           },
           "email": {
             "type": "string",

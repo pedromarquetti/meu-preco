@@ -359,6 +359,21 @@ func TestLoadAdminEnv(t *testing.T) {
 	if cfg.AdminEmail != "ops@example.com" || cfg.AdminPassword != "s3cret-admin" {
 		t.Errorf("admin env not read: %+v", cfg)
 	}
+	if cfg.AdminName != "" {
+		t.Errorf("AdminName should default to empty (derived at seed time), got %q", cfg.AdminName)
+	}
+
+	cfg, err = load(env(map[string]string{
+		"ADMIN_EMAIL":    "ops@example.com",
+		"ADMIN_PASSWORD": "s3cret-admin",
+		"ADMIN_NAME":     "Operator",
+	}))
+	if err != nil {
+		t.Fatalf("admin env rejected: %v", err)
+	}
+	if cfg.AdminName != "Operator" {
+		t.Errorf("AdminName not read: %+v", cfg)
+	}
 }
 
 func TestLoadRequiredEnv(t *testing.T) {

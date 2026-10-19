@@ -209,11 +209,11 @@ func TestNfceTwoPhaseIngestion(t *testing.T) {
 	mustAddPGProduct(t, st)
 
 	ctx := context.Background()
-	u1 := &domain.User{Email: "user@example.com", PasswordHash: "h", Role: "user"}
+	u1 := &domain.User{Name: "User One", Email: "user@example.com", PasswordHash: "h", Role: "user"}
 	if err := st.Users().Create(ctx, u1); err != nil {
 		t.Fatalf("create user 1: %v", err)
 	}
-	u2 := &domain.User{Email: "user2@example.com", PasswordHash: "h", Role: "user"}
+	u2 := &domain.User{Name: "User Two", Email: "user2@example.com", PasswordHash: "h", Role: "user"}
 	if err := st.Users().Create(ctx, u2); err != nil {
 		t.Fatalf("create user 2: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestNfceCommitPersistsCreatedProductIDs(t *testing.T) {
 	truncatePG(t, st.Pool())
 
 	ctx := context.Background()
-	u := &domain.User{Email: "user@example.com", PasswordHash: "h", Role: "user"}
+	u := &domain.User{Name: "User", Email: "user@example.com", PasswordHash: "h", Role: "user"}
 	if err := st.Users().Create(ctx, u); err != nil {
 		t.Fatalf("create user: %v", err)
 	}

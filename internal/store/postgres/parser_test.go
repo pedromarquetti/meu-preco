@@ -241,7 +241,7 @@ func TestUserListUpdateRole(t *testing.T) {
 	// Distinct emails: unique constraint. Created in a fixed loop so the
 	// newest-first order is deterministic for the assertion.
 	for i, email := range []string{"one@example.com", "two@example.com", "three@example.com"} {
-		u := &domain.User{Email: email, PasswordHash: "h", Role: "user"}
+		u := &domain.User{Name: email, Email: email, PasswordHash: "h", Role: "user"}
 		if err := s.Users().Create(ctx, u); err != nil {
 			t.Fatalf("create %d: %v", i, err)
 		}
@@ -307,8 +307,8 @@ func TestPreviewDeleteByAccessKey(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 
-	u1 := &domain.User{Email: "p1@example.com", PasswordHash: "h", Role: "user"}
-	u2 := &domain.User{Email: "p2@example.com", PasswordHash: "h", Role: "user"}
+	u1 := &domain.User{Name: "P1", Email: "p1@example.com", PasswordHash: "h", Role: "user"}
+	u2 := &domain.User{Name: "P2", Email: "p2@example.com", PasswordHash: "h", Role: "user"}
 	if err := s.Users().Create(ctx, u1); err != nil {
 		t.Fatalf("create u1: %v", err)
 	}

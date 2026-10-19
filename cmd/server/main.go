@@ -132,13 +132,27 @@ func seedAdmin(ctx context.Context, log *slog.Logger, users domain.UserStore, cf
 	}
 
 	email := strings.ToLower(strings.TrimSpace(cfg.AdminEmail))
-	u := &domain.User{Email: email, PasswordHash: hash, Role: "admin"}
+	u := &domain.User{Name: adminSeedName(cfg.AdminName, email), Email: email, PasswordHash: hash, Role: "admin"}
 	if err := users.Create(ctx, u); err != nil {
 		return fmt.Errorf("seed admin: create: %w", err)
 	}
 
-	log.Info("seeded initial admin account", "email", email)
+	log.Info("seeded initial admin account", "email", email, "name", u.Name)
 	return nil
+}
+
+// adminSeedName picks the initial admin's display name: ADMIN_NAME when set,
+// otherwise the email's local part (users.name is NOT NULL).
+func adminSeedName(configured, email string) string {
+	if n := strings.TrimSpace(configured); n != "" {
+		return n
+	}
+	if local, _, ok := strings.Cut(email, "@"); ok {
+		if local = strings.TrimSpace(local); local != "" {
+			return local
+		}
+	}
+	return "admin"
 }
 
 func newLogger(level, format string) *slog.Logger {

@@ -811,6 +811,18 @@ func (s memUsers) GetByEmail(_ context.Context, email string) (*domain.User, err
 	return nil, domain.ErrNotFound
 }
 
+func (s memUsers) GetByLogin(_ context.Context, login string) (*domain.User, error) {
+	if u, ok := s.m.users[strings.ToLower(login)]; ok {
+		return u, nil
+	}
+	for _, u := range s.m.users {
+		if u.Name == login {
+			return u, nil
+		}
+	}
+	return nil, domain.ErrNotFound
+}
+
 func (s memUsers) CountAdmin(context.Context) (int64, error) {
 	var n int64
 	for _, u := range s.m.users {

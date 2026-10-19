@@ -39,6 +39,13 @@ func (s *memUserStore) Create(_ context.Context, u *domain.User) error {
 	if _, ok := s.byEmail[u.Email]; ok {
 		return domain.ErrConflict
 	}
+	if u.Name != "" {
+		for _, existing := range s.byID {
+			if existing.Name == u.Name {
+				return domain.ErrConflict
+			}
+		}
+	}
 	s.nextID++
 	u.ID = s.nextID
 	u.CreatedAt = time.Now()
@@ -61,6 +68,20 @@ func (s *memUserStore) GetByEmail(_ context.Context, email string) (*domain.User
 	defer s.mu.Unlock()
 	if u, ok := s.byEmail[email]; ok {
 		return u, nil
+	}
+	return nil, domain.ErrNotFound
+}
+
+func (s *memUserStore) GetByLogin(_ context.Context, login string) (*domain.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if u, ok := s.byEmail[strings.ToLower(login)]; ok {
+		return u, nil
+	}
+	for _, u := range s.byID {
+		if u.Name == login {
+			return u, nil
+		}
 	}
 	return nil, domain.ErrNotFound
 }
@@ -221,9 +242,10 @@ type errEnvelope struct {
 func TestRegisterLoginMeRefresh(t *testing.T) {
 	h, _, _ := authTestEnv(t)
 	email := "alice@example.com"
+	name := "Alice"
 
 	rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
-		`{"email":"  ALICE@example.COM ","password":"a-really-good-password"}`, "")
+		`{"name":"  Alice ","email":"  ALICE@example.COM ","password":"a-really-good-password"}`, "")
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("register: status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -231,13 +253,17 @@ func TestRegisterLoginMeRefresh(t *testing.T) {
 		User userView `json:"user"`
 	}
 	decodeBody(t, rec, &reg)
-	if reg.User.Email != email || reg.User.Role != "user" || reg.User.ID == 0 {
+	if reg.User.Name != name || reg.User.Email != email || reg.User.Role != "user" || reg.User.ID == 0 {
 		t.Errorf("register user = %+v", reg.User)
+	}
+	if reg.User.CreatedAt.IsZero() {
+		t.Errorf("register user created_at is zero")
 	}
 	assertNoSecretLeak(t, rec.Body.Bytes(), "a-really-good-password")
 
+	// Login by email through the canonical `login` key.
 	rec = doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
-		`{"email":"alice@example.com","password":"a-really-good-password"}`, "")
+		`{"login":"alice@example.com","password":"a-really-good-password"}`, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login: status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -248,6 +274,18 @@ func TestRegisterLoginMeRefresh(t *testing.T) {
 	}
 	assertNoSecretLeak(t, rec.Body.Bytes(), "a-really-good-password", "password_hash")
 
+	// The same credentials work with the name as the login identifier.
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"login":"Alice","password":"a-really-good-password"}`, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login by name: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var byName tokenPair
+	decodeBody(t, rec, &byName)
+	if byName.User.Email != email {
+		t.Errorf("login by name user = %+v", byName.User)
+	}
+
 	rec = doJSON(t, h, http.MethodGet, "/api/v1/auth/me", "", first.AccessToken)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("me: status=%d body=%s", rec.Code, rec.Body.String())
@@ -256,8 +294,11 @@ func TestRegisterLoginMeRefresh(t *testing.T) {
 		User userView `json:"user"`
 	}
 	decodeBody(t, rec, &me)
-	if me.User.Email != email || me.User.Role != "user" {
+	if me.User.Name != "Alice" || me.User.Email != email || me.User.Role != "user" {
 		t.Errorf("me user = %+v", me.User)
+	}
+	if me.User.CreatedAt.IsZero() {
+		t.Errorf("me created_at is zero")
 	}
 
 	rec = doJSON(t, h, http.MethodPost, "/api/v1/auth/refresh",
@@ -289,7 +330,7 @@ func TestRegisterLoginMeRefresh(t *testing.T) {
 
 func TestRegisterDuplicateEmail(t *testing.T) {
 	h, _, _ := authTestEnv(t)
-	body := `{"email":"dup@example.com","password":"long-enough-password"}`
+	body := `{"name":"Dup","email":"dup@example.com","password":"long-enough-password"}`
 	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/register", body, ""); rec.Code != http.StatusCreated {
 		t.Fatalf("first register status=%d", rec.Code)
 	}
@@ -307,9 +348,11 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 func TestRegisterValidation(t *testing.T) {
 	h, _, _ := authTestEnv(t)
 	bad := []struct{ name, body string }{
-		{"bad email", `{"email":"not-an-email","password":"long-enough!"}`},
-		{"short password", `{"email":"x@example.com","password":"short"}`},
-		{"malformed json", `{"email":`},
+		{"missing name", `{"email":"x@example.com","password":"long-enough!"}`},
+		{"blank name", `{"name":"   ","email":"x@example.com","password":"long-enough!"}`},
+		{"bad email", `{"name":"X","email":"not-an-email","password":"long-enough!"}`},
+		{"short password", `{"name":"X","email":"x@example.com","password":"short"}`},
+		{"malformed json", `{"name":`},
 	}
 	for _, tc := range bad {
 		rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/register", tc.body, "")
@@ -322,11 +365,13 @@ func TestRegisterValidation(t *testing.T) {
 func TestLoginBadCredentials(t *testing.T) {
 	h, _, _ := authTestEnv(t)
 	doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
-		`{"email":"bob@example.com","password":"long-enough-password"}`, "")
+		`{"name":"Bob","email":"bob@example.com","password":"long-enough-password"}`, "")
 
 	for _, body := range []string{
 		`{"email":"bob@example.com","password":"wrong-password-123"}`,
 		`{"email":"nobody@example.com","password":"long-enough-password"}`,
+		`{"login":"Bob","password":"wrong-password-123"}`,
+		`{"login":"Nobody","password":"long-enough-password"}`,
 	} {
 		rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login", body, "")
 		if rec.Code != http.StatusUnauthorized {
@@ -349,7 +394,7 @@ func TestMeRequiresAuth(t *testing.T) {
 func TestAccessTokenExpiry(t *testing.T) {
 	h, _, _ := authTestEnv(t, func(c *config.Config) { c.JWTAccessTTL = 5 * time.Second })
 	doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
-		`{"email":"exp@example.com","password":"long-enough-password"}`, "")
+		`{"name":"Exp","email":"exp@example.com","password":"long-enough-password"}`, "")
 	rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
 		`{"email":"exp@example.com","password":"long-enough-password"}`, "")
 	var pair tokenPair
@@ -380,6 +425,7 @@ func TestAdminGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := users.Create(ctx, &domain.User{
+		Name:         "Admin",
 		Email:        "admin@example.com",
 		PasswordHash: hash,
 		Role:         "admin",
@@ -400,7 +446,7 @@ func TestAdminGate(t *testing.T) {
 
 	// A regular user is forbidden.
 	doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
-		`{"email":"user@example.com","password":"long-enough-password"}`, "")
+		`{"name":"Regular","email":"user@example.com","password":"long-enough-password"}`, "")
 	userLogin := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
 		`{"email":"user@example.com","password":"long-enough-password"}`, "")
 	var userPair tokenPair

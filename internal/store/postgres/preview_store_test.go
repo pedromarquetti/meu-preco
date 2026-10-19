@@ -98,7 +98,7 @@ func TestPreviewStoreUserAccessKeyUniqueWhilePending(t *testing.T) {
 	truncate(t)
 
 	u := seedUser(t, s)
-	other := &domain.User{Email: "other@example.com", PasswordHash: "h", Role: "user"}
+	other := &domain.User{Name: "Other", Email: "other@example.com", PasswordHash: "h", Role: "user"}
 	if err := s.Users().Create(context.Background(), other); err != nil {
 		t.Fatalf("seed second user: %v", err)
 	}

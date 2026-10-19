@@ -21,6 +21,10 @@ type UserStore interface {
 	Create(ctx context.Context, u *User) error
 	GetByID(ctx context.Context, id int64) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
+	// GetByLogin resolves an account by its login identifier: either the
+	// (case-insensitive) email or the exact name. An email match wins when a
+	// name happens to equal another account's email.
+	GetByLogin(ctx context.Context, login string) (*User, error)
 	// CountAdmin returns the number of admins (used by the boot-time admin seed).
 	CountAdmin(ctx context.Context) (int64, error)
 	// List returns the users ordered by created_at, most recent first, plus the

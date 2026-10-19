@@ -13,39 +13,37 @@ func TestUserStoreLifecycle(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 
-	u := &domain.User{Email: "ana@example.com", PasswordHash: "hash", Role: "user"}
+	u := &domain.User{Name: "Ana", Email: "ana@example.com", PasswordHash: "hash", Role: "user"}
 	if err := s.Users().Create(ctx, u); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if u.ID == 0 {
-		t.Fatal("create did not set ID")
-	}
-	if u.Role != "user" {
-		t.Errorf("role = %q, want user", u.Role)
+	if u.ID == 0 || u.CreatedAt.IsZero() {
+		t.Fatalf("create did not populate id/created_at: %+v", u)
 	}
 
 	got, err := s.Users().GetByEmail(ctx, "ana@example.com")
 	if err != nil {
 		t.Fatalf("get by email: %v", err)
 	}
-	if got.ID != u.ID || got.PasswordHash != "hash" {
+	if got.ID != u.ID || got.Name != "Ana" || got.PasswordHash != "hash" || got.Role != "user" {
 		t.Errorf("get by email = %+v", got)
 	}
 
-	got, err = s.Users().GetByID(ctx, u.ID)
+	byID, err := s.Users().GetByID(ctx, u.ID)
 	if err != nil {
 		t.Fatalf("get by id: %v", err)
 	}
-	if got.Email != "ana@example.com" {
-		t.Errorf("email = %q", got.Email)
+	if byID.Email != "ana@example.com" || byID.Name != "Ana" {
+		t.Errorf("get by id = %+v", byID)
 	}
 
-	adm, err := s.Users().GetByID(ctx, u.ID)
-	if err != nil {
-		t.Fatalf("get admin: %v", err)
+	byEmail, err := s.Users().GetByLogin(ctx, "ana@example.com")
+	if err != nil || byEmail.ID != u.ID {
+		t.Fatalf("get by login(email) = %+v err=%v", byEmail, err)
 	}
-	if adm.Role != "user" {
-		t.Errorf("role = %q", adm.Role)
+	byName, err := s.Users().GetByLogin(ctx, "Ana")
+	if err != nil || byName.ID != u.ID {
+		t.Fatalf("get by login(name) = %+v err=%v", byName, err)
 	}
 }
 
@@ -54,10 +52,10 @@ func TestUserStoreDuplicateEmail(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 
-	if err := s.Users().Create(ctx, &domain.User{Email: "dup@example.com", PasswordHash: "h"}); err != nil {
+	if err := s.Users().Create(ctx, &domain.User{Name: "Dup", Email: "dup@example.com", PasswordHash: "h"}); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	err := s.Users().Create(ctx, &domain.User{Email: "dup@example.com", PasswordHash: "h2"})
+	err := s.Users().Create(ctx, &domain.User{Name: "Dup", Email: "dup@example.com", PasswordHash: "h2"})
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("duplicate email error = %v, want ErrConflict", err)
 	}
