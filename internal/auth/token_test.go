@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -92,12 +93,15 @@ func TestValidateRejectsExpired(t *testing.T) {
 func TestValidateRejectsTampering(t *testing.T) {
 	svc := newTestService(time.Minute, time.Hour)
 	tok, _ := svc.IssueAccess(user(1))
-	last := tok[len(tok)-1]
-	alt := byte('a')
-	if last == 'a' {
-		alt = 'b'
+	parts := strings.Split(tok, ".")
+	sig := []byte(parts[2])
+	if sig[0] == 'A' {
+		sig[0] = 'B'
+	} else {
+		sig[0] = 'A'
 	}
-	tampered := tok[:len(tok)-1] + string(alt)
+	parts[2] = string(sig)
+	tampered := strings.Join(parts, ".")
 	if _, err := svc.Validate(tampered, TypeAccess); err == nil {
 		t.Error("tampered token accepted")
 	}
