@@ -401,7 +401,7 @@ func TestBatchAssignExistingAndCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("created product missing: %v", err)
 	}
-	if created.ProductKey != product.CommodityKey("maca fuji", "KG") {
+	if created.ProductKey != product.CommodityKey("maca fuji", "KG", "") {
 		t.Errorf("created key = %q, want commodity hash", created.ProductKey)
 	}
 	if created.CreatedBy == nil || *created.CreatedBy != admin.ID {
@@ -504,7 +504,7 @@ func TestBatchAssignAtomicRollback(t *testing.T) {
 	if got.ProductID != nil || !got.NeedsReview {
 		t.Errorf("log mutated despite rollback: %+v", got)
 	}
-	if _, err := m.Products().GetByKey(context.Background(), product.CommodityKey("banana prata", "KG")); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := m.Products().GetByKey(context.Background(), product.CommodityKey("banana prata", "KG", "")); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("created product survived a rolled-back batch: %v", err)
 	}
 }

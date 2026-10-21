@@ -105,16 +105,19 @@ func TestNormalizeStemAccents(t *testing.T) {
 }
 
 func TestCommodityKeyDeterministicAndUnitScoped(t *testing.T) {
-	a := CommodityKey("limao tahiti", "UN")
-	b := CommodityKey("limao tahiti", "UN")
+	a := CommodityKey("limao tahiti", "UN", "")
+	b := CommodityKey("limao tahiti", "UN", "")
 	if a != b {
 		t.Fatalf("deterministic key mismatch: %s vs %s", a, b)
 	}
 	if len(a) != 64 {
 		t.Errorf("key length = %d, want 64 (sha256 hex)", len(a))
 	}
-	c := CommodityKey("limao tahiti", "KG")
+	c := CommodityKey("limao tahiti", "KG", "")
 	if a == c {
 		t.Error("key must vary with unit")
+	}
+	if CommodityKey("limao tahiti", "UN", "Tirolez") == a {
+		t.Error("key must vary with brand")
 	}
 }

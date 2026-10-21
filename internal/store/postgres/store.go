@@ -105,6 +105,9 @@ func (s *Store) Previews() domain.PreviewStore { return previewRepo{db: s.pool} 
 // CommoditySynonyms returns the commodity synonym repository.
 func (s *Store) CommoditySynonyms() domain.CommoditySynonymStore { return synonymRepo{db: s.pool} }
 
+// Brands returns the curated commodity brand repository.
+func (s *Store) Brands() domain.CommodityBrandStore { return brandRepo{db: s.pool} }
+
 // RefreshTokens returns the refresh-token repository.
 func (s *Store) RefreshTokens() domain.RefreshTokenStore { return refreshTokenRepo{db: s.pool} }
 
@@ -138,6 +141,7 @@ func (s *txStores) Previews() domain.PreviewStore         { return previewRepo{d
 func (s *txStores) CommoditySynonyms() domain.CommoditySynonymStore {
 	return synonymRepo{db: s.db}
 }
+func (s *txStores) Brands() domain.CommodityBrandStore      { return brandRepo{db: s.db} }
 func (s *txStores) RefreshTokens() domain.RefreshTokenStore { return refreshTokenRepo{db: s.db} }
 func (s *txStores) Ping(context.Context) error              { return nil }
 func (s *txStores) Close()                                  {} // no-op: owned by Tx

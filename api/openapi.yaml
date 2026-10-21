@@ -1042,6 +1042,7 @@ components:
         product_key: { type: string }
         product_name: { type: string }
         brand: { type: string }
+        canonical_stem: { type: string }
         gtin: { type: string }
         unit: { type: string }
         price_per_unit: { type: string }

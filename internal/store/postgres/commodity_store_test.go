@@ -48,9 +48,9 @@ func TestCommoditySynonymSeeded(t *testing.T) {
 }
 
 func TestCommoditySynonymSeededCheese(t *testing.T) {
-	// Regression for the deli-cheese stems seen in real receipts — the exact
-	// NormalizeStem output (lowercase, accent-stripped, brand tokens like
-	// VIGOR/TIROLEZ retained) that must flip to commodity_fingerprint.
+	// Regression for the deli-cheese stems seen in real receipts: the exact
+	// stems the classifier now produces (brand words like VIGOR/TIROLEZ are
+	// stripped before lookup) must resolve to their canonical commodity.
 	s := mustStore(t)
 	ctx := context.Background()
 
@@ -60,7 +60,8 @@ func TestCommoditySynonymSeededCheese(t *testing.T) {
 		"qj":                       "queijo mussarela", // abbreviation expansion
 		"qjo":                      "queijo mussarela", // abbreviation expansion
 		"qj parmesao":              "queijo parmesao",
-		"qj parmesao vigor":        "queijo parmesao", // "QJ PARMESAO VIGOR KG"
+		"qj parmesao vigor":        "queijo parmesao", // "QJ PARMESAO VIGOR KG" (brand off)
+		"qj brie":                  "queijo brie",     // "QJ BRIE TIROLEZ KG" (brand stripped)
 		"qjo brie":                 "queijo brie",
 		"qjo brie vigor":           "queijo brie", // "QJO BRIE VIGOR KG"
 		"queijo mofo":              "queijo gorgonzola",

@@ -30,12 +30,35 @@ func (c catalogAdapter) Canonicalize(ctx context.Context, synonym string) (*doma
 	return c.stores.CommoditySynonyms().Canonicalize(ctx, synonym)
 }
 
+// brandDictionary loads the curated brand vocabulary. It is required for
+// commodity classification because silently disabling it can merge products
+// from different brands under the same key.
+func brandDictionary(ctx context.Context, stores domain.Stores) (*product.BrandDictionary, error) {
+	brands, err := stores.Brands().List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load commodity brands: %w", err)
+	}
+
+	entries := make([]product.BrandEntry, 0, len(brands))
+
+	for _, b := range brands {
+		entries = append(entries, product.BrandEntry{Key: b.Brand, Display: b.Display})
+	}
+
+	return product.NewBrandDictionaryEntries(entries), nil
+}
+
 // buildPlan classifies every receipt line and produces the itemized plan plus
-// its summary. brands stays nil: the barcode-derived brand dictionary is
-// wired once the commodity resolver gains a Brands() reader; the
-// mechanism itself is covered in internal/product.
-func buildPlan(ctx context.Context, stores domain.Stores, receipt *domain.Nfce) ([]PlanItem, PlanTotals) {
+// its summary. The brand dictionary is loaded from the curated commodity_brands
+// table so known brands are peeled off GTIN-less descriptions and stored on the
+// resolved product.
+func buildPlan(ctx context.Context, stores domain.Stores, receipt *domain.Nfce) ([]PlanItem, PlanTotals, error) {
 	cat := catalogAdapter{stores: stores}
+
+	brands, err := brandDictionary(ctx, stores)
+	if err != nil {
+		return nil, PlanTotals{}, err
+	}
 
 	plan := make([]PlanItem, 0, len(receipt.Items))
 	var totals PlanTotals
@@ -48,18 +71,19 @@ func buildPlan(ctx context.Context, stores domain.Stores, receipt *domain.Nfce) 
 			Qty:         item.Qty,
 			Unit:        item.Unit,
 			TotalPrice:  item.TotalPrice,
-		}, nil)
+		}, brands)
 
 		pi := PlanItem{
-			Line:        item.Line,
-			Description: item.Description,
-			Status:      dec.Status,
-			ProductKey:  dec.ProductKey,
-			ProductName: dec.Name,
-			Brand:       dec.Brand,
-			GTIN:        dec.GTIN,
-			Unit:        dec.Unit,
-			Similarity:  dec.Similarity,
+			Line:          item.Line,
+			Description:   item.Description,
+			Status:        dec.Status,
+			ProductKey:    dec.ProductKey,
+			ProductName:   dec.Name,
+			Brand:         dec.Brand,
+			CanonicalStem: dec.CanonicalStem,
+			GTIN:          dec.GTIN,
+			Unit:          dec.Unit,
+			Similarity:    dec.Similarity,
 		}
 		if dec.HasPricePerUnit {
 			// price_logs.price_per_unit is NUMERIC(14,6): round here so the
@@ -92,5 +116,5 @@ func buildPlan(ctx context.Context, stores domain.Stores, receipt *domain.Nfce) 
 		totals.Items++
 	}
 
-	return plan, totals
+	return plan, totals, nil
 }

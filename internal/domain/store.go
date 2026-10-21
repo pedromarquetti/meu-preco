@@ -163,6 +163,13 @@ type CommoditySynonymStore interface {
 	Canonicalize(ctx context.Context, synonym string) (*CommoditySynonym, error)
 }
 
+// CommodityBrandStore reads the curated brand vocabulary that separates
+// GTIN-less commodity identities (Tirolez vs Vigor cheese).
+type CommodityBrandStore interface {
+	// List returns every curated brand ordered by brand key.
+	List(ctx context.Context) ([]CommodityBrand, error)
+}
+
 // Stores bundles the per-entity repositories that one database handle serves.
 type Stores interface {
 	Users() UserStore
@@ -172,6 +179,7 @@ type Stores interface {
 	PriceLogs() PriceLogStore
 	Previews() PreviewStore
 	CommoditySynonyms() CommoditySynonymStore
+	Brands() CommodityBrandStore
 	RefreshTokens() RefreshTokenStore
 	// Ping verifies the database is reachable (used by /readyz).
 	Ping(ctx context.Context) error

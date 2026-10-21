@@ -262,25 +262,30 @@ func resolveLineProduct(ctx context.Context, tx domain.Stores, req CommitRequest
 // ensureProduct returns the products row id backing a plan line, creating the
 // master row when the identity does not exist yet (gtin_new / first-seen
 // commodity fingerprint). Callers must run inside the commit transaction.
-func ensureProduct(ctx context.Context, tx domain.Stores, pi *PlanItem) (int64, error) {
-	if p, err := tx.Products().GetByKey(ctx, pi.ProductKey); err == nil {
+func ensureProduct(ctx context.Context, tx domain.Stores, planItem *PlanItem) (int64, error) {
+	if p, err := tx.Products().GetByKey(ctx, planItem.ProductKey); err == nil {
 		return p.ID, nil
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return 0, err
 	}
 
 	p := &domain.Product{
-		ProductKey: pi.ProductKey,
-		Name:       pi.ProductName,
-		Unit:       pi.Unit,
+		ProductKey: planItem.ProductKey,
+		Name:       planItem.ProductName,
+		Unit:       planItem.Unit,
 	}
-	if pi.GTIN != "" {
-		gtin := pi.GTIN
+	if planItem.GTIN != "" {
+		gtin := planItem.GTIN
 		p.GTIN = &gtin
 	}
-	if pi.Brand != "" {
-		brand := pi.Brand
+	if planItem.Brand != "" {
+		brand := planItem.Brand
 		p.Brand = &brand
+	}
+
+	if planItem.CanonicalStem != "" {
+		stem := planItem.CanonicalStem
+		p.CanonicalStem = &stem
 	}
 
 	if err := tx.Products().Create(ctx, p); err != nil {

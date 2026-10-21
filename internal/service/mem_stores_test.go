@@ -43,6 +43,8 @@ type memStores struct {
 
 	synonyms  map[string]*domain.CommoditySynonym
 	nextSynID int64
+
+	brands map[string]*domain.CommodityBrand // by brand key
 }
 
 func newMemStores() *memStores {
@@ -56,6 +58,7 @@ func newMemStores() *memStores {
 		nfces:        map[string]*domain.Nfce{},
 		logKeys:      map[string]bool{},
 		synonyms:     map[string]*domain.CommoditySynonym{},
+		brands:       map[string]*domain.CommodityBrand{},
 		users:        map[string]*domain.User{},
 		byUserID:     map[int64]*domain.User{},
 	}
@@ -92,6 +95,7 @@ type memSnapshot struct {
 	nextLogID    int64
 	synonyms     map[string]*domain.CommoditySynonym
 	nextSynID    int64
+	brands       map[string]*domain.CommodityBrand
 }
 
 func (m *memStores) snapshot() memSnapshot {
@@ -115,6 +119,7 @@ func (m *memStores) snapshot() memSnapshot {
 		nextLogID:    m.nextLogID,
 		synonyms:     deepCopyMap(m.synonyms),
 		nextSynID:    m.nextSynID,
+		brands:       deepCopyMap(m.brands),
 	}
 }
 
@@ -167,6 +172,7 @@ func (m *memStores) restore(s memSnapshot) {
 	m.nextLogID = s.nextLogID
 	m.synonyms = s.synonyms
 	m.nextSynID = s.nextSynID
+	m.brands = s.brands
 }
 
 // seedKnownProduct installs a barcoded product so a line classifies gtin_known.
@@ -781,6 +787,27 @@ func (s memSynonyms) Canonicalize(_ context.Context, stem string) (*domain.Commo
 	return nil, domain.ErrNotFound
 }
 
+// memBrands implements domain.CommodityBrandStore.
+type memBrands struct{ m *memStores }
+
+func (s memBrands) List(_ context.Context) ([]domain.CommodityBrand, error) {
+	keys := make([]string, 0, len(s.m.brands))
+	for k := range s.m.brands {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]domain.CommodityBrand, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, *s.m.brands[k])
+	}
+	return out, nil
+}
+
+// seedBrand registers a curated brand for the in-memory brand dictionary.
+func (m *memStores) seedBrand(display string) {
+	m.brands[strings.ToLower(display)] = &domain.CommodityBrand{Brand: strings.ToLower(display), Display: display}
+}
+
 // memUsers implements domain.UserStore.
 type memUsers struct{ m *memStores }
 
@@ -872,6 +899,7 @@ func (m *memStores) Users() domain.UserStore               { return memUsers{m} 
 func (m *memStores) CommoditySynonyms() domain.CommoditySynonymStore {
 	return memSynonyms{m}
 }
+func (m *memStores) Brands() domain.CommodityBrandStore { return memBrands{m} }
 
 func nfceByID(m *memStores, id int64) *domain.Nfce {
 	for _, n := range m.nfces {

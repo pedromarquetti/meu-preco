@@ -116,6 +116,12 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 	}
 
 	out := make([]ReviewItemView, 0, len(items))
+
+	brands, err := brandDictionary(ctx, s.Stores)
+	if err != nil {
+		return nil, err
+	}
+
 	for _, it := range items {
 		v := ReviewItemView{
 			PriceLogID:    it.PriceLogID,
@@ -130,7 +136,7 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 			Qty:           it.Qty.String(),
 			UnitPrice:     it.UnitPrice.String(),
 			TotalPrice:    it.TotalPrice.String(),
-			SuggestedStem: s.suggestStem(ctx, it.Description, it.Unit),
+			SuggestedStem: s.suggestStem(ctx, it.Description, it.Unit, brands),
 			CreatedAt:     it.CreatedAt,
 		}
 		if it.PricePerUnit != nil {
@@ -144,8 +150,8 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 
 // suggestStem derives the admin-facing canonical stem: taxonomy canonical name
 // when the produce table knows the stem, the raw normalized stem otherwise.
-func (s *Service) suggestStem(ctx context.Context, description, unit string) string {
-	stem := product.NormalizeStem(description, unit, nil)
+func (s *Service) suggestStem(ctx context.Context, description, unit string, brands *product.BrandDictionary) string {
+	stem := product.NormalizeStem(description, unit, brands)
 	if stem == "" {
 		return ""
 	}
@@ -247,14 +253,17 @@ func (s *Service) createAdminProduct(ctx context.Context, tx domain.Stores, admi
 	}
 
 	var brandPtr *string
-	if b := strings.TrimSpace(brand); b != "" {
-		brandPtr = &b
+
+	brandName := strings.TrimSpace(brand)
+	if brandName != "" {
+		brandPtr = &brandName
 	}
+
 	stemCopy := stem
 	createdBy := adminID
 
 	p := &domain.Product{
-		ProductKey:    product.CommodityKey(stem, canonical),
+		ProductKey:    product.CommodityKey(stem, canonical, brandName),
 		Name:          name,
 		Brand:         brandPtr,
 		Unit:          canonical,

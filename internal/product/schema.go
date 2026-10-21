@@ -48,6 +48,7 @@ type Decision struct {
 	ProductKey      string // key to persist into products (gtin_new/commodity_fingerprint)
 	Name            string // display name to store for a new product
 	Brand           string // brand to store for a new product
+	CanonicalStem   string // canonical commodity stem to store for a new product
 	Unit            string // canonical unit when known (else raw)
 	PricePerUnit    decimal.Decimal
 	HasPricePerUnit bool
@@ -112,7 +113,10 @@ func Classify(ctx context.Context, cat Catalog, in Line, brands *BrandDictionary
 		return dec
 	}
 
-	// Tier 2 — commodity goods (produce, bulk, cheeses).
+	// Tier 2 — commodity goods (produce, bulk, cheeses). The brand (when the
+	// description carries a curated one) is peeled off first: it scopes the
+	// identity and is stored alongside the canonical name.
+	brand, _ := ExtractBrand(in.Description, brands)
 	stem := NormalizeStem(in.Description, in.Unit, brands)
 	if stem == "" {
 		dec.Status = StatusUIDUncertain
@@ -121,13 +125,22 @@ func Classify(ctx context.Context, cat Catalog, in Line, brands *BrandDictionary
 	}
 
 	if syn, err := cat.Canonicalize(ctx, stem); err == nil {
-		key := CommodityKey(syn.CanonicalName, syn.Unit)
+		key := CommodityKey(syn.CanonicalName, syn.Unit, brand)
 		dec.Status = StatusCommodityFingerprint
 		dec.ProductKey = key
 		dec.Name = syn.CanonicalName
+		dec.CanonicalStem = syn.CanonicalName
+		dec.Brand = brand
+
 		if p, err := cat.GetByKey(ctx, key); err == nil {
 			dec.Name = p.Name
-			dec.Brand = deref(p.Brand)
+			if b := deref(p.Brand); b != "" {
+				dec.Brand = b
+			}
+
+			if s := deref(p.CanonicalStem); s != "" {
+				dec.CanonicalStem = s
+			}
 		}
 		return dec
 	} else if !errors.Is(err, domain.ErrNotFound) {
@@ -150,9 +163,20 @@ func Classify(ctx context.Context, cat Catalog, in Line, brands *BrandDictionary
 	}
 	dec.Similarity = sim
 	if sim >= HighSimilarity {
+		if p.ProductKey == "" {
+			// A legacy/synthetic row with no key cannot back a price_log FK;
+			// route it to review instead of minting a blank-key product.
+			dec.Status = StatusUIDUncertain
+			dec.Message = "nearest match has no product key"
+			return dec
+		}
+
 		dec.Status = StatusCommodityFingerprint
+		dec.ProductKey = p.ProductKey
 		dec.Name = p.Name
 		dec.Brand = deref(p.Brand)
+		dec.CanonicalStem = deref(p.CanonicalStem)
+
 		return dec
 	}
 	dec.Status = StatusUIDUncertain

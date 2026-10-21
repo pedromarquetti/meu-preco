@@ -19,6 +19,7 @@ type stubStores struct {
 	previews domain.PreviewStore
 	products domain.ProductStore
 	synonyms domain.CommoditySynonymStore
+	brands   domain.CommodityBrandStore
 }
 
 func newStubStores() *stubStores {
@@ -26,6 +27,7 @@ func newStubStores() *stubStores {
 		previews: newMemPreviewStore(),
 		products: &nilProductStore{},
 		synonyms: &nilSynonymStore{},
+		brands:   &nilBrandStore{},
 	}
 }
 
@@ -39,6 +41,10 @@ func (s *stubStores) Products() domain.ProductStore {
 
 func (s *stubStores) CommoditySynonyms() domain.CommoditySynonymStore {
 	return s.synonyms
+}
+
+func (s *stubStores) Brands() domain.CommodityBrandStore {
+	return s.brands
 }
 
 // Users/RefreshTokens/Ping are overridden so the embedded nil Stores interface
@@ -166,3 +172,8 @@ func (*nilSynonymStore) Create(context.Context, *domain.CommoditySynonym) error 
 func (*nilSynonymStore) Canonicalize(context.Context, string) (*domain.CommoditySynonym, error) {
 	return nil, domain.ErrNotFound
 }
+
+// nilBrandStore is a brand vocabulary that knows nothing.
+type nilBrandStore struct{}
+
+func (*nilBrandStore) List(context.Context) ([]domain.CommodityBrand, error) { return nil, nil }

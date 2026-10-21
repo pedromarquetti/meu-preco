@@ -495,7 +495,7 @@ func TestNfceCommitPersistsCreatedProductIDs(t *testing.T) {
 	if !ok {
 		t.Fatal("test fixture GTIN failed to normalize")
 	}
-	commodityKey := product.CommodityKey("banana prata", "KG")
+	commodityKey := product.CommodityKey("banana prata", "KG", "")
 
 	type logRow struct {
 		Line           int

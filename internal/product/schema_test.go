@@ -130,7 +130,7 @@ func TestClassifyGtinNew(t *testing.T) {
 }
 
 func TestClassifyCommodityFingerprintExisting(t *testing.T) {
-	key := CommodityKey("limao tahiti", "UN")
+	key := CommodityKey("limao tahiti", "UN", "")
 	cat := &fakeCatalog{
 		synonyms: map[string]*domain.CommoditySynonym{
 			"limao tahiti": {CanonicalName: "limao tahiti", Category: "hortifruti", Unit: "UN"},
@@ -161,7 +161,7 @@ func TestClassifyCommodityFingerprintCreatable(t *testing.T) {
 	if d.Status != StatusCommodityFingerprint {
 		t.Fatalf("status = %q, want commodity_fingerprint", d.Status)
 	}
-	if d.ProductKey != CommodityKey("limao tahiti", "UN") {
+	if d.ProductKey != CommodityKey("limao tahiti", "UN", "") {
 		t.Errorf("product key = %q", d.ProductKey)
 	}
 }
@@ -242,7 +242,7 @@ func TestClassifyForeignPrefixFallback(t *testing.T) {
 // The seed catalogue mirrors migrations/000002 (limao tahiti UN), proving the
 // DoD case end-to-end with the real lookup surfaces.
 func TestClassifySeedCatalogLimao(t *testing.T) {
-	key := CommodityKey("limao tahiti", "UN")
+	key := CommodityKey("limao tahiti", "UN", "")
 	cat := &fakeCatalog{
 		synonyms: map[string]*domain.CommoditySynonym{
 			"limao tahiti": {CanonicalName: "limao tahiti", Category: "hortifruti", Unit: "UN", Source: "CONAB PROHORT / CEAGESP"},

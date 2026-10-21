@@ -93,6 +93,16 @@ type CommoditySynonym struct {
 	CreatedAt     time.Time
 }
 
+// CommodityBrand is one curated brand name used to separate commodity
+// identities (e.g. Tirolez cheese from Vigor cheese) when a receipt line has no
+// barcode. Brand is the normalized lookup key; Display is the spelling stored
+// on the products row.
+type CommodityBrand struct {
+	Brand     string
+	Display   string
+	CreatedAt time.Time
+}
+
 // ProductFilter is the read-side product search predicate. Empty fields are
 // ignored; the store always excludes needs_review rows. GTIN is matched as a
 // normalized digit prefix ("7831" finds "07891000412855").

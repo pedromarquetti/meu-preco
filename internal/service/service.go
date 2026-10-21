@@ -92,17 +92,18 @@ type CaptchaSupport struct {
 // product.Decision produced for the line, in a JSON-stable shape that rides
 // on the previews row.
 type PlanItem struct {
-	Line         int     `json:"line"`
-	Description  string  `json:"description"`
-	Status       string  `json:"status"`
-	Message      string  `json:"message,omitempty"`
-	ProductKey   string  `json:"product_key,omitempty"`
-	ProductName  string  `json:"product_name,omitempty"`
-	Brand        string  `json:"brand,omitempty"`
-	GTIN         string  `json:"gtin,omitempty"`
-	Unit         string  `json:"unit,omitempty"`
-	PricePerUnit string  `json:"price_per_unit,omitempty"`
-	Similarity   float64 `json:"similarity,omitempty"`
+	Line          int     `json:"line"`
+	Description   string  `json:"description"`
+	Status        string  `json:"status"`
+	Message       string  `json:"message,omitempty"`
+	ProductKey    string  `json:"product_key,omitempty"`
+	ProductName   string  `json:"product_name,omitempty"`
+	Brand         string  `json:"brand,omitempty"`
+	CanonicalStem string  `json:"canonical_stem,omitempty"`
+	GTIN          string  `json:"gtin,omitempty"`
+	Unit          string  `json:"unit,omitempty"`
+	PricePerUnit  string  `json:"price_per_unit,omitempty"`
+	Similarity    float64 `json:"similarity,omitempty"`
 }
 
 // PlanTotals is the receipt-level summary the client renders next to the
