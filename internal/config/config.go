@@ -19,8 +19,8 @@ type Config struct {
 	LogFormat   string
 	CORSOrigins []string
 
-	// DatabaseURL is built from POSTGRES_USERNAME, POSTGRES_PASSWORD and
-	// DATABASE_NAME (plus optional POSTGRES_HOST/POSTGRES_PORT).
+	// DatabaseURL is built from POSTGRES_USERNAME, POSTGRES_PASSWORD,
+	// DATABASE_NAME and POSTGRES_HOST (plus optional POSTGRES_PORT).
 	DatabaseURL string
 
 	// JWTSecret signs access+refresh tokens; >= 32 chars.
@@ -223,13 +223,17 @@ func load(env map[string]string) (Config, error) {
 }
 
 // buildPostgresURL assembles postgres://user:pass@host:port/db?sslmode=disable
-// from POSTGRES_USERNAME, POSTGRES_PASSWORD and DATABASE_NAME (required),
-// POSTGRES_HOST (default localhost) and POSTGRES_PORT (default 5432). Missing
-// variables or a malformed port produce an explicit, actionable error.
+// from POSTGRES_USERNAME, POSTGRES_PASSWORD, DATABASE_NAME and POSTGRES_HOST
+// (all required) plus POSTGRES_PORT (default 5432). Missing variables or a
+// malformed port produce an explicit, actionable error.
+//
+// POSTGRES_HOST has no default on purpose: "localhost" silently points at
+// the wrong machine as soon as the process runs in a container, so the host
+// must always be stated explicitly.
 func buildPostgresURL(env map[string]string) (string, error) {
 	var missing []string
 
-	for _, k := range []string{"POSTGRES_USERNAME", "POSTGRES_PASSWORD", "DATABASE_NAME"} {
+	for _, k := range []string{"POSTGRES_USERNAME", "POSTGRES_PASSWORD", "DATABASE_NAME", "POSTGRES_HOST"} {
 		if env[k] == "" {
 			missing = append(missing, k)
 		}
@@ -240,7 +244,7 @@ func buildPostgresURL(env map[string]string) (string, error) {
 			strings.Join(missing, ", "))
 	}
 
-	host := envString(env, "POSTGRES_HOST", "localhost")
+	host := env["POSTGRES_HOST"]
 	port := envString(env, "POSTGRES_PORT", "5432")
 
 	if _, err := strconv.Atoi(port); err != nil {

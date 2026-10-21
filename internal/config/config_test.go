@@ -14,6 +14,7 @@ func env(extra map[string]string) map[string]string {
 	m := map[string]string{
 		"POSTGRES_USERNAME": "dev",
 		"POSTGRES_PASSWORD": "dev",
+		"POSTGRES_HOST":     "localhost",
 		"DATABASE_NAME":     "meupreco",
 		"JWT_SECRET":        "test-secret-with-at-least-32-characters",
 		"ADMIN_EMAIL":       "admin@example.com",
@@ -135,7 +136,8 @@ func TestLoadMissingPostgresEnv(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "POSTGRES_USERNAME") ||
 		!strings.Contains(err.Error(), "POSTGRES_PASSWORD") ||
-		!strings.Contains(err.Error(), "DATABASE_NAME") {
+		!strings.Contains(err.Error(), "DATABASE_NAME") ||
+		!strings.Contains(err.Error(), "POSTGRES_HOST") {
 		t.Fatalf("expected error naming all missing vars, got %v", err)
 	}
 
@@ -171,6 +173,23 @@ func TestLoadMissingAdminEnv(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresPostgresHost(t *testing.T) {
+	// POSTGRES_HOST has no default: an implicit "localhost" points at the
+	// wrong machine inside a container, so the host must be stated.
+	envMap := maps.Clone(env(nil))
+	delete(envMap, "POSTGRES_HOST")
+
+	_, err := load(envMap)
+	if err == nil || !strings.Contains(err.Error(), "POSTGRES_HOST") {
+		t.Fatalf("expected error naming missing POSTGRES_HOST, got %v", err)
+	}
+
+	envMap["POSTGRES_HOST"] = ""
+	if _, err := load(envMap); err == nil || !strings.Contains(err.Error(), "POSTGRES_HOST") {
+		t.Fatalf("expected error naming empty POSTGRES_HOST, got %v", err)
+	}
+}
+
 func TestLoadEscapesPostgresCredentials(t *testing.T) {
 	cfg, err := load(env(map[string]string{
 		"POSTGRES_USERNAME": "dev",
@@ -195,6 +214,7 @@ func TestLoadBadPostgresPort(t *testing.T) {
 func TestPostgresURLFromEnvMustNotPanic(t *testing.T) {
 	t.Setenv("POSTGRES_USERNAME", "dev")
 	t.Setenv("POSTGRES_PASSWORD", "dev")
+	t.Setenv("POSTGRES_HOST", "localhost")
 	t.Setenv("DATABASE_NAME", "meupreco")
 	dsn, err := PostgresURLFromEnv()
 	if err != nil || dsn == "" {

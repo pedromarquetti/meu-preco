@@ -18,6 +18,7 @@ jobs:
     env:
       POSTGRES_USERNAME: dev
       POSTGRES_PASSWORD: dev
+      POSTGRES_HOST: localhost
       DATABASE_NAME: meupreco_test
       MEUPRECO_TEST_DATABASE_URL: postgres://dev:dev@localhost:5432/meupreco_test?sslmode=disable
     services:

@@ -156,7 +156,7 @@ make build    # bin/server
 make hooks-install          # enable the repository pre-push validations
 
 # Database: migrate up/down against POSTGRES_* + DATABASE_NAME
-export POSTGRES_USERNAME='dev' POSTGRES_PASSWORD='dev' DATABASE_NAME='meupreco'
+export POSTGRES_USERNAME='dev' POSTGRES_PASSWORD='dev' POSTGRES_HOST='localhost' DATABASE_NAME='meupreco'
 make migrate-up
 make migrate-down
 make migrate-version
@@ -205,7 +205,7 @@ The server expects some env. vars to be set.
 | POSTGRES_USERNAME     | yes      | —                | postgres login (builds the DSN)                                        |
 | POSTGRES_PASSWORD     | yes      | —                | postgres password (builds the DSN; never logged/committed)             |
 | DATABASE_NAME         | yes      | —                | database name, e.g. `meupreco`                                         |
-| POSTGRES_HOST         | no       | localhost        | postgres host                                                          |
+| POSTGRES_HOST         | yes      | —                | postgres host (no default; see the note below)                         |
 | POSTGRES_PORT         | no       | 5432             | postgres port (1–65535)                                                |
 | JWT_ACCESS_TTL        | no       | 15m              | Go duration (e.g. `15m`)                                               |
 | JWT_REFRESH_TTL       | no       | 720h             | Go duration (e.g. `720h`)                                              |
@@ -219,6 +219,20 @@ Missing DB vars (or a too-short `JWT_SECRET`, or a missing `ADMIN_EMAIL`/
 `ADMIN_PASSWORD`) abort startup with an explicit error. Secrets (DB password,
 `JWT_SECRET`, `ADMIN_PASSWORD`) are only ever set via the environment — never
 committed.
+
+> [!IMPORTANT]
+> `POSTGRES_HOST` is **required and has no default**. `localhost` means
+> *the machine running the process*: the host for a native `make run`, but the
+> container itself when the API runs in Docker — where it fails with a
+> misleading `dial tcp 127.0.0.1:5432: connect: connection refused`. Set it
+> explicitly to whatever the process must reach:
+>
+> | Where the process runs | `POSTGRES_HOST` |
+> | ---------------------- | --------------- |
+> | native (`make run`)    | `localhost` |
+> | container in the same Docker network as the database | the database service name (e.g. `postgres`) |
+> | container reaching a database published on the Docker host | the Docker bridge gateway, e.g. `172.17.0.1` (`docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`) |
+> | container with `--network host` | `localhost` (the host namespace is shared) |
 
 The initial admin is created **at boot, before the HTTP listener starts** (no
 API call needed): the server hashes `ADMIN_PASSWORD` and inserts the admin the
@@ -254,10 +268,29 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
 
 ### Container image:
 
+The image ships the API server and the migration tool, runs as a non-root user
+and has no Go toolchain inside. PostgreSQL is **not** part of the image: it
+stays an external service (managed instance or your own container).
+
 ```sh
-docker build -t meupreco .
-docker run --rm -p 8080:8080 meupreco
+docker build -t meupreco:local .
+
+# migrations (idempotent) — the same image, the same environment
+docker run --rm --env-file .env meupreco:local migrate up
+
+# the API — POSTGRES_HOST must be reachable *from the container*
+docker run --rm -p 8080:8080 --env-file .env meupreco:local
 ```
+
+- `POSTGRES_HOST` is mandatory (see the note above): `localhost` inside the
+  container is the container itself, not your database.
+- `PORT` (default `8080`) is the port the API listens on; publish the same
+  value (`-p HOST:CONTAINER_PORT`) or override both (`-e PORT=9000 -p
+  9000:9000`).
+- `GET /healthz` is the container health check (liveness only). `GET /readyz`
+  additionally requires PostgreSQL, so it is not used as the health check.
+- The image never reads a `.env` file: pass the variables with `--env-file`
+  or `-e`. Do not commit that file.
 
 TODO: implement docker-compose that pulls dockerhub image?
 
