@@ -1,0 +1,28 @@
+#!/bin/sh
+
+set -eu
+
+echo "Running pre-push checks..."
+gofmt -s -w .
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "pre-push: npm is required to update OpenAPI documentation" >&2
+  exit 1
+fi
+
+npm ci --prefix web
+npm run generate --prefix web
+npm run bundle --prefix web
+make static
+
+if ! git diff --quiet; then
+  echo "pre-push: formatting or generated documentation changed." >&2
+  echo "Review and commit the changes before pushing." >&2
+  git diff --stat
+  exit 1
+fi
+
+go vet ./...
+go build ./...
+go test ./... -race -count=1
+echo "pre-push checks passed."

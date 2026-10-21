@@ -153,6 +153,7 @@ curl localhost:8080/healthz  # {"status":"ok"}
 make test     # go test ./... -race
 make lint     # gofmt + go vet (+ staticcheck if installed)
 make build    # bin/server
+make hooks-install          # enable the repository pre-push validations
 
 # Database: migrate up/down against POSTGRES_* + DATABASE_NAME
 export POSTGRES_USERNAME='dev' POSTGRES_PASSWORD='dev' DATABASE_NAME='meupreco'
@@ -171,6 +172,12 @@ make seed-off ARGS=./openfoodfacts-products.jsonl.gz
 export MEUPRECO_LIVE_OFF=1
 go test ./internal/enrich/... -run TestOFFLookupLive -v
 ```
+
+> [!NOTE]
+> The pre-push hook formats Go code, regenerates the OpenAPI documentation,
+> updates the embedded documentation, and runs the Go vet and race-enabled test
+> suite. If it changes tracked files, it stops so the changes can be reviewed
+> and committed before pushing.
 
 ### env
 
