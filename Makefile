@@ -4,13 +4,32 @@ BIN := bin/server
 # injects environment directly, so the binary never reads .env itself.
 ENV_LOAD := if [ -f .env ]; then set -a; . ./.env; set +a; fi;
 
-.PHONY: run build test lint vet fmtcheck fmtfix staticcheck tidy clean-web clean-bin hooks-install migrate-up migrate-down migrate-version openapi-generate openapi-check openapi-diff bundle static
+.PHONY: run build build-check ci pre-push test lint vet fmtcheck fmtfix staticcheck tidy clean-web clean-bin hooks-install migrate-up migrate-down migrate-version openapi-generate openapi-check openapi-diff bundle static
 
 run: static
 	@$(ENV_LOAD) go run ./cmd/server
 
 build: static
 	go build -o $(BIN) ./cmd/server
+
+build-check:
+	go build ./...
+
+ci: fmtcheck vet build-check test
+
+pre-push:
+	gofmt -s -w .
+	@command -v npm >/dev/null 2>&1 || { echo "pre-push: npm is required to update OpenAPI documentation" >&2; exit 1; }
+	npm ci --prefix web
+	npm run generate --prefix web
+	make static
+	@if ! git diff --quiet; then \
+		echo "pre-push: formatting or generated documentation changed." >&2; \
+		echo "Review and commit the changes before pushing." >&2; \
+		git diff --stat; \
+		exit 1; \
+	fi
+	$(MAKE) ci
 
 test:
 	go test ./... -race -count=1
