@@ -15,6 +15,25 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    env:
+      POSTGRES_USERNAME: dev
+      POSTGRES_PASSWORD: dev
+      DATABASE_NAME: meupreco_test
+      MEUPRECO_TEST_DATABASE_URL: postgres://dev:dev@localhost:5432/meupreco_test?sslmode=disable
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dev
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: meupreco_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dev -d meupreco_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,6 +43,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Apply database migrations
+        run: go run ./cmd/migrate up
 
       - name: Check, build, and test Go code
         run: make ci

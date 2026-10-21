@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var fixedTime = time.Date(2026, 9, 15, 8, 11, 6, 356_000_000, time.FixedZone("BRT", -3*3600))
+var fixedTime = time.Date(2026, 9, 15, 8, 11, 6, 356_000_000, time.Local)
 
 // 02-01-2006 15:04:05.000
 

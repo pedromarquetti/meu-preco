@@ -2115,6 +2115,9 @@
           "brand": {
             "type": "string"
           },
+          "canonical_stem": {
+            "type": "string"
+          },
           "gtin": {
             "type": "string"
           },
