@@ -1,18 +1,26 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "meupreco API",
+    "title": "Meu Preço API",
     "version": "1.0.0",
     "description": "meupreco ingests Brazilian NFC-e (fiscal receipts), matches each line to a\ncanonical product and tracks per-unit price history across supermarkets.\n\nConventions:\n- Every error is the canonical envelope: `{\"error\":{\"code\",\"message\"}}`.\n  A few codes (captcha challenges, rate limiting) add sibling fields.\n- Money is always transported as a decimal **string**, never a float.\n- All receipt/read/admin endpoints require a bearer access token; a\n  reissue pair is obtained from `/auth/login` and rotated via\n  `/auth/refresh`.\n- Requests are rate limited per client IP and, once authenticated, per\n  user. A throttled request answers `429` with `error.code = \"rate_limited\"`\n  and a `Retry-After` header.\n"
   },
   "servers": [
     {
-      "url": "/api/v1",
-      "description": "Versioned API root. Every authenticated operation (auth, nfce, captcha, products, supermarkets, users, admin) is served under this prefix and is rate limited per client IP and, once authenticated, per user.\n"
-    },
-    {
-      "url": "/",
-      "description": "Process root. Operational endpoints only: /healthz, /readyz and /metrics are served here without the /api/v1 prefix and without authentication. Each of those operations overrides the server list to this root.\n"
+      "url": "{protocol}://{hostpath}",
+      "description": "Define here your Meu Preço API instance URL, defaults to localhost:8080. This is the URL the browser will use on the \"Try it out\" sections\n",
+      "variables": {
+        "protocol": {
+          "default": "http",
+          "enum": [
+            "http",
+            "https"
+          ]
+        },
+        "hostpath": {
+          "default": "localhost:8080"
+        }
+      }
     }
   ],
   "security": [
@@ -52,12 +60,7 @@
         "tags": [
           "health"
         ],
-        "servers": [
-          {
-            "url": "/",
-            "description": "Process root (no API prefix)"
-          }
-        ],
+        "servers": null,
         "summary": "Liveness probe",
         "security": [],
         "responses": {
@@ -79,12 +82,7 @@
         "tags": [
           "health"
         ],
-        "servers": [
-          {
-            "url": "/",
-            "description": "Process root (no API prefix)"
-          }
-        ],
+        "servers": null,
         "summary": "Readiness probe (database ping)",
         "security": [],
         "responses": {
@@ -111,7 +109,7 @@
         }
       }
     },
-    "/auth/register": {
+    "/api/v1/auth/register": {
       "post": {
         "tags": [
           "auth"
@@ -175,7 +173,7 @@
         }
       }
     },
-    "/auth/login": {
+    "/api/v1/auth/login": {
       "post": {
         "tags": [
           "auth"
@@ -229,7 +227,7 @@
         }
       }
     },
-    "/auth/refresh": {
+    "/api/v1/auth/refresh": {
       "post": {
         "tags": [
           "auth"
@@ -291,7 +289,7 @@
         }
       }
     },
-    "/auth/me": {
+    "/api/v1/auth/me": {
       "get": {
         "tags": [
           "auth"
@@ -317,7 +315,7 @@
         }
       }
     },
-    "/nfce/new": {
+    "/api/v1/nfce/new": {
       "post": {
         "tags": [
           "nfce"
@@ -414,7 +412,7 @@
         }
       }
     },
-    "/nfce/submit": {
+    "/api/v1/nfce/submit": {
       "post": {
         "tags": [
           "nfce"
@@ -491,7 +489,7 @@
         }
       }
     },
-    "/nfce/delete": {
+    "/api/v1/nfce/delete": {
       "post": {
         "tags": [
           "nfce"
@@ -566,7 +564,7 @@
         }
       }
     },
-    "/nfce/captcha": {
+    "/api/v1/nfce/captcha": {
       "get": {
         "tags": [
           "captcha"
@@ -736,7 +734,7 @@
         }
       }
     },
-    "/nfce/captcha/image/{challenge_id}": {
+    "/api/v1/nfce/captcha/image/{challenge_id}": {
       "get": {
         "tags": [
           "captcha"
@@ -788,7 +786,7 @@
         }
       }
     },
-    "/products": {
+    "/api/v1/products": {
       "get": {
         "tags": [
           "products"
@@ -874,7 +872,7 @@
         }
       }
     },
-    "/products/{id}": {
+    "/api/v1/products/{id}": {
       "get": {
         "tags": [
           "products"
@@ -931,7 +929,7 @@
         }
       }
     },
-    "/products/{id}/history": {
+    "/api/v1/products/{id}/history": {
       "get": {
         "tags": [
           "products"
@@ -1004,7 +1002,7 @@
         }
       }
     },
-    "/supermarkets": {
+    "/api/v1/supermarkets": {
       "get": {
         "tags": [
           "supermarkets"
@@ -1061,7 +1059,7 @@
         }
       }
     },
-    "/supermarkets/{id}/products": {
+    "/api/v1/supermarkets/{id}/products": {
       "get": {
         "tags": [
           "supermarkets"
@@ -1137,7 +1135,7 @@
         }
       }
     },
-    "/supermarkets/{id}": {
+    "/api/v1/supermarkets/{id}": {
       "delete": {
         "tags": [
           "supermarkets"
@@ -1207,7 +1205,7 @@
         }
       }
     },
-    "/users/me": {
+    "/api/v1/users/me": {
       "get": {
         "tags": [
           "auth"
@@ -1233,7 +1231,7 @@
         }
       }
     },
-    "/admin/users": {
+    "/api/v1/admin/users": {
       "get": {
         "tags": [
           "admin"
@@ -1293,7 +1291,7 @@
         }
       }
     },
-    "/admin/users/{id}/role": {
+    "/api/v1/admin/users/{id}/role": {
       "patch": {
         "tags": [
           "admin"
@@ -1375,7 +1373,7 @@
         }
       }
     },
-    "/admin/products/needs-review": {
+    "/api/v1/admin/products/needs-review": {
       "get": {
         "tags": [
           "admin"
@@ -1435,7 +1433,7 @@
         }
       }
     },
-    "/admin/products/batch-assign": {
+    "/api/v1/admin/products/batch-assign": {
       "post": {
         "tags": [
           "admin"
@@ -1484,7 +1482,7 @@
         }
       }
     },
-    "/admin/products/merge": {
+    "/api/v1/admin/products/merge": {
       "post": {
         "tags": [
           "admin"
@@ -1557,7 +1555,7 @@
         }
       }
     },
-    "/admin/products/{id}": {
+    "/api/v1/admin/products/{id}": {
       "patch": {
         "tags": [
           "admin"
@@ -1704,7 +1702,7 @@
         }
       }
     },
-    "/admin/supermarkets/merge": {
+    "/api/v1/admin/supermarkets/merge": {
       "post": {
         "tags": [
           "admin"
@@ -1779,12 +1777,6 @@
       "get": {
         "tags": [
           "metrics"
-        ],
-        "servers": [
-          {
-            "url": "/",
-            "description": "Process root (no API prefix)"
-          }
         ],
         "summary": "Runtime metrics (unauthenticated)",
         "security": [],

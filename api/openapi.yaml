@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: meupreco API
+  title: Meu Preço API
   version: 1.0.0
   description: |
     meupreco ingests Brazilian NFC-e (fiscal receipts), matches each line to a
@@ -16,17 +16,20 @@ info:
     - Requests are rate limited per client IP and, once authenticated, per
       user. A throttled request answers `429` with `error.code = "rate_limited"`
       and a `Retry-After` header.
+
 servers:
-  - url: /api/v1
+  - url: "{protocol}://{hostpath}"
     description: >
-      Versioned API root. Every authenticated operation (auth, nfce, captcha,
-      products, supermarkets, users, admin) is served under this prefix and is
-      rate limited per client IP and, once authenticated, per user.
-  - url: /
-    description: >
-      Process root. Operational endpoints only: /healthz, /readyz and /metrics
-      are served here without the /api/v1 prefix and without authentication.
-      Each of those operations overrides the server list to this root.
+      Define here your Meu Preço API instance URL, defaults to localhost:8080. This is the URL the browser will use on the "Try it out" sections
+    variables:
+      protocol:
+        default: http
+        enum:
+          - http
+          - https
+      hostpath:
+        default: localhost:8080
+
 security:
   - bearerAuth: []
 tags:
@@ -40,12 +43,11 @@ tags:
   - name: metrics
 
 paths:
+
   /healthz:
     get:
       tags: [health]
       servers:
-        - url: /
-          description: Process root (no API prefix)
       summary: Liveness probe
       security: []
       responses:
@@ -54,12 +56,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Status" }
+
   /readyz:
     get:
       tags: [health]
       servers:
-        - url: /
-          description: Process root (no API prefix)
       summary: Readiness probe (database ping)
       security: []
       responses:
@@ -74,7 +75,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Status" }
 
-  /auth/register:
+  /api/v1/auth/register:
     post:
       tags: [auth]
       summary: Create an account (role "user")
@@ -107,7 +108,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /auth/login:
+  /api/v1/auth/login:
     post:
       tags: [auth]
       summary: Authenticate and obtain an access+refresh pair
@@ -135,7 +136,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /auth/refresh:
+  /api/v1/auth/refresh:
     post:
       tags: [auth]
       summary: Rotate a refresh token into a new pair
@@ -167,7 +168,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /auth/me:
+  /api/v1/auth/me:
     get:
       tags: [auth]
       summary: The authenticated user (name, email, role, created_at)
@@ -182,7 +183,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /nfce/new:
+  /api/v1/nfce/new:
     post:
       tags: [nfce]
       summary: Draft a receipt (fetch + classify; nothing committed)
@@ -237,7 +238,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /nfce/submit:
+  /api/v1/nfce/submit:
     post:
       tags: [nfce]
       summary: Confirm a preview and commit it atomically
@@ -286,7 +287,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /nfce/delete:
+  /api/v1/nfce/delete:
     post:
       tags: [nfce]
       summary: Delete a receipt, its price logs and its drafts
@@ -326,7 +327,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /nfce/captcha:
+  /api/v1/nfce/captcha:
     get:
       tags: [captcha]
       summary: Captcha challenge state
@@ -415,7 +416,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-  /nfce/captcha/image/{challenge_id}:
+  /api/v1/nfce/captcha/image/{challenge_id}:
     get:
       tags: [captcha]
       summary: Challenge image proxy (no-store)
@@ -444,7 +445,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /products:
+  /api/v1/products:
     get:
       tags: [products]
       summary: Search the shared product catalog
@@ -470,7 +471,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /products/{id}:
+  /api/v1/products/{id}:
     get:
       tags: [products]
       summary: Fetch one product
@@ -496,7 +497,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /products/{id}/history:
+  /api/v1/products/{id}/history:
     get:
       tags: [products]
       summary: Price curve + per-unit aggregate for a product
@@ -525,7 +526,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /supermarkets:
+  /api/v1/supermarkets:
     get:
       tags: [supermarkets]
       summary: List emitters
@@ -547,7 +548,7 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /supermarkets/{id}/products:
+  /api/v1/supermarkets/{id}/products:
     get:
       tags: [supermarkets]
       summary: Products + latest logged price at one store
@@ -575,7 +576,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /supermarkets/{id}:
+  /api/v1/supermarkets/{id}:
     delete:
       tags: [supermarkets]
       summary: Delete a supermarket (admin only, guarded by receipts)
@@ -609,7 +610,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /users/me:
+  /api/v1/users/me:
     get:
       tags: [auth]
       summary: Alias of /auth/me
@@ -624,7 +625,7 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /admin/users:
+  /api/v1/admin/users:
     get:
       tags: [admin]
       summary: List users (admin)
@@ -648,7 +649,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /admin/users/{id}/role:
+  /api/v1/admin/users/{id}/role:
     patch:
       tags: [admin]
       summary: Promote/demote a user (admin)
@@ -685,7 +686,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /admin/products/needs-review:
+  /api/v1/admin/products/needs-review:
     get:
       tags: [admin]
       summary: Needs-review queue (admin)
@@ -709,7 +710,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /admin/products/batch-assign:
+  /api/v1/admin/products/batch-assign:
     post:
       tags: [admin]
       summary: Resolve needs-review rows (admin)
@@ -735,7 +736,7 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
-  /admin/products/merge:
+  /api/v1/admin/products/merge:
     post:
       tags: [admin]
       summary: Merge two products (admin)
@@ -771,7 +772,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /admin/products/{id}:
+  /api/v1/admin/products/{id}:
     patch:
       tags: [admin]
       summary: Curate a product's name/brand/unit (admin)
@@ -837,7 +838,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
-  /admin/supermarkets/merge:
+  /api/v1/admin/supermarkets/merge:
     post:
       tags: [admin]
       summary: Merge two emitters by CNPJ (admin)
@@ -877,9 +878,6 @@ paths:
   /metrics:
     get:
       tags: [metrics]
-      servers:
-        - url: /
-          description: Process root (no API prefix)
       summary: Runtime metrics (unauthenticated)
       security: []
       responses:

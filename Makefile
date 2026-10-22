@@ -75,7 +75,7 @@ openapi-check:
 openapi-diff:
 	cd web && npm run check-diff
 
-bundle:
+bundle: openapi-generate
 	cd web && node scripts/build-bundle.mjs
 
 static: bundle

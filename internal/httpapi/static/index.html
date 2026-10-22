@@ -78,15 +78,6 @@
         filter: true,
         persistAuthorization: false,
         tryItOutEnabledByDefault: false,
-        requestInterceptor: function(request) {
-          if (request.url && request.url.startsWith("/auth")) {
-            const token = localStorage.getItem("bearer_token");
-            if (token) {
-              request.headers.Authorization = `Bearer ${token}`;
-            }
-          }
-          return request;
-        },
         onComplete: function() {
           console.log("Swagger UI initialized");
         }
