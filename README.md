@@ -11,7 +11,17 @@
     - [Run with make](#run-with-make)
     - [env](#env)
     - [Hardening & operations](#hardening-operations)
-    - [Container image:](#container-image)
+    - [Container image](#container-image)
+      - [Building the image locally](#building-the-image-locally)
+      - [Secrets and environment](#secrets-and-environment)
+      - [Migrations against an external PostgreSQL instance](#migrations-against-an-external-postgresql-instance)
+      - [Running the API with `docker run`](#running-the-api-with-docker-run)
+      - [Running the complete local stack with Docker Compose](#running-the-complete-local-stack-with-docker-compose)
+      - [Using a published image](#using-a-published-image)
+      - [Checking health endpoints](#checking-health-endpoints)
+      - [Viewing logs and stopping the stack](#viewing-logs-and-stopping-the-stack)
+      - [Upgrading the image and applying pending migrations](#upgrading-the-image-and-applying-pending-migrations)
+      - [External PostgreSQL database](#external-postgresql-database)
   - [Documentation](#documentation)
   - [Inspiration](#inspiration)
   - [Non-goals](#non-goals)
@@ -92,7 +102,7 @@ price_logs ──► products history, supermarket comparison API
 
 ## Features
 
-- [ ] Docker image — TODO: Docker will be implemented soon
+- [ ] Docker image
 - [x] API Docs — OpenAPI validation & JSON generation via GitHub Actions, GitHub
       Pages deployment, `make openapi-generate/check/diff/bundle/static` targets
 - [x] Receipt ingestion pipeline — QR-code/Access key parsing, SEFAZ portal
@@ -221,18 +231,18 @@ Missing DB vars (or a too-short `JWT_SECRET`, or a missing `ADMIN_EMAIL`/
 committed.
 
 > [!IMPORTANT]
-> `POSTGRES_HOST` is **required and has no default**. `localhost` means
-> *the machine running the process*: the host for a native `make run`, but the
+> `POSTGRES_HOST` is **required and has no default**. `localhost` means _the
+> machine running the process_: the host for a native `make run`, but the
 > container itself when the API runs in Docker — where it fails with a
 > misleading `dial tcp 127.0.0.1:5432: connect: connection refused`. Set it
 > explicitly to whatever the process must reach:
 >
-> | Where the process runs | `POSTGRES_HOST` |
-> | ---------------------- | --------------- |
-> | native (`make run`)    | `localhost` |
-> | container in the same Docker network as the database | the database service name (e.g. `postgres`) |
+> | Where the process runs                                     | `POSTGRES_HOST`                                                                                                                     |
+> | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+> | native (`make run`)                                        | `localhost`                                                                                                                         |
+> | container in the same Docker network as the database       | the database service name (e.g. `postgres`)                                                                                         |
 > | container reaching a database published on the Docker host | the Docker bridge gateway, e.g. `172.17.0.1` (`docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`) |
-> | container with `--network host` | `localhost` (the host namespace is shared) |
+> | container with `--network host`                            | `localhost` (the host namespace is shared)                                                                                          |
 
 The initial admin is created **at boot, before the HTTP listener starts** (no
 API call needed): the server hashes `ADMIN_PASSWORD` and inserts the admin the
@@ -266,33 +276,170 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
 - **Contract** — `api/openapi.yaml` is the versioned source of truth for the
   HTTP surface; the SPA consumes only that.
 
-### Container image:
+### Docker
 
-The image ships the API server and the migration tool, runs as a non-root user
+The image ships the API server and the migration tool, runs as a non-root user,
 and has no Go toolchain inside. PostgreSQL is **not** part of the image: it
 stays an external service (managed instance or your own container).
 
+#### Building the image locally
+
 ```sh
 docker build -t meupreco:local .
+```
 
-# migrations (idempotent) — the same image, the same environment
+#### Secrets and environment
+
+Required environment variables are supplied via an env file (`--env-file`) or
+inline (`-e`). The server never reads a `.env` file at runtime — the binary only
+sees what is passed to it.
+
+```sh
+# Build an env file from the example, then fill real values
+cp .env.docker.example .env
+# edit .env with your secrets, then:
 docker run --rm --env-file .env meupreco:local migrate up
+```
 
-# the API — POSTGRES_HOST must be reachable *from the container*
+Do **not** commit the `.env` file that contains real credentials.
+
+#### Migrations against an external PostgreSQL instance
+
+> [!NOTE]
+> `docker run` does not create PostgreSQL or apply migrations automatically. Use
+> the `migrate` subcommand to run migrations idempotently against an existing
+> database:
+
+```sh
+docker run --rm \
+  -e POSTGRES_HOST=your-postgres-host \
+  -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USERNAME=postgres \
+  -e POSTGRES_PASSWORD=secretpassword \
+  -e DATABASE_NAME=meupreco \
+  -e JWT_SECRET=your-jwt-secret \
+  -e ADMIN_EMAIL=admin@example.com \
+  -e ADMIN_PASSWORD=strong-password \
+  meupreco:local migrate up
+```
+
+The migration tool is included in the image; it connects to the provided
+PostgreSQL instance and applies embedded migrations.
+
+#### Running the API with `docker run`
+
+```sh
+docker run --rm \
+  -p 8080:8080 \
+  --env-file .env \
+  meupreco:local
+```
+
+- `POSTGRES_HOST` is mandatory: `localhost` inside the container refers to the
+  container itself, not your database. Set it to a reachable host from the
+  container (e.g., the Docker bridge gateway, a managed DB hostname, or the name
+  of a Compose service).
+- `PORT` (default `8080`) is the port the API listens on. Publish the same port
+  (`-p 8080:8080`) or override both (`-e PORT=9000 -p 9000:9000`).
+- The image never reads a `.env` file; pass variables with `--env-file` or `-e`.
+
+#### Running the complete local stack with Docker Compose
+
+```sh
+cp .env.docker.example .env
+# edit .env with real values
+docker compose --env-file .env up -d --build
+```
+
+This starts PostgreSQL, applies migrations, and starts the API. The API can
+resolve PostgreSQL via the service name `postgres` — no `localhost` needed.
+
+Re-running the stack does not reapply destructive migrations; the named
+PostgreSQL data volume persists.
+
+```sh
+# Stop the stack, keep data
+docker compose down
+
+# Remove data volumes intentionally
+docker compose down -v
+```
+
+#### Using a published image
+
+When `MEUPRECO_IMAGE` and `IMAGE_TAG` are set, the same Compose file runs a
+published image without rebuilding locally:
+
+```sh
+docker compose --env-file .env up --build \
+  -e MEUPRECO_IMAGE=your-registry/meupreco \
+  -e IMAGE_TAG=v1.0.0
+```
+
+#### Checking health endpoints
+
+- `GET /healthz` — liveness check. Returns `200` if the process is alive.
+- `GET /readyz` — readiness check. Returns `200` only if the process is alive
+  **and** PostgreSQL is reachable. Use `/healthz` as the container health check;
+  `/readyz` is not suitable because it depends on the external database.
+
+```sh
+curl http://127.0.0.1:8080/healthz   # {"status":"ok"}
+curl http://127.0.0.1:8080/readyz   # {"status":"ok"} or {"status":"not_ready"}
+```
+
+#### Viewing logs and stopping the stack
+
+```sh
+# Stream logs
+docker compose logs -f
+
+# Stop the stack
+docker compose down
+```
+
+#### Upgrading the image and applying pending migrations
+
+When upgrading to a new image version, apply migrations **before** accepting
+traffic. Start with the migration command, then start the API:
+
+```sh
+docker run --rm --env-file .env meupreco:local migrate up
 docker run --rm -p 8080:8080 --env-file .env meupreco:local
 ```
 
-- `POSTGRES_HOST` is mandatory (see the note above): `localhost` inside the
-  container is the container itself, not your database.
-- `PORT` (default `8080`) is the port the API listens on; publish the same
-  value (`-p HOST:CONTAINER_PORT`) or override both (`-e PORT=9000 -p
-  9000:9000`).
-- `GET /healthz` is the container health check (liveness only). `GET /readyz`
-  additionally requires PostgreSQL, so it is not used as the health check.
-- The image never reads a `.env` file: pass the variables with `--env-file`
-  or `-e`. Do not commit that file.
+Or with Compose (recreating only the API service):
 
-TODO: implement docker-compose that pulls dockerhub image?
+```sh
+docker compose --env-file .env up --build --force-recreate app
+```
+
+#### External PostgreSQL database
+
+To use an external or managed PostgreSQL instance (recommended for production),
+override the database credentials and host:
+
+```sh
+docker run --rm \
+  -p 8080:8080 \
+  --env-file .env \
+  -e POSTGRES_HOST=prod-db.example.com \
+  -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USERNAME=meupreco_user \
+  -e POSTGRES_PASSWORD=strong-password \
+  -e DATABASE_NAME=meupreco \
+  meupreco:local
+```
+
+**Important:** The production recommendation is an external or managed
+PostgreSQL service. Running PostgreSQL inside the application image is
+explicitly out of scope — it keeps data lifecycle explicit, avoids accidental
+data loss, and leverages managed service features (backups, encryption,
+monitoring).
+
+The `docker run` command does not create PostgreSQL or automatically apply
+migrations. This keeps data lifecycle and schema changes explicit and avoids
+silently modifying a user-provided database.
 
 ## Documentation
 
