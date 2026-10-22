@@ -1,0 +1,72 @@
+# MeuPreço local development stack
+# Copy to .env from .env.docker.example and fill in real values.
+# This file is gitignored.
+
+services:
+  migrate: # This service ensures the PostgreSQL db is migrated. It is a simple migration service 
+    image: ${MEUPRECO_IMAGE:-meupreco}:${IMAGE_TAG:-local}
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+    # The Docker image has migrate up/down commands
+    command: ["migrate", "up"]
+    environment: # See the env example files for available env vars the server expects
+      # POSTGRES_HOST: postgres # This is optional. The server tries to build a host from the below vars
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_USERNAME: "${POSTGRES_USERNAME:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      DATABASE_NAME: "${POSTGRES_DB:-meupreco}"
+      PORT: "${PORT:-8080}"
+      JWT_SECRET: "${JWT_SECRET}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres: # You can ignore this if you already have a running PostgreSQL server
+    image: postgres:17-alpine
+    user: "${POSTGRES_UID:-999}:${POSTGRES_GID:-999}"
+    environment:
+      POSTGRES_USER: "${POSTGRES_USERNAME:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_DB: "${POSTGRES_DB:-meupreco}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    networks:
+      - meupreco
+
+  app: # The actual API server
+    image: ${MEUPRECO_IMAGE:-meupreco}:${IMAGE_TAG:-local}
+    container_name: meu_preco
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+    ports:
+      - "${API_PORT:-127.0.0.1:8080:8080}"
+    environment:
+      # POSTGRES_HOST: postgres # This is optional. The server tries to build a host from the below vars
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_USERNAME: "${POSTGRES_USERNAME:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      DATABASE_NAME: "${POSTGRES_DB:-meupreco}"
+      PORT: "${PORT:-8080}"
+      JWT_SECRET: "${JWT_SECRET}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - meupreco
+
+networks:
+  meupreco:
+    driver: bridge
+
+volumes:
+  postgres_data:
