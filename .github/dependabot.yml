@@ -27,8 +27,9 @@ updates:
       prefix: "deps"
 
   # Docker base images in Dockerfile
-  - package-ecosystem: "docker"
+  - package-ecosystem: "docker-image"
     directory: "/"
+    target-branch: "master"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -40,8 +41,9 @@ updates:
       prefix: "ci(deps)"
 
   # Docker Compose files (base images in compose_example.yaml)
-  - package-ecosystem: "docker"
+  - package-ecosystem: "docker-compose"
     directory: "/"
+    target-branch: "master"
     schedule:
       interval: "weekly"
       day: "monday"

@@ -64,6 +64,9 @@ jobs:
       APP_GID: "10001"
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Determine tag to verify
         id: tag
         env:
