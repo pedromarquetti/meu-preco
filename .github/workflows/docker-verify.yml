@@ -1,0 +1,210 @@
+name: Verify Published Image
+
+# Verifies a published immutable tag by pulling it, checking the image user,
+# validating the architecture manifest, running a health check, and exercising
+# the Compose stack against a clean volume. Runs on release tags and manual
+# dispatch with a tag input.
+#
+# This workflow is read-only and requires no registry credentials — it pulls
+# the public image from Docker Hub (or the configured MEUPRECO_IMAGE).
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Immutable release tag to verify (e.g., v1.2.3)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ${{ vars.MEUPRECO_IMAGE || 'phlm/meu-preco' }}
+  API_PORT: "127.0.0.1:18080:8080"
+
+jobs:
+  verify:
+    name: Verify release image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: verify
+          POSTGRES_PASSWORD: verify-password
+          POSTGRES_DB: meupreco_verify
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U verify -d meupreco_verify"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_USERNAME: verify
+      POSTGRES_PASSWORD: verify-password
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: meupreco_verify
+      DATABASE_NAME: meupreco_verify
+      JWT_SECRET: verify-only-jwt-secret-with-at-least-32-characters
+      ADMIN_EMAIL: verify-admin@example.com
+      ADMIN_PASSWORD: verify-admin-password
+      APP_UID: "10001"
+      APP_GID: "10001"
+
+    steps:
+      - name: Determine tag to verify
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-$REF_NAME}"
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$tag' is not a semver tag such as v1.2.3"
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Pull published image
+        id: pull
+        run: |
+          set -euo pipefail
+          image="${IMAGE_NAME}:${{ steps.tag.outputs.tag }}"
+          echo "Pulling $image..."
+          docker pull "$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Verify image user is non-root
+        run: |
+          set -euo pipefail
+          image="${{ steps.pull.outputs.image }}"
+          user="$(docker image inspect --format '{{.Config.User}}' "$image")"
+          case "$user" in
+            ""|root|0|0:*)
+              echo "Image runs as root (user='$user'); must run as unprivileged user" >&2
+              exit 1
+              ;;
+          esac
+          echo "Image user: $user"
+
+      - name: Verify architecture manifest
+        run: |
+          set -euo pipefail
+          image="${{ steps.pull.outputs.image }}"
+          echo "Manifest for $image:"
+          docker manifest inspect "$image" | jq -r '.manifests[] | "\(.platform.architecture)/\(.platform.os) \(.digest)"'
+
+      - name: Run migration against test database
+        run: |
+          set -euo pipefail
+          image="${{ steps.pull.outputs.image }}"
+          docker run --rm \
+            --network host \
+            -e POSTGRES_HOST=127.0.0.1 \
+            -e POSTGRES_PORT=5432 \
+            -e POSTGRES_USERNAME \
+            -e POSTGRES_PASSWORD \
+            -e DATABASE_NAME \
+            -e JWT_SECRET \
+            -e ADMIN_EMAIL \
+            -e ADMIN_PASSWORD \
+            -e PORT=18080 \
+            "$image" migrate up
+
+      - name: Start API container and verify /healthz
+        run: |
+          set -euo pipefail
+          image="${{ steps.pull.outputs.image }}"
+          container=meupreco-verify
+
+          docker_args=(
+            --network host
+            -e POSTGRES_HOST=127.0.0.1
+            -e POSTGRES_PORT=5432
+            -e POSTGRES_USERNAME
+            -e POSTGRES_PASSWORD
+            -e DATABASE_NAME
+            -e JWT_SECRET
+            -e ADMIN_EMAIL
+            -e ADMIN_PASSWORD
+            -e PORT=18080
+          )
+
+          docker run -d --name "$container" "${docker_args[@]}" "$image"
+
+          cleanup() {
+            docker stop -t 15 "$container" >/dev/null 2>&1 || true
+            docker rm -f "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS -o /dev/null "http://127.0.0.1:18080/healthz" 2>/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "API did not become healthy in time" >&2
+              docker logs "$container" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+
+          curl -fsS "http://127.0.0.1:18080/readyz"
+          echo "Published image health checks passed"
+
+      - name: Prepare Compose test environment
+        run: |
+          set -euo pipefail
+          env_file="$RUNNER_TEMP/meupreco-verify.env"
+          {
+            printf 'POSTGRES_USERNAME=%s\n' "$POSTGRES_USERNAME"
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'POSTGRES_HOST=%s\n' "$POSTGRES_HOST"
+            printf 'POSTGRES_DB=%s\n' "$POSTGRES_DB"
+            printf 'JWT_SECRET=%s\n' "$JWT_SECRET"
+            printf 'ADMIN_EMAIL=%s\n' "$ADMIN_EMAIL"
+            printf 'ADMIN_PASSWORD=%s\n' "$ADMIN_PASSWORD"
+            printf 'APP_UID=%s\n' "$APP_UID"
+            printf 'APP_GID=%s\n' "$APP_GID"
+            printf 'API_PORT=%s\n' "$API_PORT"
+            printf 'MEUPRECO_IMAGE=%s\n' "$IMAGE_NAME"
+            printf 'IMAGE_TAG=%s\n' "${{ steps.tag.outputs.tag }}"
+          } > "$env_file"
+          chmod 0600 "$env_file"
+
+      - name: Start Compose stack with published image
+        run: |
+          set -euo pipefail
+          env_file="$RUNNER_TEMP/meupreco-verify.env"
+          compose=(docker compose --env-file "$env_file" -f compose_example.yaml)
+
+          cleanup() {
+            "${compose[@]}" ps >&2 || true
+            "${compose[@]}" logs --no-color >&2 || true
+            "${compose[@]}" down -v --remove-orphans >&2 || true
+          }
+          trap cleanup EXIT
+
+          "${compose[@]}" up --build -d --wait --wait-timeout 180
+
+          curl -fsS "http://127.0.0.1:18080/healthz"
+          curl -fsS "http://127.0.0.1:18080/readyz"
+
+          "${compose[@]}" down -v --remove-orphans
+          trap - EXIT

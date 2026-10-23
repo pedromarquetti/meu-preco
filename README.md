@@ -11,7 +11,7 @@
     - [Run with make](#run-with-make)
     - [env](#env)
     - [Hardening & operations](#hardening-operations)
-    - [Container image](#container-image)
+    - [Docker](#docker)
       - [Building the image locally](#building-the-image-locally)
       - [Secrets and environment](#secrets-and-environment)
       - [Migrations against an external PostgreSQL instance](#migrations-against-an-external-postgresql-instance)
@@ -22,6 +22,12 @@
       - [Viewing logs and stopping the stack](#viewing-logs-and-stopping-the-stack)
       - [Upgrading the image and applying pending migrations](#upgrading-the-image-and-applying-pending-migrations)
       - [External PostgreSQL database](#external-postgresql-database)
+  - [Release verification & maintenance](#release-verification-maintenance)
+    - [Image naming and supported tags](#image-naming-and-supported-tags)
+    - [Release verification](#release-verification)
+    - [Migration & upgrade order](#migration-upgrade-order)
+    - [Rollback procedure](#rollback-procedure)
+    - [Dependency updates](#dependency-updates)
   - [Documentation](#documentation)
   - [Inspiration](#inspiration)
   - [Non-goals](#non-goals)
@@ -441,11 +447,135 @@ The `docker run` command does not create PostgreSQL or automatically apply
 migrations. This keeps data lifecycle and schema changes explicit and avoids
 silently modifying a user-provided database.
 
+## Release verification & maintenance
+
+### Image naming and supported tags
+
+Images are published to `phlm/meu-preco` (configurable via `MEUPRECO_IMAGE`).
+Each release produces the following tags:
+
+| Tag pattern             | Mutability | Description                                     |
+| ----------------------- | ---------- | ----------------------------------------------- |
+| `v1.2.3`                | immutable  | Exact semver release                            |
+| `sha-<full-commit-sha>` | immutable  | Reproducible build from a specific commit       |
+| `latest`                | mutable    | Points to the latest non-pre-release semver tag |
+
+Pre-release tags (e.g., `v1.2.3-rc.1`) do **not** update `latest`.
+
+### Release verification
+
+A maintainer can validate a published image without rebuilding locally:
+
+```sh
+# Pull the immutable tag
+docker pull phlm/meu-preco:v1.2.3
+
+# Verify image user is non-root (should be "app" or UID 10001)
+docker image inspect --format '{{.Config.User}}' phlm/meu-preco:v1.2.3
+
+# Verify architecture manifest (should include linux/amd64)
+docker manifest inspect phlm/meu-preco:v1.2.3
+
+# Run a quick health check against a test database
+docker run --rm \
+  -e POSTGRES_HOST=127.0.0.1 \
+  -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USERNAME=test \
+  -e POSTGRES_PASSWORD=test \
+  -e DATABASE_NAME=meupreco_test \
+  -e JWT_SECRET=test-secret-with-at-least-32-characters \
+  -e ADMIN_EMAIL=test@example.com \
+  -e ADMIN_PASSWORD=test-password \
+  phlm/meu-preco:v1.2.3 migrate up
+
+docker run -d --name meupreco-verify \
+  --network host \
+  -e POSTGRES_HOST=127.0.0.1 \
+  -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USERNAME=test \
+  -e POSTGRES_PASSWORD=test \
+  -e DATABASE_NAME=meupreco_test \
+  -e JWT_SECRET=test-secret-with-at-least-32-characters \
+  -e ADMIN_EMAIL=test@example.com \
+  -e ADMIN_PASSWORD=test-password \
+  phlm/meu-preco:v1.2.3
+
+# Wait for /healthz, then check /readyz
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8080/readyz
+
+docker stop -t 15 meupreco-verify && docker rm meupreco-verify
+```
+
+The GitHub Actions workflow `.github/workflows/docker-verify.yml` automates this
+verification on every release tag and on manual dispatch.
+
+### Migration & upgrade order
+
+When upgrading to a new image version:
+
+1. **Pull the new image** (or build locally)
+2. **Run migrations first** — apply pending schema changes before the new binary
+   serves traffic:
+   ```sh
+   docker run --rm --env-file .env phlm/meu-preco:v1.2.3 migrate up
+   ```
+3. **Start the new API** — only after migrations succeed:
+   ```sh
+   docker run --rm -p 8080:8080 --env-file .env phlm/meu-preco:v1.2.3
+   ```
+4. **Verify `/readyz`** — confirms the database is reachable and migrated.
+
+With Compose:
+
+```sh
+docker compose --env-file .env up --build --force-recreate app
+# or for a published image:
+docker compose --env-file .env up -d \
+  -e MEUPRECO_IMAGE=phlm/meu-preco \
+  -e IMAGE_TAG=v1.2.3
+```
+
+### Rollback procedure
+
+Rolling back the application image **does not** automatically roll back database
+migrations. To roll back safely:
+
+1. **Stop the new image** (drain connections if behind a load balancer)
+2. **Do NOT run `migrate down`** unless you have a tested, reversible migration
+   and a recent database backup
+3. **Start the previous image tag** (e.g., `v1.2.2`) with the same environment —
+   the database schema is forward-compatible within a minor version
+4. Verify `/readyz` responds successfully
+
+If a migration introduced breaking changes that require a database rollback:
+
+- Restore the database from a pre-migration backup
+- Then deploy the previous image
+
+**Best practice:** Always take a database snapshot/backup before applying
+migrations in production.
+
+### Dependency updates
+
+Docker actions, base images, and workflow files are kept up to date via
+Dependabot (see `.github/dependabot.yml`). The following are monitored:
+
+- GitHub Actions (`docker/*`, `actions/*`, etc.)
+- Base images (`golang:`, `alpine:`, `postgres:` in `Dockerfile` and
+  `compose_example.yaml`)
+- Go module dependencies (`go.mod`)
+
+Review and merge Dependabot PRs promptly. Version pins in the `Dockerfile`
+(`golang:1.26-alpine`, `alpine:3.22`, `postgres:17-alpine`) are revisited during
+each release rather than silently tracking moving tags.
+
 ## Documentation
 
 > [!NOTE]
 > The Swagger API docs can be found
-> [here](https://pedromarquetti.github.io/meu-preco/)
+> [here](https://pedromarquetti.github.io/meu-preco/), the UI can be configured
+> to point to your desired API instance
 
 - `api/openapi.yaml` — versioned API contract (the SPA consumes only this).
 - Local interactive API documentation is available at `/docs/` (or `/`) when the
