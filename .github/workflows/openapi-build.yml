@@ -36,7 +36,7 @@ jobs:
         run: cd web && npm run check-diff
 
       - name: Upload OpenAPI JSON artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openapi.json
           path: api/openapi.json
