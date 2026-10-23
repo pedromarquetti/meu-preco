@@ -5,11 +5,12 @@
 services:
   migrate: # This service ensures the PostgreSQL db is migrated. It is a simple migration service 
     image: ${MEUPRECO_IMAGE:-meupreco}:${IMAGE_TAG:-local}
+    container_name: meupreco_migrate
     user: "${APP_UID:-10001}:${APP_GID:-10001}"
     # The Docker image has migrate up/down commands
     command: ["migrate", "up"]
     environment: # See the env example files for available env vars the server expects
-      # POSTGRES_HOST: postgres # This is optional. The server tries to build a host from the below vars
+      POSTGRES_HOST: "${POSTGRES_HOST:-postgres}"
       POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
       POSTGRES_USERNAME: "${POSTGRES_USERNAME:-postgres}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
@@ -21,10 +22,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - meupreco
 
   postgres: # You can ignore this if you already have a running PostgreSQL server
     image: postgres:17-alpine
-    user: "${POSTGRES_UID:-999}:${POSTGRES_GID:-999}"
+    container_name: meupreco_postgres
     environment:
       POSTGRES_USER: "${POSTGRES_USERNAME:-postgres}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
@@ -47,7 +50,7 @@ services:
     ports:
       - "${API_PORT:-127.0.0.1:8080:8080}"
     environment:
-      # POSTGRES_HOST: postgres # This is optional. The server tries to build a host from the below vars
+      POSTGRES_HOST: "${POSTGRES_HOST:-postgres}"
       POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
       POSTGRES_USERNAME: "${POSTGRES_USERNAME:-postgres}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
