@@ -32,7 +32,7 @@ pre-push:
 	$(MAKE) ci
 
 test:
-	go test ./... -race -count=1
+	@$(ENV_LOAD)	go test ./... -race -count=1
 
 lint: 	fmtcheck vet staticcheck
 

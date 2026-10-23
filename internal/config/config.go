@@ -291,7 +291,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: JWT_REFRESH_TTL must be a positive duration")
 	}
 	if len(c.JWTSecret) < 32 {
-		return fmt.Errorf("config: JWT_SECRET must be at least 32 characters")
+		return fmt.Errorf("config: JWT_SECRET (%s) must be at least 32 characters, but has %d", c.JWTSecret, len(c.JWTSecret))
 	}
 	if c.SEFAZFetchRPS < 1 {
 		return fmt.Errorf("config: SEFAZ_FETCH_RPS must be >= 1")

@@ -29,6 +29,8 @@
     - [Rollback procedure](#rollback-procedure)
     - [Dependency updates](#dependency-updates)
   - [Documentation](#documentation)
+  - [Development](#development)
+    - [Requirements](#requirements)
   - [Inspiration](#inspiration)
   - [Non-goals](#non-goals)
 
@@ -600,6 +602,23 @@ each release rather than silently tracking moving tags.
   `dist/web/` bundle. The workflow validates the contract, generates JSON,
   builds the static bundle, and publishes both the interactive documentation and
   raw YAML/JSON specifications.
+
+## Development
+
+Help is always welcome!
+
+### Requirements
+
+```sh
+# Default app required env vars
+export POSTGRES_USERNAME=YourUser
+export POSTGRES_PASSWORD=Yourpwd
+export POSTGRES_HOST=127.0.0.1
+export DATABASE_NAME=meupreco_test
+
+# Test Database name (separate from prod db)
+export TEST_DATABASE_NAME=meupreco_test
+```
 
 ## Inspiration
 
