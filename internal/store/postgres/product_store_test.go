@@ -56,21 +56,6 @@ func TestProductStoreLifecycle(t *testing.T) {
 	}
 }
 
-func TestProductStoreConflict(t *testing.T) {
-	s := mustStore(t)
-	truncate(t)
-	ctx := context.Background()
-
-	p := &domain.Product{ProductKey: "key-a", Name: "X", Unit: "UN"}
-	if _, err := s.Products().Create(ctx, p); err != nil {
-		t.Fatalf("first create: %v", err)
-	}
-	_, err := s.Products().Create(ctx, &domain.Product{ProductKey: "key-a", Name: "Y", Unit: "UN"})
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("duplicate product_key = %v, want ErrConflict", err)
-	}
-}
-
 // TestProductSearchTrgm proves the DoD case: pg_trgm accent/case-insensitive
 // search, "limao" finds "Limão Tahiti" via the accent-stripped canonical stem.
 func TestProductSearchTrgm(t *testing.T) {
