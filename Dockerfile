@@ -4,7 +4,7 @@
 # Build stage: both binaries (API server + migration tool) come from the same
 # Go toolchain, so the runtime image never needs Go.
 # ---------------------------------------------------------------------------
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 
 WORKDIR /src
 
