@@ -63,6 +63,14 @@ jobs:
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "$tag" > "$RUNNER_TEMP/release-tag.txt"
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tag
+          path: ${{ runner.temp }}/release-tag.txt
+          retention-days: 1
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v4

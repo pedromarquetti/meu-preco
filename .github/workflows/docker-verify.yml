@@ -2,28 +2,27 @@ name: Verify Published Image
 
 # Verifies a published immutable tag by pulling it, checking the image user,
 # validating the architecture manifest, running a health check, and exercising
-# the Compose stack against a clean volume. Runs on release tags and manual
-# dispatch with a tag input.
+# the Compose stack against a clean volume.
+#
+# This workflow runs only after the "Publish Docker image" workflow completes
+# successfully. It reads the release tag from the artifact uploaded by that
+# workflow so both manual and tag-based publishes are verified correctly.
 #
 # This workflow is read-only and requires no registry credentials — it pulls
 # the public image from Docker Hub (or the configured MEUPRECO_IMAGE).
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Immutable release tag to verify (e.g., v1.2.3)
-        required: true
-        type: string
+  workflow_run:
+    workflows: ["Publish Docker image"]
+    types:
+      - completed
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: docker-verify-${{ github.workflow }}-${{ github.ref }}
+  group: docker-verify-${{ github.event.workflow_run.id }}
   cancel-in-progress: true
 
 env:
@@ -64,24 +63,32 @@ jobs:
       APP_GID: "10001"
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Determine tag to verify
-        id: tag
+      - name: Download release metadata from publish workflow
         env:
-          INPUT_TAG: ${{ inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="${INPUT_TAG:-$REF_NAME}"
+          mkdir -p "$RUNNER_TEMP/release"
+          gh run download "${{ github.event.workflow_run.id }}" \
+            --repo "${{ github.repository }}" \
+            --name release-tag \
+            --dir "$RUNNER_TEMP/release"
 
+      - name: Determine tag to verify from artifact
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="$(tr -d '[:space:]' < "$RUNNER_TEMP/release/release-tag.txt")"
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Tag '$tag' is not a semver tag such as v1.2.3"
             exit 1
           fi
-
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository at release ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
 
       - name: Pull published image
         id: pull
