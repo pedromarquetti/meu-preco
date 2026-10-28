@@ -152,4 +152,3 @@ created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 CREATE INDEX commodity_synonyms_trgm_idx
 ON commodity_synonyms USING gin (synonym gin_trgm_ops,
 canonical_name gin_trgm_ops);
-
