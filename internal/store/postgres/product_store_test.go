@@ -9,7 +9,7 @@ import (
 )
 
 func TestProductStoreLifecycle(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -59,7 +59,7 @@ func TestProductStoreLifecycle(t *testing.T) {
 // TestProductSearchTrgm proves the DoD case: pg_trgm accent/case-insensitive
 // search, "limao" finds "Limão Tahiti" via the accent-stripped canonical stem.
 func TestProductSearchTrgm(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -99,7 +99,7 @@ func TestProductSearchTrgm(t *testing.T) {
 }
 
 func TestProductNotFound(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -112,7 +112,7 @@ func TestProductNotFound(t *testing.T) {
 }
 
 func TestProductUpsertMany(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -157,7 +157,7 @@ func TestProductUpsertMany(t *testing.T) {
 }
 
 func TestProductUpsertManyChunked(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -180,7 +180,7 @@ func TestProductUpsertManyChunked(t *testing.T) {
 }
 
 func TestProductNearestMatch(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 

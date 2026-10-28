@@ -13,7 +13,7 @@ import (
 )
 
 func TestSearchFiltered(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -80,7 +80,7 @@ func TestSearchFiltered(t *testing.T) {
 }
 
 func TestProductUpdate(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -122,7 +122,7 @@ func TestProductUpdate(t *testing.T) {
 }
 
 func TestProductDeleteGuard(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -160,7 +160,7 @@ func TestProductDeleteGuard(t *testing.T) {
 }
 
 func TestSupermarketListRePointDelete(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -236,7 +236,7 @@ func TestSupermarketListRePointDelete(t *testing.T) {
 }
 
 func TestUserListUpdateRole(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -290,7 +290,7 @@ func TestUserListUpdateRole(t *testing.T) {
 }
 
 func TestNfceDelete(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -305,7 +305,7 @@ func TestNfceDelete(t *testing.T) {
 }
 
 func TestPreviewDeleteByAccessKey(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -372,7 +372,7 @@ func seedPriceLog(t *testing.T, s *Store, sm *domain.Supermarket, p *domain.Prod
 }
 
 func TestPriceLogHistory(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -426,7 +426,7 @@ func pointsOrderedAsc(pts []domain.PricePoint) bool {
 }
 
 func TestPriceLogLatestBySupermarket(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -467,7 +467,7 @@ func TestPriceLogLatestBySupermarket(t *testing.T) {
 }
 
 func TestPriceLogNeedsReview(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -506,7 +506,7 @@ func TestPriceLogNeedsReview(t *testing.T) {
 }
 
 func TestPriceLogSetProduct(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -548,7 +548,7 @@ func TestPriceLogSetProduct(t *testing.T) {
 }
 
 func TestPriceLogRePointAndDelete(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 

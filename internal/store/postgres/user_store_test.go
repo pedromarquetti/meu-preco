@@ -9,7 +9,7 @@ import (
 )
 
 func TestUserStoreLifecycle(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -48,7 +48,7 @@ func TestUserStoreLifecycle(t *testing.T) {
 }
 
 func TestUserStoreDuplicateEmail(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -62,7 +62,7 @@ func TestUserStoreDuplicateEmail(t *testing.T) {
 }
 
 func TestUserStoreNotFound(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
