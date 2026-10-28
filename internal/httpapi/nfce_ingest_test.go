@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,7 +26,11 @@ import (
 	"meupreco/internal/testdb"
 )
 
-var testPgStore *pstore.Store
+var (
+	testStoreOnce sync.Once
+	testStoreErr  error
+	testPgStore   *pstore.Store
+)
 
 // Two-phase ingestion end-to-end (POST /api/v1/nfce/new + /nfce/submit)
 // against a real postgres store. The phase DoD "needs_review invisible to
@@ -34,7 +38,8 @@ var testPgStore *pstore.Store
 // NULL + needs_review flag); the public read endpoint itself filters them out.
 //
 // This suite shares the MEUPRECO_TEST_DATABASE_URL database with the
-// store/postgres package. TestMain resets its schema (Down+Up) once per package.
+// store/postgres package. The first integration test resets its schema
+// (Down+Up) once for the rest of the package.
 
 type pgResolver struct{ receipt *domain.Nfce }
 
@@ -44,6 +49,27 @@ func (r pgResolver) Resolve(_ context.Context, _ nfce.AccessKey, _ string) (*dom
 
 func integrationStore(t *testing.T) *pstore.Store {
 	t.Helper()
+	testStoreOnce.Do(func() {
+		dsn, err := testdb.RequireDSN()
+		if err != nil {
+			testStoreErr = err
+			return
+		}
+		ctx := context.Background()
+		if err := testdb.Reset(ctx, dsn); err != nil {
+			testStoreErr = fmt.Errorf("reset schema: %w", err)
+			return
+		}
+		pool, err := testdb.Open(ctx, dsn)
+		if err != nil {
+			testStoreErr = err
+			return
+		}
+		testPgStore = pstore.NewFromPool(pool)
+	})
+	if testStoreErr != nil {
+		t.Fatalf("postgres test setup: %v", testStoreErr)
+	}
 	return testPgStore
 }
 
