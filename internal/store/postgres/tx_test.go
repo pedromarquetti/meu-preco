@@ -13,7 +13,7 @@ import (
 // TestStoreTxCommit verifies Stores.Tx commits a group of writes atomically:
 // everything fn wrote is visible once it returns nil.
 func TestStoreTxCommit(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -39,7 +39,7 @@ func TestStoreTxCommit(t *testing.T) {
 
 // TestStoreTxRollback verifies that a failing fn rolls every write back.
 func TestStoreTxRollback(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -61,7 +61,7 @@ func TestStoreTxRollback(t *testing.T) {
 
 // TestStoreTxNestedRejected guards against double-begin on a tx-bound store.
 func TestStoreTxNestedRejected(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	ctx := context.Background()
 
 	err := s.Tx(ctx, func(tx domain.Stores) error {
@@ -75,7 +75,7 @@ func TestStoreTxNestedRejected(t *testing.T) {
 // TestStoreTxSharedPreviews exercises the txStores previews repo (create +
 // mark committed inside one transaction).
 func TestStoreTxSharedPreviews(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -109,7 +109,7 @@ func TestStoreTxSharedPreviews(t *testing.T) {
 // TestStoreTxCommittedFreesPendingSlot verifies MarkCommitted inside a tx
 // releases the (user, access_key) pending slot the partial unique index guards.
 func TestStoreTxCommittedFreesPendingSlot(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 

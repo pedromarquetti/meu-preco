@@ -20,7 +20,7 @@ func tokenRow(userID int64, family, hash string) *domain.RefreshToken {
 }
 
 func TestRefreshTokenRotateConsumesOldHash(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 	userID := seedUser(t, s).ID
@@ -48,7 +48,7 @@ func TestRefreshTokenRotateConsumesOldHash(t *testing.T) {
 }
 
 func TestRefreshTokenRotateUnknownHash(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 	userID := seedUser(t, s).ID
@@ -60,7 +60,7 @@ func TestRefreshTokenRotateUnknownHash(t *testing.T) {
 }
 
 func TestRefreshTokenRevokeFamily(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 	userID := seedUser(t, s).ID
@@ -81,7 +81,7 @@ func TestRefreshTokenRevokeFamily(t *testing.T) {
 }
 
 func TestRefreshTokenDuplicateHash(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 	userID := seedUser(t, s).ID
@@ -98,7 +98,7 @@ func TestRefreshTokenDuplicateHash(t *testing.T) {
 // TestRefreshTokenConcurrentRotateOnlyOneWins proves the FOR UPDATE lock: two
 // goroutines racing to rotate the same token must not both succeed.
 func TestRefreshTokenConcurrentRotateOnlyOneWins(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 	userID := seedUser(t, s).ID

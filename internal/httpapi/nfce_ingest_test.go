@@ -3,7 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,10 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"meupreco/internal/auth"
@@ -27,8 +23,10 @@ import (
 	"meupreco/internal/product"
 	"meupreco/internal/service"
 	pstore "meupreco/internal/store/postgres"
-	"meupreco/migrations"
+	"meupreco/internal/testdb"
 )
+
+var testPgStore *pstore.Store
 
 // Two-phase ingestion end-to-end (POST /api/v1/nfce/new + /nfce/submit)
 // against a real postgres store. The phase DoD "needs_review invisible to
@@ -36,8 +34,7 @@ import (
 // NULL + needs_review flag); the public read endpoint itself filters them out.
 //
 // This suite shares the MEUPRECO_TEST_DATABASE_URL database with the
-// store/postgres package. It never migrates and only truncates the rows it
-// touches, so parallel runs stay self-contained.
+// store/postgres package. TestMain resets its schema (Down+Up) once per package.
 
 type pgResolver struct{ receipt *domain.Nfce }
 
@@ -45,79 +42,9 @@ func (r pgResolver) Resolve(_ context.Context, _ nfce.AccessKey, _ string) (*dom
 	return r.receipt, nil
 }
 
-// schemaLockKey mirrors internal/store/postgres: a handful of test packages
-// share MEUPRECO_TEST_DATABASE_URL, so schema mutations acquired while holding
-// this advisory lock never interleave (Down+Up vs Up-only). This package holds
-// the lock for its entire run so a late-starting store resetSchema cannot drop
-// tables mid-test.
-const schemaLockKey int64 = 0x6d6575707265636f // "meupreco"
-
 func integrationStore(t *testing.T) *pstore.Store {
 	t.Helper()
-	dsn := os.Getenv("MEUPRECO_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("MEUPRECO_TEST_DATABASE_URL not set; skipping postgres-backed integration test")
-	}
-
-	pool, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if err := pool.Ping(context.Background()); err != nil {
-		pool.Close()
-		t.Skipf("test database unreachable: %v", err)
-	}
-
-	// Hold the schema lock on a dedicated session for the whole test so no
-	// other package resets migrations underneath us; Up (not Down) so we never
-	// destroy data another package is using.
-	lock, err := pool.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("acquire lock session: %v", err)
-	}
-	if _, err := lock.Exec(context.Background(),
-		`SELECT pg_advisory_lock($1)`, schemaLockKey); err != nil {
-		t.Fatalf("advisory lock: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = lock.Exec(context.Background(),
-			`SELECT pg_advisory_unlock($1)`, schemaLockKey)
-		lock.Release()
-		pool.Close()
-	})
-
-	if err := migrateSchemaUp(dsn); err != nil {
-		t.Fatalf("migrate up: %v", err)
-	}
-
-	return pstore.NewFromPool(pool)
-}
-
-// migrateSchemaUp applies pending migrations (Up only, no-op when current). It
-// is advisory-locked by the caller so it is safe to run while the store
-// package's resetSchema is waiting on the same lock.
-func migrateSchemaUp(dsn string) error {
-	src, err := iofs.New(migrations.FS, ".")
-	if err != nil {
-		return err
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		return err
-	}
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return err
-	}
-	return nil
-}
-
-func truncatePG(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	_, err := pool.Exec(context.Background(),
-		`TRUNCATE previews, price_logs, nfces, products, supermarkets, users RESTART IDENTITY CASCADE`)
-	if err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
+	return testPgStore
 }
 
 // ingestionRouter builds the full router against a real pg store and a stub
@@ -202,10 +129,9 @@ func ingestReceipt() *domain.Nfce {
 
 func TestNfceTwoPhaseIngestion(t *testing.T) {
 	st := integrationStore(t)
-	if st == nil {
-		return
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
 	}
-	truncatePG(t, st.Pool())
 	mustAddPGProduct(t, st)
 
 	ctx := context.Background()
@@ -418,10 +344,9 @@ func TestNfceTwoPhaseIngestion(t *testing.T) {
 // asserts each price_log joins to the product row its identity created.
 func TestNfceCommitPersistsCreatedProductIDs(t *testing.T) {
 	st := integrationStore(t)
-	if st == nil {
-		return
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
 	}
-	truncatePG(t, st.Pool())
 
 	ctx := context.Background()
 	u := &domain.User{Name: "User", Email: "user@example.com", PasswordHash: "h", Role: "user"}

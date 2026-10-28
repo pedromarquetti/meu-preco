@@ -19,11 +19,12 @@ import (
 	"meupreco/internal/config"
 	"meupreco/internal/domain"
 	pstore "meupreco/internal/store/postgres"
+	"meupreco/internal/testdb"
 )
 
-// handler tests run against the shared MEUPRECO_TEST_DATABASE_URL and
-// reuse the schema-advisory-locked harness from nfce_ingest_test.go. The router
-// under test is the real one; only the bearer-token role varies.
+// handler tests run against the shared MEUPRECO_TEST_DATABASE_URL and use the
+// schema reset performed once by TestMain. The router under test is the real
+// one; only the bearer-token role varies.
 
 // httpNfceSeq hands out unique receipt keys across the suite.
 var httpNfceSeq atomic.Int64
@@ -112,10 +113,9 @@ func seedHTTPLog(t *testing.T, st *pstore.Store, sm *domain.Supermarket, unit st
 
 func TestSharedReads(t *testing.T) {
 	st := integrationStore(t)
-	if st == nil {
-		return
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
 	}
-	truncatePG(t, st.Pool())
 	ctx := context.Background()
 
 	user := &domain.User{Name: "Reader", Email: "reader@example.com", PasswordHash: "h", Role: "user"}
@@ -276,10 +276,9 @@ func rebodyItems(t *testing.T, rec *httptest.ResponseRecorder) []any {
 
 func TestRoleGating(t *testing.T) {
 	st := integrationStore(t)
-	if st == nil {
-		return
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
 	}
-	truncatePG(t, st.Pool())
 	ctx := context.Background()
 
 	user := &domain.User{Name: "Plain", Email: "plain@example.com", PasswordHash: "h", Role: "user"}
@@ -320,10 +319,9 @@ func TestRoleGating(t *testing.T) {
 
 func TestAdminCuration(t *testing.T) {
 	st := integrationStore(t)
-	if st == nil {
-		return
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
 	}
-	truncatePG(t, st.Pool())
 	ctx := context.Background()
 
 	admin := &domain.User{Name: "Root", Email: "root@example.com", PasswordHash: "h", Role: "admin"}

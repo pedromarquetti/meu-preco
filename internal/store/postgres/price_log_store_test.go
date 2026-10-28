@@ -11,7 +11,7 @@ import (
 )
 
 func TestPriceLogStoreLifecycle(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -68,7 +68,7 @@ func TestPriceLogStoreLifecycle(t *testing.T) {
 }
 
 func TestPriceLogStoreDuplicateLine(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -93,7 +93,7 @@ func TestPriceLogStoreDuplicateLine(t *testing.T) {
 }
 
 func TestPriceLogStoreNotFound(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 

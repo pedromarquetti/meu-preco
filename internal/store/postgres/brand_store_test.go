@@ -6,9 +6,9 @@ import (
 )
 
 func TestCommodityBrandsSeeded(t *testing.T) {
-	// The 000007 migration seeds the curated brand vocabulary; after
-	// resetSchema the deli-cheese brands from the live receipts are present.
-	s := mustStore(t)
+	// The 000007 migration seeds the curated brand vocabulary; after the
+	// TestMain reset the deli-cheese brands from the live receipts are present.
+	s := testStore
 	ctx := context.Background()
 
 	brands, err := s.Brands().List(ctx)

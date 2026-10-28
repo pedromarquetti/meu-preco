@@ -13,7 +13,7 @@ import (
 const testAccessKey = "35241152323688000144650020000002571115675901"
 
 func TestPreviewStoreLifecycle(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -94,7 +94,7 @@ func createPreview(t *testing.T, s *Store, userID int64, accessKey, status strin
 }
 
 func TestPreviewStoreUserAccessKeyUniqueWhilePending(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 
 	u := seedUser(t, s)
@@ -125,7 +125,7 @@ func TestPreviewStoreUserAccessKeyUniqueWhilePending(t *testing.T) {
 }
 
 func TestPreviewStorePurgeExpired(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 

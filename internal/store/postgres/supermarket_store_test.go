@@ -9,7 +9,7 @@ import (
 )
 
 func TestSupermarketUpsertIdempotent(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -54,7 +54,7 @@ func TestSupermarketUpsertIdempotent(t *testing.T) {
 }
 
 func TestSupermarketNotFound(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 

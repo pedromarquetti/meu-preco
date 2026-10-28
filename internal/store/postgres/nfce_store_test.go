@@ -60,7 +60,7 @@ func seedNfce(t *testing.T, s *Store, sm *domain.Supermarket) *domain.Nfce {
 }
 
 func TestNfceStoreLifecycle(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -91,7 +91,7 @@ func TestNfceStoreLifecycle(t *testing.T) {
 }
 
 func TestNfceStoreDuplicateAccessKey(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -107,7 +107,7 @@ func TestNfceStoreDuplicateAccessKey(t *testing.T) {
 }
 
 func TestNfceStoreNotFound(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 

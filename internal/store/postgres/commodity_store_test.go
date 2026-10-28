@@ -9,7 +9,7 @@ import (
 )
 
 func TestCommoditySynonymLifecycle(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
@@ -33,9 +33,9 @@ func TestCommoditySynonymLifecycle(t *testing.T) {
 }
 
 func TestCommoditySynonymSeeded(t *testing.T) {
-	// The 000002 migration seeds the produce taxonomy; after resetSchema the
+	// The 000002 migration seeds the produce taxonomy; after TestMain resets the
 	// canonical row for "limao" exists even without test inserts.
-	s := mustStore(t)
+	s := testStore
 	ctx := context.Background()
 
 	got, err := s.CommoditySynonyms().Canonicalize(ctx, "limao tahiti")
@@ -51,7 +51,7 @@ func TestCommoditySynonymSeededCheese(t *testing.T) {
 	// Regression for the deli-cheese stems seen in real receipts: the exact
 	// stems the classifier now produces (brand words like VIGOR/TIROLEZ are
 	// stripped before lookup) must resolve to their canonical commodity.
-	s := mustStore(t)
+	s := testStore
 	ctx := context.Background()
 
 	cases := map[string]string{
@@ -85,7 +85,7 @@ func TestCommoditySynonymSeededCheese(t *testing.T) {
 }
 
 func TestCommoditySynonymConflictAndNotFound(t *testing.T) {
-	s := mustStore(t)
+	s := testStore
 	truncate(t)
 	ctx := context.Background()
 
