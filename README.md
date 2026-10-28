@@ -8,6 +8,7 @@
   - [Stack](#stack)
   - [Features](#features)
   - [Getting started](#getting-started)
+    - [DB setup](#db-setup)
     - [Run with make](#run-with-make)
     - [env](#env)
     - [Hardening & operations](#hardening-operations)
@@ -31,6 +32,11 @@
   - [Documentation](#documentation)
   - [Development](#development)
     - [Requirements](#requirements)
+    - [Running tests](#running-tests)
+      - [Opt-in live Open Food Facts BR test (hermetic runs skip it)](#opt-in-live-open-food-facts-br-test-hermetic-runs-skip-it)
+    - [Linting/git hooks](#lintinggit-hooks)
+    - [Migrations](#migrations)
+  - [Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)](#import-a-bulk-open-food-facts-dump-789790-gtins-only-idempotent)
   - [Inspiration](#inspiration)
   - [Non-goals](#non-goals)
 
@@ -160,42 +166,12 @@ price_logs ──► products history, supermarket comparison API
 
 ## Getting started
 
-### Run with make
+### Run with Make
 
 ```sh
-make run                     # boots the API on :8080
+make run                     # boots the API on :8080 (this handles migrations too!)
 curl localhost:8080/healthz  # {"status":"ok"}
 ```
-
-```sh
-make test     # go test ./... -race
-make lint     # gofmt + go vet (+ staticcheck if installed)
-make build    # bin/server
-make hooks-install          # enable the repository pre-push validations
-
-# Database: migrate up/down against POSTGRES_* + DATABASE_NAME
-export POSTGRES_USERNAME='dev' POSTGRES_PASSWORD='dev' POSTGRES_HOST='localhost' DATABASE_NAME='meupreco'
-make migrate-up
-make migrate-down
-make migrate-version
-
-# Postgres integration tests use their own database ($MEUPRECO_TEST_DATABASE_URL)
-export MEUPRECO_TEST_DATABASE_URL='postgres://dev:dev@localhost:5432/meupreco_test?sslmode=disable'
-go test ./internal/store/...
-
-# Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)
-make seed-off ARGS=./openfoodfacts-products.jsonl.gz
-
-# Opt-in live Open Food Facts BR test (hermetic runs skip it)
-export MEUPRECO_LIVE_OFF=1
-go test ./internal/enrich/... -run TestOFFLookupLive -v
-```
-
-> [!NOTE]
-> The pre-push hook formats Go code, regenerates the OpenAPI documentation,
-> updates the embedded documentation, and runs the Go vet and race-enabled test
-> suite. If it changes tracked files, it stops so the changes can be reviewed
-> and committed before pushing.
 
 ### env
 
@@ -618,6 +594,56 @@ export DATABASE_NAME=meupreco_test
 
 # Test Database name (separate from prod db)
 export TEST_DATABASE_NAME=meupreco_test
+```
+
+### Running tests
+
+```bash
+# Postgres integration tests require their own database. They reset it with
+# migrate Down+Up, so it must be a disposable database whose name ends in _test.
+createdb -h localhost -U dev meupreco_test   # once, if it does not exist
+export MEUPRECO_TEST_DATABASE_URL='postgres://dev:dev@localhost:5432/meupreco_test?sslmode=disable'
+make test
+
+# The test packages share one test database, so packages run serially (-p 1).
+go test ./... -race -count=1 -p 1
+```
+
+#### Opt-in live Open Food Facts BR test (hermetic runs skip it)
+
+```bash
+export MEUPRECO_LIVE_OFF=1
+go test ./internal/enrich/... -run TestOFFLookupLive -v
+```
+
+### Linting/git hooks
+
+```bash
+make lint          # gofmt + go vet (+ staticcheck if installed)
+make build         # bin/server
+make hooks-install # enable the repository pre-push validations
+```
+
+> [!NOTE]
+> The pre-push hook formats Go code, regenerates the OpenAPI documentation,
+> updates the embedded documentation, and runs the Go vet and race-enabled test
+> suite. If it changes tracked files, it stops so the changes can be reviewed
+> and committed before pushing.
+
+### Migrations
+
+```bash
+# Database: migrate up/down against POSTGRES_* + DATABASE_NAME
+# make uses the default db by default, the tests use the test_db
+make migrate-up
+make migrate-down
+make migrate-version
+```
+
+## Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)
+
+```bash
+make seed-off ARGS=./openfoodfacts-products.jsonl.gz
 ```
 
 ## Inspiration

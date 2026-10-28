@@ -45,8 +45,5 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Apply database migrations
-        run: go run ./cmd/migrate up
-
       - name: Check, build, and test Go code
         run: make ci
