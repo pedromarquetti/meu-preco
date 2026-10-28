@@ -20,7 +20,7 @@ func TestProductStoreLifecycle(t *testing.T) {
 		Brand:      stringPtr("TIO JOAO"),
 		Unit:       "UN",
 	}
-	if err := s.Products().Create(ctx, p); err != nil {
+	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if p.ID == 0 {
@@ -62,10 +62,10 @@ func TestProductStoreConflict(t *testing.T) {
 	ctx := context.Background()
 
 	p := &domain.Product{ProductKey: "key-a", Name: "X", Unit: "UN"}
-	if err := s.Products().Create(ctx, p); err != nil {
+	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	err := s.Products().Create(ctx, &domain.Product{ProductKey: "key-a", Name: "Y", Unit: "UN"})
+	_, err := s.Products().Create(ctx, &domain.Product{ProductKey: "key-a", Name: "Y", Unit: "UN"})
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("duplicate product_key = %v, want ErrConflict", err)
 	}
@@ -78,7 +78,7 @@ func TestProductSearchTrgm(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 
-	if err := s.Products().Create(ctx, &domain.Product{
+	if _, err := s.Products().Create(ctx, &domain.Product{
 		ProductKey:    "cm-limao-tahiti",
 		Name:          "Limão Tahiti",
 		CanonicalStem: stringPtr("limao tahiti"),
@@ -86,7 +86,7 @@ func TestProductSearchTrgm(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create limao: %v", err)
 	}
-	if err := s.Products().Create(ctx, &domain.Product{
+	if _, err := s.Products().Create(ctx, &domain.Product{
 		ProductKey:    "cm-batata",
 		Name:          "Batata Inglesa",
 		CanonicalStem: stringPtr("batata inglesa"),
@@ -199,7 +199,7 @@ func TestProductNearestMatch(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
 
-	if err := s.Products().Create(ctx, &domain.Product{
+	if _, err := s.Products().Create(ctx, &domain.Product{
 		ProductKey:    "cm-batata",
 		Name:          "Batata Inglesa",
 		CanonicalStem: stringPtr("batata inglesa"),

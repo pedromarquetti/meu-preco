@@ -24,7 +24,7 @@ func TestSearchFiltered(t *testing.T) {
 		{ProductKey: "px", Name: "ERRO DE OCR", Unit: "UN", NeedsReview: true},
 	}
 	for i, p := range rows {
-		if err := s.Products().Create(ctx, p); err != nil {
+		if _, err := s.Products().Create(ctx, p); err != nil {
 			t.Fatalf("create product %d: %v", i, err)
 		}
 	}
@@ -86,7 +86,7 @@ func TestProductUpdate(t *testing.T) {
 
 	p := &domain.Product{ProductKey: "p1", GTIN: stringPtr("07896008038717"),
 		Name: "ARROZ", Brand: stringPtr("TIO JOAO"), Unit: "UN"}
-	if err := s.Products().Create(ctx, p); err != nil {
+	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
@@ -129,9 +129,11 @@ func TestProductDeleteGuard(t *testing.T) {
 	sm := seedSupermarket(t, s)
 	n := seedNfce(t, s, sm)
 	p := &domain.Product{ProductKey: "p1", Name: "ARROZ", Unit: "UN"}
-	if err := s.Products().Create(ctx, p); err != nil {
+
+	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+
 	pid := p.ID
 	if err := s.PriceLogs().Create(ctx, &domain.PriceLog{
 		NfceID: n.ID, ProductID: &pid, Line: 1, DescriptionSnapshot: "ARROZ",
@@ -376,7 +378,7 @@ func TestPriceLogHistory(t *testing.T) {
 
 	sm := seedSupermarket(t, s)
 	p := &domain.Product{ProductKey: "p1", Name: "ARROZ BRANCO 5KG", Unit: "UN"}
-	if err := s.Products().Create(ctx, p); err != nil {
+	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("create product: %v", err)
 	}
 
@@ -431,11 +433,11 @@ func TestPriceLogLatestBySupermarket(t *testing.T) {
 	sm := seedSupermarket(t, s)
 	// Product with a review row is invisible even when it has logs.
 	hidden := &domain.Product{ProductKey: "hidden", Name: "SEM PRECO CONFIADO", Unit: "UN", NeedsReview: true}
-	if err := s.Products().Create(ctx, hidden); err != nil {
+	if _, err := s.Products().Create(ctx, hidden); err != nil {
 		t.Fatalf("create hidden: %v", err)
 	}
 	p := &domain.Product{ProductKey: "p1", Name: "ARROZ BRANCO 5KG", Unit: "UN"}
-	if err := s.Products().Create(ctx, p); err != nil {
+	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("create product: %v", err)
 	}
 
@@ -522,7 +524,7 @@ func TestPriceLogSetProduct(t *testing.T) {
 	}
 	p := &domain.Product{ProductKey: "cm-maca", Name: "Maçã Fuji", Unit: "KG",
 		CanonicalStem: stringPtr("maca fuji")}
-	if err := s.Products().Create(ctx, p); err != nil {
+	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("create product: %v", err)
 	}
 
@@ -555,7 +557,7 @@ func TestPriceLogRePointAndDelete(t *testing.T) {
 	from := &domain.Product{ProductKey: "from", Name: "PRODUTO ANTIGO", Unit: "UN"}
 	to := &domain.Product{ProductKey: "to", Name: "PRODUTO NOVO", Unit: "UN"}
 	for _, p := range []*domain.Product{from, to} {
-		if err := s.Products().Create(ctx, p); err != nil {
+		if _, err := s.Products().Create(ctx, p); err != nil {
 			t.Fatalf("create product: %v", err)
 		}
 	}

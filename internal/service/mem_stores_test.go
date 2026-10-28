@@ -183,7 +183,7 @@ func (m *memStores) seedKnownProduct() *domain.Product {
 		Name:       "ACHOCOLATADO EM PO NESCAU 350G",
 		Unit:       "GR",
 	}
-	if err := m.Products().Create(context.Background(), p); err != nil {
+	if _, err := m.Products().Create(context.Background(), p); err != nil {
 		panic(err)
 	}
 	return p
@@ -192,27 +192,32 @@ func (m *memStores) seedKnownProduct() *domain.Product {
 // memProducts implements domain.ProductStore.
 type memProducts struct{ m *memStores }
 
-func (s memProducts) Create(_ context.Context, p *domain.Product) error {
+func (s memProducts) Create(_ context.Context, p *domain.Product) (bool, error) {
 	m := s.m
-	if _, ok := m.byProductID[p.ID]; ok {
-		return domain.ErrConflict
+	if existing, ok := m.products[p.ProductKey]; ok {
+		*p = *existing
+		return false, nil
 	}
-	if _, ok := m.products[p.ProductKey]; ok {
-		return domain.ErrConflict
+	if p.ID != 0 {
+		if _, ok := m.byProductID[p.ID]; ok {
+			return false, domain.ErrConflict
+		}
 	}
 	if p.GTIN != nil {
 		if _, ok := m.byGtin[*p.GTIN]; ok {
-			return domain.ErrConflict
+			return false, domain.ErrConflict
 		}
 	}
 	m.nextProdID++
 	p.ID = m.nextProdID
-	m.products[p.ProductKey] = p
-	m.byProductID[p.ID] = p
-	if p.GTIN != nil {
-		m.byGtin[*p.GTIN] = p
+	cp := *p
+	m.products[p.ProductKey] = &cp
+	m.byProductID[p.ID] = &cp
+	if cp.GTIN != nil {
+		m.byGtin[*cp.GTIN] = &cp
 	}
-	return nil
+	*p = cp
+	return true, nil
 }
 
 func (s memProducts) GetByID(_ context.Context, id int64) (*domain.Product, error) {

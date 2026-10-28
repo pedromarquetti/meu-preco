@@ -12,20 +12,21 @@ import (
 
 type productRepo struct{ db queryer }
 
-func (r productRepo) Create(ctx context.Context, p *domain.Product) error {
+func (r productRepo) Create(ctx context.Context, p *domain.Product) (bool, error) {
+	var created bool
 	err := r.db.QueryRow(ctx,
 		`INSERT INTO products (product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		 RETURNING id, gtin, created_at`,
+		 ON CONFLICT (product_key) DO UPDATE SET product_key = EXCLUDED.product_key
+		 RETURNING id, gtin, created_at, (xmax = 0) AS created`,
 		p.ProductKey, p.GTIN, p.Name, p.Brand, p.Unit, p.CanonicalStem, p.NeedsReview, p.CreatedBy,
-	).Scan(&p.ID, &p.GTIN, &p.CreatedAt)
+	).Scan(&p.ID, &p.GTIN, &p.CreatedAt, &created)
+
 	if err != nil {
-		if isUniqueViolation(err) {
-			return domain.ErrConflict
-		}
-		return err
+		return false, err
 	}
-	return nil
+
+	return created, nil
 }
 
 func (r productRepo) GetByID(ctx context.Context, id int64) (*domain.Product, error) {

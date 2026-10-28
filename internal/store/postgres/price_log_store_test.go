@@ -19,7 +19,7 @@ func TestPriceLogStoreLifecycle(t *testing.T) {
 	n := seedNfce(t, s, sm)
 	p := &domain.Product{ProductKey: "07896008038717", GTIN: stringPtr("7896008038717"),
 		Name: "ARROZ BRANCO TIPO 1 5KG", Unit: "UN"}
-	if err := s.Products().Create(ctx, p); err != nil {
+	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("create product: %v", err)
 	}
 

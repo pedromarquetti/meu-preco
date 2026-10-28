@@ -288,7 +288,7 @@ func ensureProduct(ctx context.Context, tx domain.Stores, planItem *PlanItem) (i
 		p.CanonicalStem = &stem
 	}
 
-	if err := tx.Products().Create(ctx, p); err != nil {
+	if _, err := tx.Products().Create(ctx, p); err != nil {
 		return 0, err
 	}
 

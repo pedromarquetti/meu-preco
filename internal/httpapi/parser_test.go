@@ -130,11 +130,11 @@ func TestSharedReads(t *testing.T) {
 	}
 	pub := &domain.Product{ProductKey: "07891000412855", GTIN: strptr("07891000412855"),
 		Name: "ACHOCOLATADO EM PO NESCAU 350G", Unit: "UN"}
-	if err := st.Products().Create(ctx, pub); err != nil {
+	if _, err := st.Products().Create(ctx, pub); err != nil {
 		t.Fatalf("create public product: %v", err)
 	}
 	hid := &domain.Product{ProductKey: "hid", Name: "ERRO DE OCR", Unit: "UN", NeedsReview: true}
-	if err := st.Products().Create(ctx, hid); err != nil {
+	if _, err := st.Products().Create(ctx, hid); err != nil {
 		t.Fatalf("create hidden product: %v", err)
 	}
 
@@ -341,7 +341,7 @@ func TestAdminCuration(t *testing.T) {
 		t.Fatalf("upsert sm: %v", err)
 	}
 	pcur := &domain.Product{ProductKey: "prod-arroz", Name: "ARROZ BRANCO TIPO 1", Unit: "UN"}
-	if err := st.Products().Create(ctx, pcur); err != nil {
+	if _, err := st.Products().Create(ctx, pcur); err != nil {
 		t.Fatalf("create product: %v", err)
 	}
 	base := time.Date(2024, 11, 1, 8, 0, 0, 0, time.UTC)
@@ -349,7 +349,7 @@ func TestAdminCuration(t *testing.T) {
 
 	// mdup is the duplicate product a merge folds into pcur.
 	mdup := &domain.Product{ProductKey: "prod-arroz-dupe", Name: "ARROZ BRANCO 5KG", Unit: "UN"}
-	if err := st.Products().Create(ctx, mdup); err != nil {
+	if _, err := st.Products().Create(ctx, mdup); err != nil {
 		t.Fatalf("create mdup: %v", err)
 	}
 	seedHTTPLog(t, st, sm, "UN", mdup, base.Add(time.Hour), "6.00", false, admin.ID)

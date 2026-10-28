@@ -161,7 +161,7 @@ func mustAddPGProduct(t *testing.T, st *pstore.Store) {
 		Name:       "ACHOCOLATADO EM PO NESCAU 350G",
 		Unit:       "GR",
 	}
-	if err := st.Products().Create(context.Background(), p); err != nil {
+	if _, err := st.Products().Create(context.Background(), p); err != nil {
 		t.Fatalf("seed product: %v", err)
 	}
 }

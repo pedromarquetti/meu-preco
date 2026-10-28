@@ -65,7 +65,7 @@ type SupermarketStore interface {
 
 // ProductStore persists the product master data.
 type ProductStore interface {
-	Create(ctx context.Context, p *Product) error
+	Create(ctx context.Context, p *Product) (bool, error)
 	GetByID(ctx context.Context, id int64) (*Product, error)
 	GetByKey(ctx context.Context, key string) (*Product, error)
 	GetByGTIN(ctx context.Context, gtin string) (*Product, error)

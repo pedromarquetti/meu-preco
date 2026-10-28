@@ -361,7 +361,7 @@ func TestCommittedReviewRowCanBeAssigned(t *testing.T) {
 	}
 
 	target := &domain.Product{ProductKey: "limao", Name: "LIMÃO TAHITI", Unit: "KG"}
-	if err := m.Products().Create(context.Background(), target); err != nil {
+	if _, err := m.Products().Create(context.Background(), target); err != nil {
 		t.Fatalf("seed target: %v", err)
 	}
 
@@ -411,7 +411,7 @@ func TestCommitAssignResolution(t *testing.T) {
 	res := previewForTest(t, svc, m, 1)
 
 	target := &domain.Product{ProductKey: "limao", Name: "LIMÃO TAHITI", Unit: "KG"}
-	if err := m.Products().Create(context.Background(), target); err != nil {
+	if _, err := m.Products().Create(context.Background(), target); err != nil {
 		t.Fatalf("seed target: %v", err)
 	}
 

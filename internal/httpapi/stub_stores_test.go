@@ -140,7 +140,9 @@ func (m *memPreviewStore) DeleteByAccessKey(_ context.Context, accessKey string)
 // nilProductStore is a product master that knows nothing.
 type nilProductStore struct{}
 
-func (*nilProductStore) Create(context.Context, *domain.Product) error { return nil }
+func (*nilProductStore) Create(context.Context, *domain.Product) (bool, error) {
+	return false, domain.ErrNotFound
+}
 func (*nilProductStore) GetByID(context.Context, int64) (*domain.Product, error) {
 	return nil, domain.ErrNotFound
 }

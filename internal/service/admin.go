@@ -212,12 +212,16 @@ func (s *Service) BatchAssign(ctx context.Context, adminID int64, req BatchAssig
 				}
 				productID = a.ProductID
 			case "create":
-				p, err := s.createAdminProduct(ctx, tx, adminID, a.Name, a.Brand, a.Unit)
+				p, created, err := s.createAdminProduct(ctx, tx, adminID, a.Name, a.Brand, a.Unit)
+
 				if err != nil {
 					return err
 				}
+
 				productID = p.ID
-				res.Created++
+				if created {
+					res.Created++
+				}
 			}
 
 			if err := tx.PriceLogs().SetProduct(ctx, a.ID, productID, adminID, a.Action); err != nil {
@@ -240,7 +244,7 @@ func (s *Service) BatchAssign(ctx context.Context, adminID int64, req BatchAssig
 // batch-assign. Admin products belong to commodity identity, so the key is the
 // commodity hash of the normalized stem + canonical unit; two admins creating
 // the same commodity converge on one row (idempotent, deduped).
-func (s *Service) createAdminProduct(ctx context.Context, tx domain.Stores, adminID int64, name, brand, unit string) (*domain.Product, error) {
+func (s *Service) createAdminProduct(ctx context.Context, tx domain.Stores, adminID int64, name, brand, unit string) (*domain.Product, bool, error) {
 	canonical, _ := product.NormalizeUnit(unit)
 	name = strings.TrimSpace(name)
 
@@ -259,24 +263,36 @@ func (s *Service) createAdminProduct(ctx context.Context, tx domain.Stores, admi
 		brandPtr = &brandName
 	}
 
+	key := product.CommodityKey(stem, canonical, brandName)
+	if existing, err := tx.Products().GetByKey(ctx, key); err == nil {
+		return existing, false, nil
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return nil, false, err
+	}
+
 	stemCopy := stem
 	createdBy := adminID
 
 	p := &domain.Product{
-		ProductKey:    product.CommodityKey(stem, canonical, brandName),
+		ProductKey:    key,
 		Name:          name,
 		Brand:         brandPtr,
 		Unit:          canonical,
 		CanonicalStem: &stemCopy,
 		CreatedBy:     &createdBy,
 	}
-	if err := tx.Products().Create(ctx, p); err != nil {
+	created, err := tx.Products().Create(ctx, p)
+	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
-			return tx.Products().GetByKey(ctx, p.ProductKey)
+			existing, getbykeyerr := tx.Products().GetByKey(ctx, key)
+			if getbykeyerr != nil {
+				return nil, false, getbykeyerr
+			}
+			return existing, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
-	return p, nil
+	return p, created, nil
 }
 
 // MergeProducts implements POST /admin/products/merge: one transaction

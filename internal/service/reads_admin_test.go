@@ -31,7 +31,7 @@ func seedOpenProduct(t *testing.T, m *memStores, name, unit string, gtin *string
 		key = *gtin
 	}
 	p := &domain.Product{ProductKey: key, Name: name, Unit: unit, GTIN: gtin}
-	if err := m.Products().Create(context.Background(), p); err != nil {
+	if _, err := m.Products().Create(context.Background(), p); err != nil {
 		t.Fatalf("seed product %q: %v", name, err)
 	}
 	return p
@@ -87,7 +87,7 @@ func TestSearchProductsFiltersAndExcludesReview(t *testing.T) {
 	p3 := seedOpenProduct(t, m, "POLPA DE FRUTA", "GR", strPtr("07891000412855"))
 	seedOpenProduct(t, m, "CAFE EXTRA FORTE", "UN", nil)
 	review := &domain.Product{ProductKey: "review", Name: "ARROZ ORGANICO", Unit: "KG", NeedsReview: true}
-	if err := m.Products().Create(context.Background(), review); err != nil {
+	if _, err := m.Products().Create(context.Background(), review); err != nil {
 		t.Fatalf("seed review product: %v", err)
 	}
 
@@ -308,7 +308,7 @@ func TestListSupermarketsAndProducts(t *testing.T) {
 func TestNeedsReviewQueue(t *testing.T) {
 	m := newMemStores()
 	p := &domain.Product{ProductKey: "known", Name: "LIMAO TAHITI", Unit: "KG", NeedsReview: true}
-	if err := m.Products().Create(context.Background(), p); err != nil {
+	if _, err := m.Products().Create(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 	sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO DO CENTRO"}
@@ -367,7 +367,7 @@ func TestBatchAssignExistingAndCreate(t *testing.T) {
 	mustReviewLogs(t, m, sm, 2)
 
 	existing := &domain.Product{ProductKey: "banana", Name: "BANANA PRATA", Unit: "KG"}
-	if err := m.Products().Create(context.Background(), existing); err != nil {
+	if _, err := m.Products().Create(context.Background(), existing); err != nil {
 		t.Fatal(err)
 	}
 	logs := m.reviewLogs()
