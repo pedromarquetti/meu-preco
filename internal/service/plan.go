@@ -30,6 +30,10 @@ func (c catalogAdapter) Canonicalize(ctx context.Context, synonym string) (*doma
 	return c.stores.CommoditySynonyms().Canonicalize(ctx, synonym)
 }
 
+func (c catalogAdapter) MatchPrefix(ctx context.Context, stem string) (*domain.CommoditySynonym, error) {
+	return c.stores.CommoditySynonyms().MatchPrefix(ctx, stem)
+}
+
 // brandDictionary loads the curated brand vocabulary. It is required for
 // commodity classification because silently disabling it can merge products
 // from different brands under the same key.

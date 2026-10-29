@@ -155,12 +155,13 @@ type PreviewStore interface {
 	DeleteByAccessKey(ctx context.Context, accessKey string) (int64, error)
 }
 
-// CommoditySynonymStore persists the produce taxonomy used for GTIN-less
-// identity resolution.
+// CommoditySynonymStore persists produce taxonomy including abbreviation prefixes (qj/qjo → queijo). PrefixExpansion is nil on legacy/exact-only rows; non-nil marks expansion target used before fuzzy match. Idempotent: re-running migrations updates existing rows in-place without new indexes required at this size.
 type CommoditySynonymStore interface {
 	Create(ctx context.Context, s *CommoditySynonym) error
-	// Canonicalize returns the canonical synonym row for an exact stem match.
+	// Canonicalize returns canonical synonym row for exact stem; nil ErrNotFound when missing (prefix_expansion read/written as nullable string pointer).
 	Canonicalize(ctx context.Context, synonym string) (*CommoditySynonym, error)
+	// MatchPrefix finds longest prefix expansion: scans synonyms with non-nil PrefixExpansion and returns the Synonym that prefixes stem. Returns ErrNotFound on no match; nil check is caller's responsibility (not an error condition).
+	MatchPrefix(ctx context.Context, stem string) (*CommoditySynonym, error)
 }
 
 // CommodityBrandStore reads the curated brand vocabulary that separates

@@ -792,6 +792,20 @@ func (s memSynonyms) Canonicalize(_ context.Context, stem string) (*domain.Commo
 	return nil, domain.ErrNotFound
 }
 
+func (s memSynonyms) MatchPrefix(_ context.Context, stem string) (*domain.CommoditySynonym, error) {
+	var best *domain.CommoditySynonym = nil
+
+	for _, syn := range s.m.synonyms {
+		if syn.PrefixExpansion == nil || !strings.HasPrefix(stem, syn.Synonym) {
+			continue
+		}
+		if len(syn.Synonym) > len(best.Synonym) {
+			best = syn
+		}
+	}
+	return best, domain.ErrNotFound // no match is not an error condition (per interface doc: nil check caller's responsibility)
+}
+
 // memBrands implements domain.CommodityBrandStore.
 type memBrands struct{ m *memStores }
 

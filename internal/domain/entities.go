@@ -82,15 +82,18 @@ type Preview struct {
 }
 
 // CommoditySynonym maps a normalized synonym stem to a canonical commodity
-// identity for GTIN-less goods (fresh produce, bulk, cheeses).
+// identity for GTIN-less goods (fresh produce, bulk, cheeses). PrefixExpansion is
+// nil on legacy/exact-only rows; non-nil marks an abbreviation prefix that expands
+// before fuzzy match. Idempotent: re-running migrations updates existing rows in-place.
 type CommoditySynonym struct {
-	ID            int64
-	Synonym       string
-	CanonicalName string
-	Category      string
-	Unit          string
-	Source        string
-	CreatedAt     time.Time
+	ID              int64
+	Synonym         string
+	CanonicalName   string
+	Category        string
+	Unit            string
+	Source          string
+	PrefixExpansion *string // nil = exact-only row; non-nil = abbreviation prefix expansion target
+	CreatedAt       time.Time
 }
 
 // CommodityBrand is one curated brand name used to separate commodity

@@ -174,6 +174,9 @@ func (*nilSynonymStore) Create(context.Context, *domain.CommoditySynonym) error 
 func (*nilSynonymStore) Canonicalize(context.Context, string) (*domain.CommoditySynonym, error) {
 	return nil, domain.ErrNotFound
 }
+func (*nilSynonymStore) MatchPrefix(context.Context, string) (*domain.CommoditySynonym, error) {
+	return nil, domain.ErrNotFound
+}
 
 // nilBrandStore is a brand vocabulary that knows nothing.
 type nilBrandStore struct{}
