@@ -3,6 +3,7 @@ package product
 import (
 	"context"
 	"errors"
+	"strings" // Added missing import
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -19,6 +20,7 @@ type fakeCatalog struct {
 	gtinErr    error
 	keyErr     error
 	synErr     error
+	prefixErr  error
 	nearestErr error
 }
 
@@ -57,14 +59,44 @@ func (f *fakeCatalog) NearestMatch(_ context.Context, _ string, _ float64) (*dom
 	}
 	return f.nearest.p, f.nearest.sim, f.nearest.err
 }
+func (f *fakeCatalog) MatchPrefix(_ context.Context, stem string) (*domain.CommoditySynonym, error) {
+	if f.prefixErr != nil {
+		return nil, f.prefixErr
+	}
+
+	var bestMatch *domain.CommoditySynonym
+
+	for _, syn := range f.synonyms {
+		if syn.PrefixExpansion == nil || syn.Synonym == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(stem), strings.ToLower(syn.Synonym)) {
+			if bestMatch == nil || len(syn.Synonym) > len(bestMatch.Synonym) {
+				bestMatch = syn
+			}
+		}
+	}
+
+	if bestMatch != nil {
+		return bestMatch, nil
+	}
+	return nil, domain.ErrNotFound
+}
 
 func (f *fakeCatalog) Canonicalize(_ context.Context, synonym string) (*domain.CommoditySynonym, error) {
 	if f.synErr != nil {
 		return nil, f.synErr
 	}
-	if s, ok := f.synonyms[synonym]; ok {
-		return s, nil
+
+	for key, syn := range f.synonyms {
+		// Match on the map key as well so tests can omit Synonym on exact rows.
+		if strings.EqualFold(key, synonym) ||
+			strings.EqualFold(syn.CanonicalName, synonym) ||
+			strings.EqualFold(syn.Synonym, synonym) {
+			return syn, nil
+		}
 	}
+
 	return nil, domain.ErrNotFound
 }
 
@@ -263,5 +295,3 @@ func TestClassifySeedCatalogLimao(t *testing.T) {
 		t.Errorf("price_per_unit = %v (want 5.9877/KG)", d.PricePerUnit.StringFixed(4))
 	}
 }
-
-func stringPtr(s string) *string { return &s }

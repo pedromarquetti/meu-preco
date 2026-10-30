@@ -27,9 +27,9 @@ func (r synonymRepo) Create(ctx context.Context, c *domain.CommoditySynonym) err
 func (r synonymRepo) Canonicalize(ctx context.Context, synonym string) (*domain.CommoditySynonym, error) {
 	c := &domain.CommoditySynonym{}
 	err := r.db.QueryRow(ctx,
-		`SELECT id, synonym, canonical_name, category, unit, source, created_at
+		`SELECT id, synonym, canonical_name, category, unit, source, prefix_expansion, created_at
 		 FROM commodity_synonyms WHERE synonym = $1`, synonym,
-	).Scan(&c.ID, &c.Synonym, &c.CanonicalName, &c.Category, &c.Unit, &c.Source, &c.CreatedAt)
+	).Scan(&c.ID, &c.Synonym, &c.CanonicalName, &c.Category, &c.Unit, &c.Source, &c.PrefixExpansion, &c.CreatedAt)
 	if err != nil {
 		return nil, translateError(err)
 	}

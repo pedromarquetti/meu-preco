@@ -64,6 +64,33 @@ type Catalog interface {
 	GetByKey(ctx context.Context, key string) (*domain.Product, error)
 	NearestMatch(ctx context.Context, stem string, threshold float64) (*domain.Product, float64, error)
 	Canonicalize(ctx context.Context, synonym string) (*domain.CommoditySynonym, error)
+	MatchPrefix(ctx context.Context, stem string) (*domain.CommoditySynonym, error)
+}
+
+func commodityDecision(ctx context.Context, cat Catalog, syn *domain.CommoditySynonym,
+	canonicalStem, brand string, dec Decision) Decision {
+	unit := syn.Unit
+	if unit == "" {
+		unit = dec.Unit
+	}
+
+	dec.Status = StatusCommodityFingerprint
+	dec.ProductKey = CommodityKey(canonicalStem, unit, brand)
+	dec.Name = canonicalStem
+	dec.CanonicalStem = canonicalStem
+	dec.Brand = brand
+	dec.Unit = unit
+
+	if p, err := cat.GetByKey(ctx, dec.ProductKey); err == nil {
+		dec.Name = p.Name
+		if b := deref(p.Brand); b != "" {
+			dec.Brand = b
+		}
+		if s := deref(p.CanonicalStem); s != "" {
+			dec.CanonicalStem = s
+		}
+	}
+	return dec
 }
 
 // Classify is the pure Phase-4 decision function. It never writes, never does
@@ -72,45 +99,45 @@ type Catalog interface {
 // token dictionary extracted from the barcoded catalog so known brand names
 // are dropped from commodity stems; nil disables that filter.
 func Classify(ctx context.Context, cat Catalog, in Line, brands *BrandDictionary) Decision {
-	dec := Decision{Status: StatusParseError}
+	decision := Decision{Status: StatusParseError}
 
 	if strings.TrimSpace(in.Description) == "" {
-		dec.Message = "empty description"
-		return dec
+		decision.Message = "empty description"
+		return decision
 	}
 	if in.Qty.IsZero() || in.Qty.IsNegative() {
-		dec.Message = "non-positive quantity"
-		return dec
+		decision.Message = "non-positive quantity"
+		return decision
 	}
 
 	// Normalized unit / price per unit are valid for every non-garbage line,
 	// independent of the identity tier that classifies it.
 	if u, ok := NormalizeUnit(in.Unit); ok {
-		dec.Unit = u
+		decision.Unit = u
 		if ppu, ok := PricePerUnit(in.Unit, in.Qty, in.TotalPrice); ok {
-			dec.PricePerUnit = ppu
-			dec.HasPricePerUnit = true
+			decision.PricePerUnit = ppu
+			decision.HasPricePerUnit = true
 		}
 	}
 
 	// Tier 1 — barcoded goods.
 	if gtin, ok := NormalizeGTIN(in.Code); ok {
-		dec.GTIN = gtin
+		decision.GTIN = gtin
 		if p, err := cat.GetByGTIN(ctx, gtin); err == nil {
-			dec.Status = StatusGtinKnown
-			dec.ProductKey = p.ProductKey
-			dec.Name = p.Name
-			dec.Brand = deref(p.Brand)
-			return dec
+			decision.Status = StatusGtinKnown
+			decision.ProductKey = p.ProductKey
+			decision.Name = p.Name
+			decision.Brand = deref(p.Brand)
+			return decision
 		} else if errors.Is(err, domain.ErrNotFound) {
-			dec.Status = StatusGtinNew
-			dec.ProductKey = gtin
-			dec.Name = strings.TrimSpace(in.Description)
-			return dec
+			decision.Status = StatusGtinNew
+			decision.ProductKey = gtin
+			decision.Name = strings.TrimSpace(in.Description)
+			return decision
 		}
-		dec.Status = StatusUIDUncertain
-		dec.Message = "catalog lookup failed"
-		return dec
+		decision.Status = StatusUIDUncertain
+		decision.Message = "catalog lookup failed"
+		return decision
 	}
 
 	// Tier 2 — commodity goods (produce, bulk, cheeses). The brand (when the
@@ -119,69 +146,79 @@ func Classify(ctx context.Context, cat Catalog, in Line, brands *BrandDictionary
 	brand, _ := ExtractBrand(in.Description, brands)
 	stem := NormalizeStem(in.Description, in.Unit, brands)
 	if stem == "" {
-		dec.Status = StatusUIDUncertain
-		dec.Message = "no identifiable stem in description"
-		return dec
+		decision.Status = StatusUIDUncertain
+		decision.Message = "no identifiable stem in description"
+		return decision
 	}
 
+	// Exact match first
 	if syn, err := cat.Canonicalize(ctx, stem); err == nil {
-		key := CommodityKey(syn.CanonicalName, syn.Unit, brand)
-		dec.Status = StatusCommodityFingerprint
-		dec.ProductKey = key
-		dec.Name = syn.CanonicalName
-		dec.CanonicalStem = syn.CanonicalName
-		dec.Brand = brand
-
-		if p, err := cat.GetByKey(ctx, key); err == nil {
-			dec.Name = p.Name
-			if b := deref(p.Brand); b != "" {
-				dec.Brand = b
-			}
-
-			if s := deref(p.CanonicalStem); s != "" {
-				dec.CanonicalStem = s
-			}
-		}
-		return dec
+		return commodityDecision(ctx, cat, syn, syn.CanonicalName, brand, decision)
 	} else if !errors.Is(err, domain.ErrNotFound) {
-		dec.Status = StatusUIDUncertain
-		dec.Message = "taxonomy lookup failed"
-		return dec
+		decision.Status = StatusUIDUncertain
+		decision.Message = "taxonomy lookup failed"
+		return decision
+	}
+
+	// Abbreviation prefix expansion: "qjo prato" / "qjoprato" -> "queijo prato".
+	if pfx, err := cat.MatchPrefix(ctx, stem); err == nil && pfx.PrefixExpansion != nil && strings.TrimSpace(*pfx.PrefixExpansion) != "" {
+		remainder := strings.TrimSpace(stem[len(pfx.Synonym):])
+		expanded := strings.TrimSpace(strings.TrimSpace(*pfx.PrefixExpansion) + " " + remainder)
+
+		if expanded != "" && expanded != stem {
+			if resolved, err := cat.Canonicalize(ctx, expanded); err == nil {
+				// The expanded stem may be an alias (e.g. "queijo mofo" ->
+				// "queijo gorgonzola"); use the row's canonical identity so
+				// aliases collapse onto the same product key.
+				return commodityDecision(ctx, cat, resolved, resolved.CanonicalName, brand, decision)
+			} else if !errors.Is(err, domain.ErrNotFound) {
+				decision.Status = StatusUIDUncertain
+				decision.Message = "taxonomy lookup failed"
+				return decision
+			}
+			// No exact row for the expanded identity: still accept the
+			// reconstructed commodity using the prefix row's metadata.
+			return commodityDecision(ctx, cat, pfx, expanded, brand, decision)
+		}
+	} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		decision.Status = StatusUIDUncertain
+		decision.Message = "taxonomy prefix lookup failed"
+		return decision
 	}
 
 	// Fuzzy nearest-match against the catalog.
 	p, sim, err := cat.NearestMatch(ctx, stem, LowSimilarityFloor)
 	if err != nil {
 		if !errors.Is(err, domain.ErrNotFound) {
-			dec.Status = StatusUIDUncertain
-			dec.Message = "catalog nearest-match failed"
-			return dec
+			decision.Status = StatusUIDUncertain
+			decision.Message = "catalog nearest-match failed"
+			return decision
 		}
-		dec.Status = StatusUIDUncertain
-		dec.Message = "unknown product"
-		return dec
+		decision.Status = StatusUIDUncertain
+		decision.Message = "unknown product"
+		return decision
 	}
-	dec.Similarity = sim
+	decision.Similarity = sim
 	if sim >= HighSimilarity {
 		if p.ProductKey == "" {
 			// A legacy/synthetic row with no key cannot back a price_log FK;
 			// route it to review instead of minting a blank-key product.
-			dec.Status = StatusUIDUncertain
-			dec.Message = "nearest match has no product key"
-			return dec
+			decision.Status = StatusUIDUncertain
+			decision.Message = "nearest match has no product key"
+			return decision
 		}
 
-		dec.Status = StatusCommodityFingerprint
-		dec.ProductKey = p.ProductKey
-		dec.Name = p.Name
-		dec.Brand = deref(p.Brand)
-		dec.CanonicalStem = deref(p.CanonicalStem)
+		decision.Status = StatusCommodityFingerprint
+		decision.ProductKey = p.ProductKey
+		decision.Name = p.Name
+		decision.Brand = deref(p.Brand)
+		decision.CanonicalStem = deref(p.CanonicalStem)
 
-		return dec
+		return decision
 	}
-	dec.Status = StatusUIDUncertain
-	dec.Message = "low similarity to nearest match"
-	return dec
+	decision.Status = StatusUIDUncertain
+	decision.Message = "low similarity to nearest match"
+	return decision
 }
 
 func deref(s *string) string {

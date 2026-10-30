@@ -79,3 +79,53 @@ func TestPreviewAndCommitBrandAwareCommodity(t *testing.T) {
 		t.Error("brandless brie key must not exist alongside the branded one")
 	}
 }
+
+// TestPreviewAndCommitPrefixExpansion seeds only abbreviation prefixes plus
+// canonical full names, then proves glued and spaced receipt descriptions both
+// resolve through the prefix fallback at the service layer.
+func TestPreviewAndCommitPrefixExpansion(t *testing.T) {
+	m := newMemStores()
+	queijo := "queijo"
+	for _, syn := range []string{"qj", "qjo"} {
+		if err := m.CommoditySynonyms().Create(context.Background(), &domain.CommoditySynonym{
+			Synonym: syn, CanonicalName: "queijo mussarela", Category: "laticinios", Unit: "KG", PrefixExpansion: &queijo,
+		}); err != nil {
+			t.Fatalf("seed prefix %q: %v", syn, err)
+		}
+	}
+	for _, syn := range []string{"queijo prato", "queijo brie"} {
+		if err := m.CommoditySynonyms().Create(context.Background(), &domain.CommoditySynonym{
+			Synonym: syn, CanonicalName: syn, Category: "laticinios", Unit: "KG",
+		}); err != nil {
+			t.Fatalf("seed exact %q: %v", syn, err)
+		}
+	}
+
+	receipt := &domain.Nfce{
+		AccessKey:   testAccessKey,
+		Supermarket: domain.Supermarket{CNPJ: "12345678000199", LegalName: "COVABRA LTDA"},
+		Total:       decimal.RequireFromString("20.00"),
+		Items: []domain.NfceItem{
+			{Line: 1, Code: "", Description: "QJO PRATO KG", Qty: decimal.NewFromInt(1), Unit: "KG", UnitPrice: decimal.RequireFromString("10"), TotalPrice: decimal.RequireFromString("10")},
+			{Line: 2, Code: "", Description: "QJOPRATO", Qty: decimal.NewFromInt(1), Unit: "KG", UnitPrice: decimal.RequireFromString("10"), TotalPrice: decimal.RequireFromString("10")},
+		},
+	}
+	svc := New(m, stubResolver{receipt: receipt}, nil, nil)
+
+	res, err := svc.ReportPreview(context.Background(), PreviewRequest{UserID: 1, AccessKey: testAccessKey})
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if len(res.Plan) != 2 {
+		t.Fatalf("plan items = %d, want 2", len(res.Plan))
+	}
+	wantKey := product.CommodityKey("queijo prato", "KG", "")
+	for i, item := range res.Plan {
+		if item.Status != product.StatusCommodityFingerprint {
+			t.Errorf("item %d status = %q, want commodity_fingerprint", i, item.Status)
+		}
+		if item.ProductKey != wantKey || item.CanonicalStem != "queijo prato" {
+			t.Errorf("item %d = %+v, want key=%s stem=queijo prato", i, item, wantKey)
+		}
+	}
+}

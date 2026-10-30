@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"meupreco/internal/domain"
 )
@@ -793,17 +794,20 @@ func (s memSynonyms) Canonicalize(_ context.Context, stem string) (*domain.Commo
 }
 
 func (s memSynonyms) MatchPrefix(_ context.Context, stem string) (*domain.CommoditySynonym, error) {
-	var best *domain.CommoditySynonym = nil
+	var best *domain.CommoditySynonym
 
 	for _, syn := range s.m.synonyms {
-		if syn.PrefixExpansion == nil || !strings.HasPrefix(stem, syn.Synonym) {
+		if syn.PrefixExpansion == nil || syn.Synonym == "" || !strings.HasPrefix(stem, syn.Synonym) {
 			continue
 		}
-		if len(syn.Synonym) > len(best.Synonym) {
+		if best == nil || utf8.RuneCountInString(syn.Synonym) > utf8.RuneCountInString(best.Synonym) {
 			best = syn
 		}
 	}
-	return best, domain.ErrNotFound // no match is not an error condition (per interface doc: nil check caller's responsibility)
+	if best != nil {
+		return best, nil
+	}
+	return nil, domain.ErrNotFound
 }
 
 // memBrands implements domain.CommodityBrandStore.

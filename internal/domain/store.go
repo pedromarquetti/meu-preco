@@ -155,12 +155,17 @@ type PreviewStore interface {
 	DeleteByAccessKey(ctx context.Context, accessKey string) (int64, error)
 }
 
-// CommoditySynonymStore persists produce taxonomy including abbreviation prefixes (qj/qjo → queijo). PrefixExpansion is nil on legacy/exact-only rows; non-nil marks expansion target used before fuzzy match. Idempotent: re-running migrations updates existing rows in-place without new indexes required at this size.
+// CommoditySynonymStore persists the produce taxonomy, including abbreviation
+// prefixes (qj/qjo → queijo). PrefixExpansion is nil on legacy/exact-only rows;
+// non-nil marks an expansion target used before fuzzy match.
 type CommoditySynonymStore interface {
 	Create(ctx context.Context, s *CommoditySynonym) error
-	// Canonicalize returns canonical synonym row for exact stem; nil ErrNotFound when missing (prefix_expansion read/written as nullable string pointer).
+	// Canonicalize returns the canonical synonym row for an exact stem match,
+	// or ErrNotFound when the stem is unknown.
 	Canonicalize(ctx context.Context, synonym string) (*CommoditySynonym, error)
-	// MatchPrefix finds longest prefix expansion: scans synonyms with non-nil PrefixExpansion and returns the Synonym that prefixes stem. Returns ErrNotFound on no match; nil check is caller's responsibility (not an error condition).
+	// MatchPrefix returns the row with the longest Synonym that prefixes stem
+	// and has a non-nil PrefixExpansion. It returns ErrNotFound when no
+	// abbreviation prefix matches.
 	MatchPrefix(ctx context.Context, stem string) (*CommoditySynonym, error)
 }
 

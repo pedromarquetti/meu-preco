@@ -2,6 +2,7 @@ package product
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -63,9 +64,9 @@ func TestClassifyBrandSeparatesCommodity(t *testing.T) {
 		return Classify(context.Background(), cat, line, brands)
 	}
 
-	tirolezAbbrev := classify("QJ BRIE TIROLEZ KG")
-	tirolezFull := classify("QUEIJO BRIE TIROLEZ KG")
-	vigor := classify("QJO BRIE VIGOR KG")
+	tirolezAbbrev := classify("QJ BRIE TIROLEZ KG")   // Expected success (Exact Match for qj brie)
+	tirolezFull := classify("QUEIJO BRIE TIROLEZ KG") // Expected success (Exact Match for queijo brie)
+	vigor := classify("QJO BRIE VIGOR KG")            // Should succeed if "Vigor" is stripped and "qjo brie" matches
 
 	for name, d := range map[string]Decision{"abbrev": tirolezAbbrev, "full": tirolezFull, "vigor": vigor} {
 		if d.Status != StatusCommodityFingerprint {
@@ -118,3 +119,140 @@ func TestClassifySetsCanonicalStemFromCatalog(t *testing.T) {
 		t.Errorf("canonical stem = %q, want queijo brie", d.CanonicalStem)
 	}
 }
+
+func TestClassifyPrefixExpansion(t *testing.T) {
+	// Case 1: Basic expansion (glued & spaced)
+	catalog := &fakeCatalog{synonyms: map[string]*domain.CommoditySynonym{
+		"qj":    {CanonicalName: "queijo", Synonym: "qj", PrefixExpansion: stringPtr("queijo")},
+		"qjo":   {CanonicalName: "queijo", Synonym: "qjo", PrefixExpansion: stringPtr("queijo")},
+		"prato": {CanonicalName: "prato", Synonym: "prato"},
+	}}
+
+	cases := []struct {
+		desc string
+		want string
+	}{
+		{"qjoprato", "queijo prato"}, // qjo -> queijo (prefix) + prato (exact match/remainder)
+		{"qjprato", "queijo prato"},  // qj -> queijo (prefix) + prato (exact match/remainder)
+		{"QJ PRATO", "queijo prato"}, // QJ -> queijo (prefix) + PRATO (exact match/remainder)
+	}
+
+	t.Log("Product Test")
+	for _, i := range cases {
+		line := Line{Description: i.desc, Qty: decimal.NewFromInt(1), Unit: "KG", TotalPrice: decimal.NewFromInt(10)}
+		decision := Classify(context.Background(), catalog, line, nil)
+		t.Logf("desc=%v want=%v got=%v", i.desc, i.want, decision.Name)
+		if decision.Name != i.want {
+			t.Errorf("Classify(%q) = %q, want %q", i.desc, decision.Name, i.want)
+		}
+	}
+
+	// Case 2: More complex scenarios
+	cat2 := &fakeCatalog{synonyms: map[string]*domain.CommoditySynonym{
+		"qj":           {CanonicalName: "queijo", Synonym: "qj", PrefixExpansion: stringPtr("queijo")},
+		"qjo":          {CanonicalName: "queijo", Synonym: "qjo", PrefixExpansion: stringPtr("queijo")},
+		"brie":         {CanonicalName: "brie", Synonym: "brie"},
+		"prato":        {CanonicalName: "prato", Synonym: "prato"},
+		"queijo prato": {CanonicalName: "queijo prato", Synonym: "queijo prato"},
+		"queijo brie":  {CanonicalName: "queijo brie", Synonym: "queijo brie"},
+	}}
+	brands2 := NewBrandDictionary([]string{"Tirolez", "Vigor"})
+
+	cases2 := []struct {
+		desc      string
+		want      string
+		wantBrand string
+	}{
+		{"QJO PRATO KG", "queijo prato", ""}, // qjo -> queijo (prefix) + prato
+		{"QUEIJO PRATO", "queijo prato", ""}, // exact hit (unchanged)
+		{"QJ BRIE TIROLEZ KG", "queijo brie", "Tirolez"},
+		{"QJBRIE TIROLEZ KG", "queijo brie", "Tirolez"},
+		{"QJOBRIE TIROLEZ KG", "queijo brie", "Tirolez"},
+		{"QJO BRIE TIROLEZ KG", "queijo brie", "Tirolez"},
+		{"QJ BRIE VIGOR KG", "queijo brie", "Vigor"},
+	}
+
+	t.Log("Brand test")
+	for _, i := range cases2 {
+		line := Line{Description: i.desc, Qty: decimal.NewFromInt(1), Unit: "KG", TotalPrice: decimal.NewFromInt(10)}
+		decision := Classify(context.Background(), cat2, line, brands2)
+		t.Logf("desc=%v wantProd=%v got=%v, wantBrand=%v gotBrand=%v", i.desc, i.want, decision.Name, i.wantBrand, decision.Brand)
+
+		if decision.Status != StatusCommodityFingerprint {
+			t.Errorf("Classify(%q) status = %q, want commodity_fingerprint", i.desc, decision.Status)
+		}
+		if decision.Name != i.want {
+			t.Errorf("Classify(%q) = %q, want %q", i.desc, decision.Name, i.want)
+		}
+		if decision.Brand != i.wantBrand {
+			t.Errorf("Classify(%q) brand = %q, want %q", i.desc, decision.Brand, i.wantBrand)
+		}
+
+		wantKey := CommodityKey(i.want, "KG", i.wantBrand)
+		if decision.ProductKey != wantKey {
+			t.Errorf("Classify(%q) key = %q, want %q", i.desc, decision.ProductKey, wantKey)
+		}
+	}
+
+	// Case 3: Longest prefix wins. The two prefixes expand to distinct values so
+	// the assertion proves qjo was selected rather than qj.
+	cat3 := &fakeCatalog{synonyms: map[string]*domain.CommoditySynonym{
+		"qj":    {CanonicalName: "queijo_1", Synonym: "qj", PrefixExpansion: stringPtr("queijo a")},
+		"qjo":   {CanonicalName: "queijo_2", Synonym: "qjo", PrefixExpansion: stringPtr("queijo b")},
+		"prato": {CanonicalName: "prato", Synonym: "prato"},
+	}}
+
+	// qjoprato should match 'qjo' because it is longer than 'qj'.
+	d := Classify(context.Background(), cat3, Line{Description: "qjoprato", Qty: decimal.NewFromInt(1), Unit: "KG"}, nil)
+	if d.Name != "queijo b prato" {
+		t.Errorf("Longest prefix wins failed: expected 'queijo b prato', got %q", d.Name)
+	}
+	if wantKey := CommodityKey("queijo b prato", "KG", ""); d.ProductKey != wantKey {
+		t.Errorf("Longest prefix key = %q, want %q", d.ProductKey, wantKey)
+	}
+
+	// Case 4: Exact match precedence (Phase 3 requirement check)
+	cat4 := &fakeCatalog{synonyms: map[string]*domain.CommoditySynonym{
+		"qj":       {CanonicalName: "queijo_1", Synonym: "qj", PrefixExpansion: stringPtr("queijo")},
+		"prato":    {CanonicalName: "prato", Synonym: "prato"},
+		"qjoprato": {CanonicalName: "exact_match", Synonym: "qjoprato"}, // Exact match row exists
+	}}
+
+	d = Classify(context.Background(), cat4, Line{Description: "qjoprato", Qty: decimal.NewFromInt(1), Unit: "KG"}, nil)
+	if d.Name != "exact_match" {
+		t.Errorf("Exact match precedence failed: expected 'exact_match', got %q", d.Name)
+	}
+
+	// Case 5: MatchPrefix error propagates as uid_uncertain.
+	cat5 := &fakeCatalog{prefixErr: errors.New("prefix lookup failed")}
+	d = Classify(context.Background(), cat5, Line{Description: "qjoprato", Qty: decimal.NewFromInt(1), Unit: "KG"}, nil)
+	if d.Status != StatusUIDUncertain {
+		t.Errorf("MatchPrefix error: status = %q, want uid_uncertain", d.Status)
+	}
+}
+
+func TestClassifyPrefixExpansionUsesCanonicalAlias(t *testing.T) {
+	// "qj mofo" expands to "queijo mofo", which is an exact alias for the
+	// canonical commodity "queijo gorgonzola". The expansion must collapse onto
+	// the alias target's identity, not create a second "queijo mofo" product.
+	cat := &fakeCatalog{synonyms: map[string]*domain.CommoditySynonym{
+		"qj":                {CanonicalName: "queijo mussarela", Synonym: "qj", Unit: "KG", PrefixExpansion: stringPtr("queijo")},
+		"queijo mofo":       {CanonicalName: "queijo gorgonzola", Synonym: "queijo mofo", Unit: "KG"},
+		"queijo gorgonzola": {CanonicalName: "queijo gorgonzola", Synonym: "queijo gorgonzola", Unit: "KG"},
+		"queijo azul": {CanonicalName: "queijo gorgonzola", Synonym: "queijo gorgonzola", Unit: "KG"},
+	}}
+
+	line := Line{Description: "QJ MOFO KG", Qty: decimal.NewFromInt(1), Unit: "KG", TotalPrice: decimal.NewFromInt(10)}
+	d := Classify(context.Background(), cat, line, nil)
+	if d.Status != StatusCommodityFingerprint {
+		t.Fatalf("status = %q, want commodity_fingerprint", d.Status)
+	}
+	if d.Name != "queijo gorgonzola" || d.CanonicalStem != "queijo gorgonzola" {
+		t.Errorf("decision = %+v, want canonical queijo gorgonzola", d)
+	}
+	if wantKey := CommodityKey("queijo gorgonzola", "KG", ""); d.ProductKey != wantKey {
+		t.Errorf("product key = %q, want %q", d.ProductKey, wantKey)
+	}
+}
+
+func stringPtr(s string) *string { return &s }
