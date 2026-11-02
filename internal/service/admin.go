@@ -148,17 +148,132 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 	return &ReviewQueuePage{Items: out, Page: newPage(page, limit, total)}, nil
 }
 
-// suggestStem derives the admin-facing canonical stem: taxonomy canonical name
-// when the produce table knows the stem, the raw normalized stem otherwise.
+// suggestStem derives the admin-facing canonical stem:
+// 1. taxonomy canonical name when the produce table knows the stem 
+// 2. the reconstructed prefix expansion when an abbreviation applies, the raw normalized stem otherwise.
 func (s *Service) suggestStem(ctx context.Context, description, unit string, brands *product.BrandDictionary) string {
 	stem := product.NormalizeStem(description, unit, brands)
 	if stem == "" {
 		return ""
 	}
-	if syn, err := s.Stores.CommoditySynonyms().Canonicalize(ctx, stem); err == nil {
-		return syn.CanonicalName
+
+	synStore := s.Stores.CommoditySynonyms()
+	if syn, err := synStore.Canonicalize(ctx, stem); err == nil {
+		// Standalone cheese aliases ("mofo", "azul") only make sense after a
+		// cheese prefix, mirroring product.Classify.
+		if syn.Source != product.CheeseAliasSource || syn.Synonym != stem {
+			return syn.CanonicalName
+		}
+	}
+
+	if pfx, err := synStore.MatchPrefix(ctx, stem); err == nil && pfx.PrefixExpansion != nil && strings.TrimSpace(*pfx.PrefixExpansion) != "" {
+		expansion := strings.TrimSpace(*pfx.PrefixExpansion)
+		remainder := strings.TrimSpace(stem[len(pfx.Synonym):])
+		expanded := strings.TrimSpace(expansion + " " + remainder)
+		changed := expanded != "" && expanded != stem
+
+		if changed {
+			if syn, err := synStore.Canonicalize(ctx, expanded); err == nil {
+				return syn.CanonicalName
+			}
+		}
+
+		if remSyn, err := product.ResolveCheeseAliasRemainder(ctx, synStore, pfx.Synonym, expansion, remainder); err == nil {
+			return remSyn.CanonicalName
+		}
+
+		if changed {
+			return expanded
+		}
 	}
 	return stem
+}
+
+// SynonymRequest is the wire body of POST /admin/synonym: map a normalized
+// receipt stem (synonym) onto a canonical product identity. PrefixExpansion
+// registers an abbreviation (e.g. qj -> queijo) that the classifier expands
+// before fuzzy matching.
+type SynonymRequest struct {
+	Synonym         string  `json:"synonym"`
+	CanonicalName   string  `json:"canonical_name"`
+	Category        string  `json:"category,omitempty"`
+	Unit            string  `json:"unit,omitempty"`
+	Source          string  `json:"source,omitempty"`
+	PrefixExpansion *string `json:"prefix_expansion,omitempty"`
+}
+
+// SynonymView is the admin projection of a commodity_synonyms row.
+type SynonymView struct {
+	ID              int64     `json:"id"`
+	Synonym         string    `json:"synonym"`
+	CanonicalName   string    `json:"canonical_name"`
+	Category        string    `json:"category,omitempty"`
+	Unit            string    `json:"unit,omitempty"`
+	Source          string    `json:"source,omitempty"`
+	PrefixExpansion *string   `json:"prefix_expansion,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// CreateSynonym implements POST /admin/synonym. Admins map a normalized
+// receipt stem to a canonical product identity; an optional prefix_expansion
+// registers an abbreviation (qj -> queijo). Both the synonym and canonical
+// name go through NormalizeStem so the taxonomy speaks the same vocabulary the
+// parser produces. Duplicate synonyms are a conflict.
+func (s *Service) CreateSynonym(ctx context.Context, req SynonymRequest) (*SynonymView, error) {
+	synonym := product.NormalizeStem(req.Synonym, "", nil)
+	canonical := product.NormalizeStem(req.CanonicalName, "", nil)
+	if synonym == "" || canonical == "" {
+		return nil, ErrInvalidAssignment
+	}
+
+	unit := ""
+	if strings.TrimSpace(req.Unit) != "" {
+		u, ok := product.NormalizeUnit(req.Unit)
+		if !ok {
+			return nil, ErrInvalidAssignment
+		}
+		unit = u
+	}
+
+	source := strings.TrimSpace(req.Source)
+	if source == "" {
+		source = "admin"
+	}
+
+	var prefix *string
+	if req.PrefixExpansion != nil {
+		p := product.NormalizeStem(*req.PrefixExpansion, "", nil)
+		if p == "" {
+			return nil, ErrInvalidAssignment
+		}
+		prefix = &p
+	}
+
+	row := &domain.CommoditySynonym{
+		Synonym:         synonym,
+		CanonicalName:   canonical,
+		Category:        strings.TrimSpace(req.Category),
+		Unit:            unit,
+		Source:          source,
+		PrefixExpansion: prefix,
+	}
+	if err := s.Stores.CommoditySynonyms().Create(ctx, row); err != nil {
+		return nil, err
+	}
+	return toSynonymView(row), nil
+}
+
+func toSynonymView(row *domain.CommoditySynonym) *SynonymView {
+	return &SynonymView{
+		ID:              row.ID,
+		Synonym:         row.Synonym,
+		CanonicalName:   row.CanonicalName,
+		Category:        row.Category,
+		Unit:            row.Unit,
+		Source:          row.Source,
+		PrefixExpansion: row.PrefixExpansion,
+		CreatedAt:       row.CreatedAt,
+	}
 }
 
 // BatchAssign implements POST /admin/products/batch-assign atomically: every

@@ -53,26 +53,23 @@ func TestCommoditySynonymSeeded(t *testing.T) {
 }
 
 func TestCommoditySynonymSeededCheese(t *testing.T) {
-	// Regression for the deli-cheese stems seen in real receipts: the exact
-	// stems the classifier now produces (brand words like VIGOR/TIROLEZ are
-	// stripped before lookup) must resolve to their canonical commodity.
+	// After the 000010/000011 cleanup the table contains only the abbreviation
+	// prefixes, the full canonical names, and the cheese aliases. The classifier
+	// (not this store test) expands "qj mofo" into "queijo gorgonzola"; here we
+	// only assert the seeded rows themselves are present.
 	s := testStore
 	ctx := context.Background()
 
 	cases := map[string]string{
-		"qj mussarela":             "queijo mussarela", // map to self
-		"qjo mussarela":            "queijo mussarela", // map to self
-		"qj":                       "queijo mussarela", // abbreviation expansion
-		"qjo":                      "queijo mussarela", // abbreviation expansion
-		"qj parmesao":              "queijo parmesao",
-		"qj parmesao vigor":        "queijo parmesao", // "QJ PARMESAO VIGOR KG" (brand off)
-		"qj brie":                  "queijo brie",     // "QJ BRIE TIROLEZ KG" (brand stripped)
-		"qjo brie":                 "queijo brie",
-		"qjo brie vigor":           "queijo brie", // "QJO BRIE VIGOR KG"
-		"queijo mofo":              "queijo gorgonzola",
-		"queijo azul":              "queijo gorgonzola",
-		"queijo mofo azul":         "queijo gorgonzola",
-		"queijo mofo azul tirolez": "queijo gorgonzola", // "QUEIJO MOFO AZUL TIROLEZ"
+		"qj":                "queijo mussarela", // abbreviation prefix row
+		"qjo":               "queijo mussarela", // abbreviation prefix row
+		"queijo mussarela":  "queijo mussarela",
+		"queijo prato":      "queijo prato",
+		"queijo parmesao":   "queijo parmesao",
+		"queijo brie":       "queijo brie",
+		"queijo gorgonzola": "queijo gorgonzola",
+		"mofo":              "queijo gorgonzola", // cheese alias, only valid after a prefix
+		"azul":              "queijo gorgonzola", // cheese alias, only valid after a prefix
 	}
 	for stem, want := range cases {
 		got, err := s.CommoditySynonyms().Canonicalize(ctx, stem)

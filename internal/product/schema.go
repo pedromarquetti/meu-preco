@@ -67,6 +67,77 @@ type Catalog interface {
 	MatchPrefix(ctx context.Context, stem string) (*domain.CommoditySynonym, error)
 }
 
+// CheeseAliasSource marks synonym rows that are ambiguous standalone words
+// ("mofo", "azul") and therefore only resolve after a cheese prefix.
+const CheeseAliasSource = "cheese_alias"
+
+// SynonymCanonicalizer is the narrow lookup surface needed to resolve cheese
+// aliases; both Catalog and domain.CommoditySynonymStore satisfy it.
+type SynonymCanonicalizer interface {
+	Canonicalize(ctx context.Context, synonym string) (*domain.CommoditySynonym, error)
+}
+
+// cheesePrefix reports whether a matched prefix denotes cheese, either as the
+// word itself ("queijo") or through its expansion ("qj"/"qjo" -> "queijo").
+func cheesePrefix(prefix, expansion string) bool {
+	if strings.EqualFold(strings.TrimSpace(prefix), "queijo") {
+		return true
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(expansion), " ")
+	return strings.EqualFold(first, "queijo")
+}
+
+// ResolveCheeseAliasRemainder maps the remainder of a cheese-prefixed stem
+// ("queijo mofo azul", "qj mofo") onto a canonical commodity via the
+// cheese_alias rows ("mofo"/"azul" -> "queijo gorgonzola"). It only resolves
+// when the prefix/expansion denotes cheese and every remainder token is a
+// cheese_alias row sharing one canonical name; otherwise it returns
+// domain.ErrNotFound so the caller can fall through. Callers must only invoke
+// it after a taxonomy prefix matched, which keeps ambiguous words such as
+// "mofo" scoped to cheese descriptions.
+func ResolveCheeseAliasRemainder(ctx context.Context, cat SynonymCanonicalizer,
+	prefix, expansion, remainder string) (*domain.CommoditySynonym, error) {
+	if !cheesePrefix(prefix, expansion) {
+		return nil, domain.ErrNotFound
+	}
+
+	tokens := strings.Fields(remainder)
+	if len(tokens) == 0 {
+		return nil, domain.ErrNotFound
+	}
+
+	var resolved *domain.CommoditySynonym
+	for _, token := range tokens {
+		syn, err := cat.Canonicalize(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		if syn.Source != CheeseAliasSource {
+			return nil, domain.ErrNotFound
+		}
+		if resolved == nil {
+			resolved = syn
+			continue
+		}
+		if syn.CanonicalName != resolved.CanonicalName {
+			return nil, domain.ErrNotFound
+		}
+	}
+	return resolved, nil
+}
+
+// remainderHasCheeseAlias reports whether any token in remainder is a
+// cheese_alias row. It lets Classify refuse to mint a new commodity from a
+// mixed phrase such as "queijo mofo prato".
+func remainderHasCheeseAlias(ctx context.Context, cat SynonymCanonicalizer, remainder string) bool {
+	for _, token := range strings.Fields(remainder) {
+		if syn, err := cat.Canonicalize(ctx, token); err == nil && syn.Source == CheeseAliasSource {
+			return true
+		}
+	}
+	return false
+}
+
 func commodityDecision(ctx context.Context, cat Catalog, syn *domain.CommoditySynonym,
 	canonicalStem, brand string, dec Decision) Decision {
 	unit := syn.Unit
@@ -151,9 +222,13 @@ func Classify(ctx context.Context, cat Catalog, in Line, brands *BrandDictionary
 		return decision
 	}
 
-	// Exact match first
+	// Exact match first. Standalone cheese aliases ("mofo", "azul") are
+	// intentionally skipped: they are only meaningful after a cheese prefix
+	// (e.g. "qj mofo" -> "queijo gorgonzola").
 	if syn, err := cat.Canonicalize(ctx, stem); err == nil {
-		return commodityDecision(ctx, cat, syn, syn.CanonicalName, brand, decision)
+		if syn.Source != CheeseAliasSource || syn.Synonym != stem {
+			return commodityDecision(ctx, cat, syn, syn.CanonicalName, brand, decision)
+		}
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		decision.Status = StatusUIDUncertain
 		decision.Message = "taxonomy lookup failed"
@@ -162,23 +237,46 @@ func Classify(ctx context.Context, cat Catalog, in Line, brands *BrandDictionary
 
 	// Abbreviation prefix expansion: "qjo prato" / "qjoprato" -> "queijo prato".
 	if pfx, err := cat.MatchPrefix(ctx, stem); err == nil && pfx.PrefixExpansion != nil && strings.TrimSpace(*pfx.PrefixExpansion) != "" {
+		expansion := strings.TrimSpace(*pfx.PrefixExpansion)
 		remainder := strings.TrimSpace(stem[len(pfx.Synonym):])
-		expanded := strings.TrimSpace(strings.TrimSpace(*pfx.PrefixExpansion) + " " + remainder)
+		expanded := strings.TrimSpace(expansion + " " + remainder)
 
-		if expanded != "" && expanded != stem {
-			if resolved, err := cat.Canonicalize(ctx, expanded); err == nil {
-				// The expanded stem may be an alias (e.g. "queijo mofo" ->
-				// "queijo gorgonzola"); use the row's canonical identity so
-				// aliases collapse onto the same product key.
-				return commodityDecision(ctx, cat, resolved, resolved.CanonicalName, brand, decision)
+		if expanded != "" {
+			if expanded != stem {
+				if resolved, err := cat.Canonicalize(ctx, expanded); err == nil {
+					// The expanded stem may be an alias (e.g. "queijo mofo" ->
+					// "queijo gorgonzola"); use the row's canonical identity so
+					// aliases collapse onto the same product key.
+					return commodityDecision(ctx, cat, resolved, resolved.CanonicalName, brand, decision)
+				} else if !errors.Is(err, domain.ErrNotFound) {
+					decision.Status = StatusUIDUncertain
+					decision.Message = "taxonomy lookup failed"
+					return decision
+				}
+			}
+
+			// Ambiguous cheese words ("mofo", "azul") collapse onto their
+			// canonical alias only when every remainder token agrees. This also
+			// covers identity prefixes ("queijo mofo"), where the expansion is
+			// a no-op and must not short-circuit the alias lookup.
+			if remSyn, err := ResolveCheeseAliasRemainder(ctx, cat, pfx.Synonym, expansion, remainder); err == nil {
+				return commodityDecision(ctx, cat, remSyn, remSyn.CanonicalName, brand, decision)
 			} else if !errors.Is(err, domain.ErrNotFound) {
 				decision.Status = StatusUIDUncertain
 				decision.Message = "taxonomy lookup failed"
 				return decision
 			}
-			// No exact row for the expanded identity: still accept the
-			// reconstructed commodity using the prefix row's metadata.
-			return commodityDecision(ctx, cat, pfx, expanded, brand, decision)
+
+			if expanded != stem {
+				if cheesePrefix(pfx.Synonym, expansion) && remainderHasCheeseAlias(ctx, cat, remainder) {
+					// Mixed alias + product phrase ("queijo mofo prato"): do
+					// not invent a new commodity; fall through to fuzzy match.
+				} else {
+					// No exact row for the expanded identity: still accept the
+					// reconstructed commodity using the prefix row's metadata.
+					return commodityDecision(ctx, cat, pfx, expanded, brand, decision)
+				}
+			}
 		}
 	} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		decision.Status = StatusUIDUncertain

@@ -78,8 +78,6 @@ func seedStoreAndLog(t *testing.T, m *memStores, sm *domain.Supermarket, p *doma
 
 func int64Ptr(v int64) *int64 { return &v }
 
-func mustDecimal(s string) decimal.Decimal { return decimal.RequireFromString(s) }
-
 func TestSearchProductsFiltersAndExcludesReview(t *testing.T) {
 	m := newMemStores()
 	p1 := seedOpenProduct(t, m, "ARROZ BRANCO CAMIL", "KG", nil)

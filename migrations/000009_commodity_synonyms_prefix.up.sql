@@ -3,6 +3,11 @@
 -- while exact-match rows remain unchanged and backward compatible. Idempotent:
 -- re-running is a no-op; existing synonym rows are updated in-place with NULL =
 -- legacy/exact-only semantics preserved by default (no new index required).
+--
+-- Convention: add each new abbreviation as one row with prefix_expansion; do
+-- not add "<prefix> <product>" combinations. Keep full canonical names as exact
+-- rows (e.g. "queijo prato"), and mark ambiguous standalone aliases with
+-- source = 'cheese_alias' so they only resolve after a prefix.
 
 ALTER TABLE
 commodity_synonyms ADD COLUMN IF NOT EXISTS prefix_expansion TEXT;

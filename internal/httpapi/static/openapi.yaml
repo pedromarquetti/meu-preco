@@ -838,6 +838,42 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/RateLimited"
+  /api/v1/admin/synonym:
+    post:
+      tags: [admin]
+      summary: Map a receipt stem to a canonical product (admin)
+      description: |
+        Creates one `commodity_synonyms` row. `synonym` and `canonical_name`
+        are normalized to the parser's stem vocabulary. Set `prefix_expansion`
+        to register an abbreviation (e.g. `qj` -> `queijo`) that the classifier
+        expands before fuzzy matching. Duplicate synonyms return `conflict`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SynonymRequest" }
+      responses:
+        "201":
+          description: Created synonym
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SynonymView" }
+        "400":
+          description: Empty/unnormalizable synonym or canonical name, bad unit, or malformed body (`invalid_assignment` / `invalid_request`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Synonym already exists (`conflict`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /api/v1/admin/supermarkets/merge:
     post:
       tags: [admin]
@@ -1288,6 +1324,27 @@ components:
       properties:
         assigned: { type: integer }
         created: { type: integer }
+    SynonymRequest:
+      type: object
+      required: [synonym, canonical_name]
+      properties:
+        synonym: { type: string, description: normalized receipt stem to map }
+        canonical_name: { type: string, description: canonical product identity }
+        category: { type: string }
+        unit: { type: string, description: canonical unit (KG, UN, DZ, GR, ML, LT) }
+        source: { type: string, description: provenance, defaults to admin }
+        prefix_expansion: { type: string, description: abbreviation expansion (qj -> queijo) }
+    SynonymView:
+      type: object
+      properties:
+        id: { type: integer }
+        synonym: { type: string }
+        canonical_name: { type: string }
+        category: { type: string }
+        unit: { type: string }
+        source: { type: string }
+        prefix_expansion: { type: string }
+        created_at: { type: string, format: date-time }
     MergeResult:
       type: object
       properties:

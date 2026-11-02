@@ -24,6 +24,7 @@ const maxAdminBody = 1 << 20 // 1 MiB is generous for a batch-assign body
 //	PATCH  /api/v1/admin/products/{id}               — curate name/brand/unit
 //	DELETE /api/v1/admin/products/{id}               — guarded delete (?purge)
 //	POST   /api/v1/admin/supermarkets/merge          — fold two emitters by CNPJ
+//	POST   /api/v1/admin/synonym                     — map a stem to a product
 type adminAPI struct {
 	svc *service.Service
 }
@@ -172,4 +173,23 @@ func (api *adminAPI) deleteProduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.Respond(w, http.StatusOK, res)
+}
+
+// createSynonym implements POST /admin/synonym: map a normalized receipt stem
+// onto a canonical product identity, optionally registering a prefix expansion.
+func (api *adminAPI) createSynonym(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBody)
+
+	var body service.SynonymRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request",
+			`body must be valid JSON: {"synonym","canonical_name","category","unit","prefix_expansion"}`)
+		return
+	}
+	res, err := api.svc.CreateSynonym(r.Context(), body)
+	if err != nil {
+		respondServiceError(w, r, err)
+		return
+	}
+	httpx.Respond(w, http.StatusCreated, res)
 }

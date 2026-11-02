@@ -148,6 +148,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 			ar.Patch("/products/{id}", adminAPI.patchProduct)
 			ar.Delete("/products/{id}", adminAPI.deleteProduct)
 			ar.Post("/supermarkets/merge", adminAPI.mergeSupermarkets)
+			ar.Post("/synonym", adminAPI.createSynonym)
 			ar.NotFound(httpx.NotFound)
 		})
 	})

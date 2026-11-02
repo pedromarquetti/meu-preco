@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"meupreco/internal/domain"
+	"meupreco/internal/product"
 )
 
 // memStores is an in-memory domain.Stores for hermetic service tests. Tx runs
@@ -991,4 +992,9 @@ func priceLogKey(nfceID int64, line int) string {
 	return strconv.FormatInt(nfceID, 10) + ":" + strconv.Itoa(line)
 }
 
+func (m *memStores) Catalog() product.Catalog {
+	return catalogAdapter{stores: m}
+}
+
+// strPtr is the shared helper for optional string fields in service tests.
 func strPtr(s string) *string { return &s }

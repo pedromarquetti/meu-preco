@@ -232,14 +232,14 @@ func TestClassifyPrefixExpansion(t *testing.T) {
 }
 
 func TestClassifyPrefixExpansionUsesCanonicalAlias(t *testing.T) {
-	// "qj mofo" expands to "queijo mofo", which is an exact alias for the
-	// canonical commodity "queijo gorgonzola". The expansion must collapse onto
-	// the alias target's identity, not create a second "queijo mofo" product.
+	// "qj mofo" expands to "queijo mofo"; since that exact row was dropped,
+	// the classifier resolves the remainder ("mofo") as a cheese alias for
+	// "queijo gorgonzola". Standalone "mofo" must not resolve.
 	cat := &fakeCatalog{synonyms: map[string]*domain.CommoditySynonym{
 		"qj":                {CanonicalName: "queijo mussarela", Synonym: "qj", Unit: "KG", PrefixExpansion: stringPtr("queijo")},
-		"queijo mofo":       {CanonicalName: "queijo gorgonzola", Synonym: "queijo mofo", Unit: "KG"},
+		"mofo":              {CanonicalName: "queijo gorgonzola", Synonym: "mofo", Unit: "KG", Source: "cheese_alias"},
+		"azul":              {CanonicalName: "queijo gorgonzola", Synonym: "azul", Unit: "KG", Source: "cheese_alias"},
 		"queijo gorgonzola": {CanonicalName: "queijo gorgonzola", Synonym: "queijo gorgonzola", Unit: "KG"},
-		"queijo azul": {CanonicalName: "queijo gorgonzola", Synonym: "queijo gorgonzola", Unit: "KG"},
 	}}
 
 	line := Line{Description: "QJ MOFO KG", Qty: decimal.NewFromInt(1), Unit: "KG", TotalPrice: decimal.NewFromInt(10)}
@@ -253,6 +253,83 @@ func TestClassifyPrefixExpansionUsesCanonicalAlias(t *testing.T) {
 	if wantKey := CommodityKey("queijo gorgonzola", "KG", ""); d.ProductKey != wantKey {
 		t.Errorf("product key = %q, want %q", d.ProductKey, wantKey)
 	}
+
+	// Standalone "mofo" must not resolve to gorgonzola.
+	standalone := Classify(context.Background(), cat, Line{Description: "MOFO", Qty: decimal.NewFromInt(1), Unit: "KG"}, nil)
+	if standalone.Status == StatusCommodityFingerprint {
+		t.Errorf("standalone mofo should not map to a commodity: %+v", standalone)
+	}
 }
 
 func stringPtr(s string) *string { return &s }
+
+// TestClassifyParserExampleCheeseVariants mirrors the Parser example table:
+// every abbreviation/brand variant must collapse onto the same canonical
+// commodity without per-product combination rows.
+func TestClassifyParserExampleCheeseVariants(t *testing.T) {
+	queijo := "queijo"
+	cat := &fakeCatalog{synonyms: map[string]*domain.CommoditySynonym{
+		"qj":     {CanonicalName: "queijo mussarela", Synonym: "qj", Unit: "KG", PrefixExpansion: &queijo},
+		"qjo":    {CanonicalName: "queijo mussarela", Synonym: "qjo", Unit: "KG", PrefixExpansion: &queijo},
+		"queijo": {CanonicalName: "queijo mussarela", Synonym: "queijo", Unit: "KG", PrefixExpansion: &queijo},
+
+		"queijo prato":      {CanonicalName: "queijo prato", Synonym: "queijo prato", Unit: "KG"},
+		"queijo brie":       {CanonicalName: "queijo brie", Synonym: "queijo brie", Unit: "KG"},
+		"queijo gorgonzola": {CanonicalName: "queijo gorgonzola", Synonym: "queijo gorgonzola", Unit: "KG"},
+
+		"mofo": {CanonicalName: "queijo gorgonzola", Synonym: "mofo", Unit: "KG", Source: "cheese_alias"},
+		"azul": {CanonicalName: "queijo gorgonzola", Synonym: "azul", Unit: "KG", Source: "cheese_alias"},
+	}}
+	brands := NewBrandDictionary([]string{"Tirolez"})
+
+	cases := []struct {
+		desc      string
+		wantName  string
+		wantBrand string
+	}{
+		{"QJO PRATO KG", "queijo prato", ""},
+		{"QJOPRATO", "queijo prato", ""},
+		{"QJ MOFO", "queijo gorgonzola", ""},
+		{"QJO MOFO", "queijo gorgonzola", ""},
+		{"QJOMOFO", "queijo gorgonzola", ""},
+		{"QJ AZUL", "queijo gorgonzola", ""},
+		{"QJO AZUL", "queijo gorgonzola", ""},
+		{"QJOAZUL", "queijo gorgonzola", ""},
+		{"QJAZUL", "queijo gorgonzola", ""},
+		{"QJPRATO", "queijo prato", ""},
+		{"QJ PRATO", "queijo prato", ""},
+		{"QJO BRIE TIROLEZ KG", "queijo brie", "Tirolez"},
+		{"QJ BRIE TIROLEZ KG", "queijo brie", "Tirolez"},
+		{"QUEIJO PRATO", "queijo prato", ""},
+		// Full-word cheese prefix with alias words (the live COVABRA line).
+		{"QUEIJO MOFO", "queijo gorgonzola", ""},
+		{"QUEIJO AZUL", "queijo gorgonzola", ""},
+		{"QUEIJO MOFO AZUL", "queijo gorgonzola", ""},
+		{"QUEIJO MOFO AZUL TIROLEZ KG", "queijo gorgonzola", "Tirolez"},
+		{"QJ MOFO AZUL TIROLEZ KG", "queijo gorgonzola", "Tirolez"},
+		{"QJO MOFO AZUL", "queijo gorgonzola", ""},
+	}
+	for _, tc := range cases {
+		line := Line{Description: tc.desc, Qty: decimal.NewFromInt(1), Unit: "KG", TotalPrice: decimal.NewFromInt(10)}
+		d := Classify(context.Background(), cat, line, brands)
+		if d.Status != StatusCommodityFingerprint {
+			t.Errorf("%q: status = %q, want commodity_fingerprint", tc.desc, d.Status)
+			continue
+		}
+		if d.Name != tc.wantName || d.CanonicalStem != tc.wantName {
+			t.Errorf("%q: name/stem = %q/%q, want %q", tc.desc, d.Name, d.CanonicalStem, tc.wantName)
+		}
+		if d.Brand != tc.wantBrand {
+			t.Errorf("%q: brand = %q, want %q", tc.desc, d.Brand, tc.wantBrand)
+		}
+	}
+
+	// Ambiguous aliases must stay scoped to cheese: standalone "mofo"/"azul"
+	// and non-alias remainder words never collapse onto gorgonzola.
+	for _, desc := range []string{"MOFO", "AZUL", "QUEIJO MOFO PRATO"} {
+		d := Classify(context.Background(), cat, Line{Description: desc, Qty: decimal.NewFromInt(1), Unit: "KG", TotalPrice: decimal.NewFromInt(10)}, brands)
+		if d.Status == StatusCommodityFingerprint {
+			t.Errorf("%q: unexpectedly matched %q", desc, d.Name)
+		}
+	}
+}
