@@ -149,7 +149,7 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 }
 
 // suggestStem derives the admin-facing canonical stem:
-// 1. taxonomy canonical name when the produce table knows the stem 
+// 1. taxonomy canonical name when the produce table knows the stem
 // 2. the reconstructed prefix expansion when an abbreviation applies, the raw normalized stem otherwise.
 func (s *Service) suggestStem(ctx context.Context, description, unit string, brands *product.BrandDictionary) string {
 	stem := product.NormalizeStem(description, unit, brands)
