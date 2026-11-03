@@ -1,15 +1,13 @@
 # MeuPreço
 
 <!--toc:start-->
-
 - [MeuPreço](#meupreço)
   - [Goals](#goals)
   - [How it works](#how-it-works)
   - [Stack](#stack)
   - [Features](#features)
   - [Getting started](#getting-started)
-    - [DB setup](#db-setup)
-    - [Run with make](#run-with-make)
+    - [Run with Make](#run-with-make)
     - [env](#env)
     - [Hardening & operations](#hardening-operations)
     - [Docker](#docker)
@@ -39,7 +37,6 @@
   - [Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)](#import-a-bulk-open-food-facts-dump-789790-gtins-only-idempotent)
   - [Inspiration](#inspiration)
   - [Non-goals](#non-goals)
-
 <!--toc:end-->
 
 Backend-only Go service that tracks Brazilian supermarket prices from **NFC-e**
@@ -96,11 +93,17 @@ HTTPSource → SEFAZ portal (throttled, cookie jar, captcha-aware)
 parse DANFE ("Consulta Resumida" family — products, prices, supermarket, totals)
     │
     ▼
-identity resolution (GTIN / commodity key) + itemized plan
-    │        POST /api/v1/nfce/submit  (confirm → writes atomically)
+identity resolution (GTIN / commodity key) + itemized plan + receipt snapshot
+    │        POST /api/v1/nfce/submit  (confirm → commits the stored snapshot)
     ▼
 price_logs ──► products history, supermarket comparison API
 ```
+
+The draft step persists both the classified plan and a normalized receipt
+snapshot in the pending `previews` row. `POST /nfce/submit` therefore commits
+entirely from database data: once `/nfce/new` succeeds, a delayed confirmation
+does not contact SEFAZ again and cannot fail because the portal is throttling,
+resetting connections, or unavailable.
 
 ## Stack
 
@@ -121,7 +124,8 @@ price_logs ──► products history, supermarket comparison API
       Pages deployment, `make openapi-generate/check/diff/bundle/static` targets
 - [x] Receipt ingestion pipeline — QR-code/Access key parsing, SEFAZ portal
       scraping (DANFE), HTML parsing for products/prices, two-phase commit
-      (draft → submit), idempotent ingestion, draft preview with TTL
+      (draft → submit), idempotent ingestion, draft preview with TTL, and a
+      database-only submit backed by the persisted receipt snapshot
 - [ ] Receipt parsing for other states — For now, it only supports São Paulo
 - [x] Captcha handling — challenges proxied to user, state & image proxy
       endpoints, retry budget tracking
@@ -189,7 +193,7 @@ The server expects some env. vars to be set.
 | SEFAZ_BACKOFF_BASE    | no       | 200ms            | Go duration ≥ 0 (start of the exponential retry delay)                 |
 | SEFAZ_BACKOFF_CAP     | no       | 2s               | Go duration ≥ `SEFAZ_BACKOFF_BASE` (cap per retry delay)               |
 | SEFAZ_BASE_URL        | no       | SP prod          | https URL (overrides the SP QR consultation endpoint for test proxies) |
-| PREVIEWS_TTL          | no       | 15m              | Go duration > 0 (pending draft lifetime)                               |
+| PREVIEWS_TTL          | no       | 15m              | Go duration > 0 (pending draft + receipt snapshot lifetime)            |
 | PREVIEW_GC_INTERVAL   | no       | 5m               | Go duration > 0 (background sweep period)                              |
 | RATE_LIMIT_IP_RPS     | no       | 5                | float ≥ 0 (0 disables the per-IP bucket)                               |
 | RATE_LIMIT_IP_BURST   | no       | 300              | integer ≥ 0 (per-IP burst)                                             |

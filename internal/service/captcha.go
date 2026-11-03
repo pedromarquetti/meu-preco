@@ -49,11 +49,11 @@ func (s *Service) captchaSupport() (*CaptchaSupport, bool) {
 
 // SolveCaptcha replays a user-typed captcha solution against the portal in the
 // challenge's captured session. On a correct answer it seeds the solved
-// receipt (so the later /nfce/submit re-fetch does not re-challenge), builds
-// the receipt plan through the normal pipeline and persists it as a pending
-// preview — the draft the client then confirms. A rejected answer records a
-// failure (retry allowed until the attempt budget is spent), and a challenge
-// is strictly single-use once solved.
+// receipt (so the immediate draft fetch does not re-challenge), builds the
+// receipt plan through the normal pipeline and persists it, snapshot included,
+// as a pending preview — the draft the client then confirms. A rejected answer
+// records a failure (retry allowed until the attempt budget is spent), and a
+// challenge is strictly single-use once solved.
 //
 // The portal-facing solve is delegated to the nfce solver; this function is
 // the orchestration that turns "the portal accepted the answer" into "the
@@ -98,8 +98,8 @@ func (s *Service) SolveCaptcha(ctx context.Context, req SolveCaptchaRequest) (*P
 	}
 
 	// Bridge the receipt the portal just released: the danfe bytes are cached
-	// by access key so ReportPreview / the commit re-fetch serve them without a
-	// fresh portal challenge (the SEFAZ session would otherwise gate again).
+	// by access key so the immediate draft fetch serves them without a fresh
+	// portal challenge (the SEFAZ session would otherwise gate again).
 	if cached, ok := s.Resolver.(SolvedCache); ok {
 		cached.CacheSolved(key, raw)
 	}

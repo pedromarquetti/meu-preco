@@ -60,20 +60,22 @@ var (
 	ErrInvalidRole = errors.New("invalid role")
 )
 
-// Resolver is the fetch+parse slice every submit path needs: given a chave
+// Resolver is the fetch+parse slice every draft path needs: given a chave
 // (and optionally the raw QR payload), it returns the normalized, privacy-
-// stripped receipt. Underlying implementations can return nfce.CaptchaError,
-// nfce.ErrKeyNotFound, nfce.ErrInvalidKey, nfce.ErrInvalidQRPayload,
-// nfce.ErrUnsupportedUF or nfce.ErrUpstream/EerrBadResponse, which the HTTP
-// layer maps onto its typed responses.
+// stripped receipt. Submit commits the receipt snapshot persisted by the
+// draft, so it never calls the resolver. Underlying implementations can
+// return nfce.CaptchaError, nfce.ErrKeyNotFound, nfce.ErrInvalidKey,
+// nfce.ErrInvalidQRPayload, nfce.ErrUnsupportedUF or
+// nfce.ErrUpstream/EerrBadResponse, which the HTTP layer maps onto its typed
+// responses.
 type Resolver interface {
 	Resolve(ctx context.Context, key nfce.AccessKey, payload string) (*domain.Nfce, error)
 }
 
 // SolvedCache is the opt-in half of the resolver surface the captcha flow
 // needs: after a challenge is solved, the raw DANFE is cached by access key so
-// the follow-up fetch (the /nfce/submit re-fetch) serves it without another
-// portal challenge. Implemented by *nfce.Resolver; unused by stub resolvers.
+// the immediate draft fetch serves it without another portal challenge.
+// Implemented by *nfce.Resolver; unused by stub resolvers.
 type SolvedCache interface {
 	CacheSolved(key nfce.AccessKey, raw []byte)
 }

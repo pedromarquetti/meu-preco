@@ -21,13 +21,15 @@ func TestPreviewStoreLifecycle(t *testing.T) {
 
 	items := json.RawMessage(`[{"line":1,"status":"gtin_new"}]`)
 	totals := json.RawMessage(`{"items":1,"total":"22.99"}`)
+	snapshot := json.RawMessage(`{"schema_version":1,"receipt":{"access_key":"` + testAccessKey + `","supermarket":{"cnpj":"12345678000199"}}}`)
 	p := &domain.Preview{
-		UserID:     u.ID,
-		AccessKey:  testAccessKey,
-		PlanItems:  items,
-		PlanTotals: totals,
-		Status:     "pending",
-		TTL:        time.Now().Add(15 * time.Minute),
+		UserID:          u.ID,
+		AccessKey:       testAccessKey,
+		PlanItems:       items,
+		PlanTotals:      totals,
+		ReceiptSnapshot: snapshot,
+		Status:          "pending",
+		TTL:             time.Now().Add(15 * time.Minute),
 	}
 	if err := s.Previews().Create(ctx, p); err != nil {
 		t.Fatalf("create preview: %v", err)
@@ -49,6 +51,9 @@ func TestPreviewStoreLifecycle(t *testing.T) {
 	if !jsonEqual(t, byID.PlanTotals, totals) {
 		t.Errorf("plan_totals = %s, want %s", byID.PlanTotals, totals)
 	}
+	if !jsonEqual(t, byID.ReceiptSnapshot, snapshot) {
+		t.Errorf("receipt_snapshot = %s, want %s", byID.ReceiptSnapshot, snapshot)
+	}
 
 	byKey, err := s.Previews().GetPendingByUserAccessKey(ctx, u.ID, testAccessKey)
 	if err != nil {
@@ -56,6 +61,9 @@ func TestPreviewStoreLifecycle(t *testing.T) {
 	}
 	if byKey.ID != p.ID {
 		t.Errorf("byKey id = %d, want %d", byKey.ID, p.ID)
+	}
+	if !jsonEqual(t, byKey.ReceiptSnapshot, snapshot) {
+		t.Errorf("byKey receipt_snapshot = %s, want %s", byKey.ReceiptSnapshot, snapshot)
 	}
 
 	// First commit succeeds; a second confirm is a conflict.
@@ -131,12 +139,13 @@ func TestPreviewStorePurgeExpired(t *testing.T) {
 
 	u := seedUser(t, s)
 
+	snapshot := json.RawMessage(`{"schema_version":1,"receipt":{"access_key":"35241152323688000144650020000002571115675902"}}`)
 	fresh := &domain.Preview{UserID: u.ID, AccessKey: "35241152323688000144650020000002571115675902",
-		PlanItems: json.RawMessage(`[]`), Status: "pending", TTL: time.Now().Add(15 * time.Minute)}
+		PlanItems: json.RawMessage(`[]`), ReceiptSnapshot: snapshot, Status: "pending", TTL: time.Now().Add(15 * time.Minute)}
 	stale := &domain.Preview{UserID: u.ID, AccessKey: "35241152323688000144650020000002571115675903",
-		PlanItems: json.RawMessage(`[]`), Status: "pending", TTL: time.Now().Add(-time.Minute)}
+		PlanItems: json.RawMessage(`[]`), ReceiptSnapshot: snapshot, Status: "pending", TTL: time.Now().Add(-time.Minute)}
 	committed := &domain.Preview{UserID: u.ID, AccessKey: "35241152323688000144650020000002571115675904",
-		PlanItems: json.RawMessage(`[]`), Status: "committed", TTL: time.Now().Add(-2 * time.Hour)}
+		PlanItems: json.RawMessage(`[]`), ReceiptSnapshot: snapshot, Status: "committed", TTL: time.Now().Add(-2 * time.Hour)}
 
 	for _, p := range []*domain.Preview{fresh, stale, committed} {
 		if err := s.Previews().Create(ctx, p); err != nil {
@@ -152,13 +161,21 @@ func TestPreviewStorePurgeExpired(t *testing.T) {
 		t.Errorf("purged = %d, want 2 (stale + committed past ttl)", n)
 	}
 
+	// Purge removes the whole previews row, so the snapshots go with it.
+	if _, err := s.Previews().GetByID(ctx, stale.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("stale preview (with its snapshot) survived purge: %v", err)
+	}
+	if _, err := s.Previews().GetByID(ctx, committed.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("committed preview (with its snapshot) survived purge: %v", err)
+	}
+	kept, err := s.Previews().GetByID(ctx, fresh.ID)
+	if err != nil {
+		t.Fatalf("fresh preview removed: %v", err)
+	}
+	if !jsonEqual(t, kept.ReceiptSnapshot, snapshot) {
+		t.Errorf("fresh snapshot = %s, want %s", kept.ReceiptSnapshot, snapshot)
+	}
 	if _, err := s.Previews().GetPendingByUserAccessKey(ctx, u.ID, "35241152323688000144650020000002571115675902"); err != nil {
 		t.Errorf("fresh preview removed: %v", err)
-	}
-	if _, err := s.Previews().GetPendingByUserAccessKey(ctx, u.ID, "35241152323688000144650020000002571115675903"); !errors.Is(err, domain.ErrNotFound) {
-		t.Errorf("stale preview survived: %v", err)
-	}
-	if _, err := s.Previews().GetPendingByUserAccessKey(ctx, u.ID, "35241152323688000144650020000002571115675904"); !errors.Is(err, domain.ErrNotFound) {
-		t.Errorf("committed preview survived purge: %v", err)
 	}
 }

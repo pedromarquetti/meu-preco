@@ -32,9 +32,10 @@ const (
 // price_logs (UNIQUE(nfce_id, line) makes duplicates no-ops) and finally
 // flipping the preview to committed. Any error rolls the whole unit back.
 //
-// The receipt is re-fetched at commit time through the resolver: the preview
-// row only carries the plan (no DDL for a receipt snapshot), so the
-// nfces/supermarkets rows are derived from a fresh normalized document.
+// Commit is database-only: the draft step persisted the normalized receipt
+// snapshot on the previews row, so nfces/supermarkets/price_logs are derived
+// from that snapshot without contacting SEFAZ again. A missing, corrupt, or
+// mismatched snapshot fails explicitly; it never falls back to the resolver.
 //
 // confirm=false is a dry run: it returns the commit summary without writing.
 func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*CommitResult, error) {
@@ -83,11 +84,25 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 		return nil, err
 	}
 
-	// Re-fetch the receipt so the shared rows are written from the current
-	// normalized document for the same access key the preview was built on.
-	receipt, err := s.resolveReceipt(ctx, preview.AccessKey, preview.QRPayload)
-	if err != nil {
-		return nil, err
+	// Use the persisted receipt snapshot to avoid re-fetching from the portal during commit.
+	var receipt *domain.Nfce
+	if len(preview.ReceiptSnapshot) > 0 {
+		receipt, err = decodeReceiptSnapshot(preview.ReceiptSnapshot)
+		if err != nil {
+			s.Log.Error("failed to decode receipt snapshot", "preview_id", preview.ID, "err", err)
+			return nil, err
+		}
+
+		// Validate that the snapshot belongs to this preview's access key.
+		if receipt.AccessKey != preview.AccessKey {
+			s.Log.Error("receipt snapshot access key mismatch", "preview_id", preview.ID,
+				"preview_access_key", preview.AccessKey, "snapshot_access_key", receipt.AccessKey)
+			return nil, fmt.Errorf("snapshot mismatch: expected %q, got %q", preview.AccessKey, receipt.AccessKey)
+		}
+	} else {
+		// A missing snapshot is not an invitation to re-resolve the receipt:
+		// callers must surface a typed error so legacy/corrupt drafts fail explicitly.
+		return nil, ErrReceiptSnapshotMissing
 	}
 
 	err = s.Stores.Tx(ctx, func(tx domain.Stores) error {
@@ -137,9 +152,9 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 			pi := &plan[i]
 			item, ok := items[pi.Line]
 			if !ok {
-				// The re-fetched receipt changed since the preview; the plan
-				// is the source of identity truth, but without amounts the
-				// line cannot be persisted — skip it.
+				// The snapshot has no matching line (or an older snapshot was
+				// hand-edited); the plan is the source of identity truth, but
+				// without amounts the line cannot be persisted — skip it.
 				res.Skipped++
 				continue
 			}

@@ -73,9 +73,10 @@ func (r previewRepo) MarkCommitted(ctx context.Context, id int64) error {
 	return domain.ErrConflict
 }
 
-// PurgeExpired deletes preview rows past their ttl regardless of status; the
-// write paths (preview/commit) call it as a sweep so the table cannot grow
-// unbounded with stale plans.
+// PurgeExpired deletes preview rows past their ttl regardless of status,
+// including the receipt_snapshot column those rows carry. The write paths
+// (preview/commit) call it as a sweep so the table cannot grow unbounded with
+// stale plans or snapshots.
 func (r previewRepo) PurgeExpired(ctx context.Context) (int64, error) {
 	tag, err := r.db.Exec(ctx,
 		`DELETE FROM previews WHERE ttl < now()`)

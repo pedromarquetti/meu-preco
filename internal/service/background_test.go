@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -21,8 +22,12 @@ func TestPurgeExpiredRemovesStaleOnly(t *testing.T) {
 	m := newMemStores()
 	now := time.Now()
 
-	fresh := &domain.Preview{ID: 1, UserID: 1, AccessKey: "fresh", Status: "pending", TTL: now.Add(time.Hour)}
-	stale := &domain.Preview{ID: 2, UserID: 1, AccessKey: "stale", Status: "pending", TTL: now.Add(-time.Minute)}
+	fresh := &domain.Preview{ID: 1, UserID: 1, AccessKey: "fresh", Status: "pending",
+		ReceiptSnapshot: json.RawMessage(`{"schema_version":1,"receipt":{}}`),
+		TTL:             now.Add(time.Hour)}
+	stale := &domain.Preview{ID: 2, UserID: 1, AccessKey: "stale", Status: "pending",
+		ReceiptSnapshot: json.RawMessage(`{"schema_version":1,"receipt":{}}`),
+		TTL:             now.Add(-time.Minute)}
 	m.previews[fresh.ID] = fresh
 	m.previews[stale.ID] = stale
 	m.previewKey[previewKeyFor(1, "fresh")] = fresh.ID
@@ -31,11 +36,11 @@ func TestPurgeExpiredRemovesStaleOnly(t *testing.T) {
 	if err := purgeExpired(context.Background(), discardLog(), memPreviews{m}); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
-	if _, ok := m.previews[stale.ID]; ok {
-		t.Error("stale preview not purged")
+	if _, err := m.Previews().GetByID(context.Background(), stale.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("stale preview (with its snapshot) survived: %v", err)
 	}
-	if _, ok := m.previews[fresh.ID]; !ok {
-		t.Error("fresh preview was purged")
+	if _, err := m.Previews().GetByID(context.Background(), fresh.ID); err != nil {
+		t.Errorf("fresh preview was purged: %v", err)
 	}
 }
 

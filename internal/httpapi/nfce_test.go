@@ -14,6 +14,7 @@ import (
 
 	"meupreco/internal/domain"
 	"meupreco/internal/nfce"
+	"meupreco/internal/service"
 )
 
 // senateKey is a real, publicly-disclosed NFC-e key from the Senate CEAPS
@@ -70,6 +71,37 @@ func decodeErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder) (code str
 	}
 	code, _ = body.Error["code"].(string)
 	return code, body.Error
+}
+
+// TestRespondErrorMapsSnapshotFailures keeps legacy/readability failures on
+// stable API codes instead of falling through to the generic 500.
+func TestRespondErrorMapsSnapshotFailures(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"missing", service.ErrReceiptSnapshotMissing, http.StatusUnprocessableEntity, "preview_snapshot_missing"},
+		{"corrupt", service.ErrReceiptSnapshotCorrupt, http.StatusInternalServerError, "preview_snapshot_unreadable"},
+		{"unsupported", service.ErrReceiptSnapshotUnsupported, http.StatusInternalServerError, "preview_snapshot_unreadable"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/nfce/submit", nil)
+			(&nfceAPI{}).respondError(rec, req, tc.err)
+
+			if rec.Code != tc.status {
+				t.Errorf("status = %d, want %d", rec.Code, tc.status)
+			}
+			code, _ := decodeErrorEnvelope(t, rec)
+			if code != tc.code {
+				t.Errorf("error code = %q, want %q", code, tc.code)
+			}
+		})
+	}
 }
 
 // uidUncertainReceipt is a GTIN-less receipt line the stub catalog cannot

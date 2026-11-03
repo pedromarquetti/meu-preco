@@ -14,8 +14,8 @@ import (
 )
 
 // cachingResolver wraps the stub receipt resolver and records every solved
-// receipt the pipeline caches, so tests can prove a commit re-fetch would
-// short-circuit the portal.
+// receipt the pipeline caches, so tests can prove the immediate draft fetch
+// short-circuits the portal.
 type cachingResolver struct {
 	receipt *domain.Nfce
 	cached  []string
@@ -78,8 +78,8 @@ func TestSolveCaptchaDraftsAndSeedsSolvedCache(t *testing.T) {
 		t.Errorf("out = %+v, want a pending preview", out)
 	}
 
-	// The solved receipt must be cached under the access key so the follow-up
-	// fetch (commit re-resolve) never faces the portal again.
+	// The solved receipt must be cached under the access key so the immediate
+	// draft fetch never faces the portal again.
 	if len(res.cached) != 1 || res.cached[0] != testAccessKey {
 		t.Errorf("cached = %v, want [%s]", res.cached, testAccessKey)
 	}

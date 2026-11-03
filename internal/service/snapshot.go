@@ -22,6 +22,12 @@ import (
 // snapshot is not an invitation to re-resolve the receipt: callers must surface
 // the typed error so a legacy/corrupt draft fails explicitly instead of
 // reintroducing the portal dependency.
+//
+// Size note: a 60-line normalized receipt serializes to roughly 12 KiB. That is
+// small enough for PostgreSQL JSONB/TOAST and well below the existing
+// request/DANFE safeguards, so receipt_snapshot has no separate size cap. The
+// snapshot tests pin a 64 KiB budget to catch accidental bloat (for example,
+// storing raw portal HTML instead of the parsed receipt).
 const (
 	// receiptSnapshotColumn is the persisted column name. The same name must
 	// be used by the migration, domain field, PostgreSQL store, and tests.

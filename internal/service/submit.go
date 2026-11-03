@@ -10,10 +10,12 @@ import (
 	"meupreco/internal/nfce"
 )
 
-// ReportPreview implements the draft - half of the two-phase commit — it used
-// to be the "preview" step and is now POST /nfce/new: fetch the receipt
-// run every line through the identity classifier and persist only the *plan* as a pending previews row.
-// Nothing is written to the shared tables before the commit confirms.
+// ReportPreview implements the draft half of the two-phase commit (POST
+// /nfce/new): fetch the receipt, run every line through the identity
+// classifier, and persist the plan plus the normalized receipt snapshot as a
+// pending previews row. Nothing is written to the shared tables before the
+// commit confirms. Because the snapshot is stored here, a later submit is
+// database-only and does not depend on SEFAZ availability.
 //
 // Idempotency is the receipt's own access key: at most one live "pending"
 // draft may exist per (user, access_key) — replaying POST /nfce/new for the
@@ -73,7 +75,11 @@ func (s *Service) persistDraft(ctx context.Context, userID int64, key nfce.Acces
 
 	snapshotJSON, err := encodeReceiptSnapshot(receipt)
 	if err != nil {
-		return nil, err
+		// No preview ID exists yet; log the draft owner and receipt key, never
+		// the receipt body/PayloadRaw.
+		s.Log.Error("failed to encode receipt snapshot", "user_id", userID,
+			"access_key", key.String(), "err", err)
+		return nil, fmt.Errorf("service: encode %s: %w", receiptSnapshotColumn, err)
 	}
 
 	p := &domain.Preview{

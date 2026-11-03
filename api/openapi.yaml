@@ -281,7 +281,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422":
-          description: Preview expired (`preview_expired`)
+          description: >-
+            Preview expired (`preview_expired`) or a legacy draft has no stored
+            receipt snapshot (`preview_snapshot_missing`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

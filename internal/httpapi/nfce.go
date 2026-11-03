@@ -186,6 +186,15 @@ func (api *nfceAPI) respondError(writer http.ResponseWriter, req *http.Request, 
 	case errors.Is(err, service.ErrPreviewNotFound):
 		httpx.Error(writer, req, http.StatusNotFound, "preview_not_found",
 			"preview not found")
+	case errors.Is(err, service.ErrReceiptSnapshotMissing):
+		// Legacy drafts created before snapshots were persisted cannot be
+		// submitted without a portal fallback, which is deliberately removed.
+		httpx.Error(writer, req, http.StatusUnprocessableEntity, "preview_snapshot_missing",
+			"this preview has no stored receipt snapshot; create a new one")
+	case errors.Is(err, service.ErrReceiptSnapshotCorrupt),
+		errors.Is(err, service.ErrReceiptSnapshotUnsupported):
+		httpx.Error(writer, req, http.StatusInternalServerError, "preview_snapshot_unreadable",
+			"this preview's receipt snapshot cannot be read; create a new one")
 	case errors.Is(err, service.ErrInvalidRequest):
 		httpx.Error(writer, req, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, service.ErrInvalidResolution):
@@ -218,8 +227,8 @@ func subjectID(writer http.ResponseWriter, req *http.Request) (int64, bool) {
 }
 
 // respondResolveError maps the nfce pipeline failures onto the canonical error
-// envelope. It is shared by /nfce/new and /nfce/submit, whose draft/commit
-// re-resolve a receipt.
+// envelope. It is shared by /nfce/new and /nfce/submit; only the draft path
+// resolves a receipt (submit decodes the snapshot saved by the draft).
 func respondResolveError(writer http.ResponseWriter, req *http.Request, err error) {
 	var capErr *nfce.CaptchaError
 	switch {

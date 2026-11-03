@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -224,4 +225,34 @@ func TestDecodeReceiptSnapshotUnsupportedVersion(t *testing.T) {
 	if !errors.Is(err, ErrReceiptSnapshotUnsupported) {
 		t.Fatalf("error = %v, want ErrReceiptSnapshotUnsupported", err)
 	}
+}
+
+// TestReceiptSnapshotSizeBudget records the storage envelope the retention
+// decision relies on: even a long 60-line receipt stays far below the request
+// and DANFE safeguards, so receipt_snapshot needs no separate size cap.
+func TestReceiptSnapshotSizeBudget(t *testing.T) {
+	receipt := snapshotReceiptFixture()
+	receipt.Items = make([]domain.NfceItem, 0, 60)
+	for i := 1; i <= 60; i++ {
+		receipt.Items = append(receipt.Items, domain.NfceItem{
+			Line:        i,
+			Code:        fmt.Sprintf("789100041%04d", i),
+			Description: "ACHOCOLATADO EM PO NESCAU 350G COM FERRO E VITAMINAS",
+			Qty:         decimal.RequireFromString("1"),
+			Unit:        "UN",
+			UnitPrice:   decimal.RequireFromString("22.99"),
+			TotalPrice:  decimal.RequireFromString("22.99"),
+		})
+	}
+
+	raw, err := encodeReceiptSnapshot(receipt)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	const budget = 64 << 10 // 64 KiB
+	if len(raw) > budget {
+		t.Fatalf("60-line snapshot = %d bytes, above the %d-byte budget", len(raw), budget)
+	}
+	t.Logf("60-line snapshot = %d bytes (budget %d)", len(raw), budget)
 }

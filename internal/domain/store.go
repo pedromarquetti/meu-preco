@@ -147,8 +147,9 @@ type PreviewStore interface {
 	// MarkCommitted atomically flips a pending preview to committed; returns
 	// ErrConflict if it was already committed, ErrNotFound if missing.
 	MarkCommitted(ctx context.Context, id int64) error
-	// PurgeExpired deletes preview rows past their ttl (written/preview GC).
-	// It returns how many rows were removed.
+	// PurgeExpired deletes preview rows past their ttl, which also discards
+	// the receipt snapshot stored on each row (written/preview GC). It returns
+	// how many rows were removed.
 	PurgeExpired(ctx context.Context) (int64, error)
 	// DeleteByAccessKey removes every preview draft of a receipt across all
 	// users (reported when the receipt is deleted). Returns the removed count.
