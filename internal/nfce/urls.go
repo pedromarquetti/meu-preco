@@ -2,7 +2,6 @@ package nfce
 
 import (
 	"fmt"
-	"net/url"
 )
 
 // QR code payload layout (Manual DANFE NFC-e QR Code, version 3, online
@@ -44,11 +43,12 @@ func (b QRBuilder) normalized() string {
 // FromKey builds the consultation URL that renders the DANFE for key,
 // v3 production encoding.
 func (b QRBuilder) FromKey(key AccessKey, env int) string {
-	return fmt.Sprintf("%s?p=%s|%s|%d", b.normalized(), key.String(), qrVersion3, env)
+	pValue := fmt.Sprintf("%s|%s|%d", key.String(), qrVersion3, env)
+	return b.normalized() + "?p=" + pValue
 }
 
 // FromPayload builds the consultation URL replaying an exact QR payload
 // (already validated by ParseQRPayload) against the portal.
 func (b QRBuilder) FromPayload(payload string) string {
-	return b.normalized() + "?p=" + url.QueryEscape(payload)
+	return b.normalized() + "?p=" + payload
 }

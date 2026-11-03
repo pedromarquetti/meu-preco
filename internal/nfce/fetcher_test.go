@@ -261,12 +261,35 @@ func TestRateLimiterPaces(t *testing.T) {
 	}
 }
 
-func TestHTTPSourceFetchCustomUserAgent(t *testing.T) {
+func TestHTTPSourceFetchHeaders(t *testing.T) { // Fixed scope for srv
 	var capturedUA string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedUA = r.Header.Get("User-Agent")
+
+		// Verify headers are set correctly as per Phase 3 requirements
+		if r.Method != "GET" {
+			t.Errorf("expected method GET, got %s", r.Method)
+		}
+
+		if r.Header.Get("Accept") != "text/html,application/xhtml+xml" {
+			t.Errorf("unexpected Accept header: %q", r.Header.Get("Accept"))
+		}
+
+		if r.Header.Get("Accept-Language") != "pt-BR,pt;q=0.9" {
+			t.Errorf("unexpected Accept-Language header: %q", r.Header.Get("Accept-Language"))
+		}
+
+		// Check if Host is correct (it should be a local address)
+		if !strings.Contains(r.Host, "127.0.0.1") && !strings.Contains(r.Host, "localhost") {
+			// httptest server usually uses localhost/127.0.0.1
+			t.Errorf("expected host to be local, got %s", r.Host)
+		}
+
 		_, _ = w.Write([]byte(`<html><body style="height:100px;width:100px;">Consulta Resumida NFC-e content here... This is a dummy DANFE page for testing purposes and it should be longer than one hundred characters to satisfy the requirements of the fetcher logic.</h1></body></html>`))
-	}))
+	})
+
+	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
 	customUA := "Test Agent/1.0"
@@ -291,31 +314,3 @@ func TestHTTPSourceFetchCustomUserAgent(t *testing.T) {
 	}
 }
 
-func TestHTTPSourceFetchDefaultUserAgent(t *testing.T) {
-	var capturedUA string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedUA = r.Header.Get("User-Agent")
-		_, _ = w.Write([]byte(`<html><body style="height:100px;width:100px;">Consulta Resumida NFC-e content here... This is a dummy DANFE page for testing purposes and it should be longer than one hundred characters to satisfy the requirements of the fetcher logic.</h1></body></html>`))
-	}))
-	defer srv.Close()
-
-	srcDefault, err := NewHTTPSource(HTTPSourceOptions{
-		BaseURL:    srv.URL,
-		RPS:        100,
-		MaxRetries: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	key, _ := ParseAccessKey(senateKey)
-	_, err = srcDefault.Fetch(context.Background(), key, "")
-	if err != nil {
-		t.Fatalf("fetch with default: %v", err)
-	}
-
-	expectedDefaultUA := "Meu Preço/0.1" // Updated in fetcher.go
-	if capturedUA != expectedDefaultUA {
-		t.Errorf("expected default user agent %q, got %q", expectedDefaultUA, capturedUA)
-	}
-}

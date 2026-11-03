@@ -115,8 +115,8 @@ func TestQRCodeURL(t *testing.T) {
 	if got := b.FromKey(k, envHomologation); got != "https://portal.test?p="+senateKey+"|3|2" {
 		t.Errorf("FromKey homologation = %q", got)
 	}
-	if got := b.FromPayload(k.String() + "|3|1"); got != "https://portal.test?p="+senateKey+"%7C3%7C1" {
-		t.Errorf("FromPayload = %q", got)
+	if got := b.FromPayload(k.String() + "|3|1"); got != "https://portal.test?p="+senateKey+"|3|1" {
+		t.Errorf("FromPayload = %q, want %q", got, "https://portal.test?p="+senateKey+"|3|1")
 	}
 }
 
