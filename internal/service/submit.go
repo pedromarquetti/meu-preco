@@ -71,14 +71,20 @@ func (s *Service) persistDraft(ctx context.Context, userID int64, key nfce.Acces
 		return nil, fmt.Errorf("service: encode totals: %w", err)
 	}
 
+	snapshotJSON, err := encodeReceiptSnapshot(receipt)
+	if err != nil {
+		return nil, err
+	}
+
 	p := &domain.Preview{
-		UserID:     userID,
-		AccessKey:  key.String(),
-		QRPayload:  payload,
-		PlanItems:  itemsJSON,
-		PlanTotals: totalsJSON,
-		Status:     "pending",
-		TTL:        s.now().Add(s.PreviewTTL),
+		UserID:          userID,
+		AccessKey:       key.String(),
+		QRPayload:       payload,
+		PlanItems:       itemsJSON,
+		PlanTotals:      totalsJSON,
+		ReceiptSnapshot: snapshotJSON,
+		Status:          "pending",
+		TTL:             s.now().Add(s.PreviewTTL),
 	}
 
 	if err := s.Stores.Previews().Create(ctx, p); err != nil {
