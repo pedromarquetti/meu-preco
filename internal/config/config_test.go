@@ -58,6 +58,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SEFAZBackoffBase != 200*time.Millisecond || cfg.SEFAZBackoffCap != 2*time.Second {
 		t.Errorf("SEFAZ backoff = %v/%v, want 200ms/2s", cfg.SEFAZBackoffBase, cfg.SEFAZBackoffCap)
 	}
+	if cfg.SEFAZCooldown != time.Minute {
+		t.Errorf("SEFAZ cooldown = %v, want 1m", cfg.SEFAZCooldown)
+	}
 	if cfg.PreviewTTL != 15*time.Minute || cfg.PreviewGCInterval != 5*time.Minute {
 		t.Errorf("preview lifecycle = %v/%v, want 15m/5m", cfg.PreviewTTL, cfg.PreviewGCInterval)
 	}

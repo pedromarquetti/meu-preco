@@ -45,6 +45,12 @@ var (
 	// result, mismatched access key, unexpected layout). The API maps it to 502.
 	ErrBadResponse = errors.New("unexpected response from the fiscal portal")
 
+	// ErrAntiBotRejection reports that SEFAZ returned an anti-bot or
+	// rate-limit rejection page (e.g., HTTP 200 with "Request Rejected"),
+	// rather than a DANFE. The API maps it to 503. AntiBotError carries the
+	// safe diagnostic metadata.
+	ErrAntiBotRejection = errors.New("SEFAZ portal rejected the request due to anti-bot/rate-limiting")
+
 	// ErrWrongSolution reports a captcha answer the portal rejected. The
 	// challenge stays usable until its attempt budget is spent.
 	ErrWrongSolution = errors.New("captcha solution incorrect")
@@ -63,6 +69,29 @@ var (
 	// (replay prevention: a challenge is single-use).
 	ErrChallengeReused = errors.New("captcha challenge already used")
 )
+
+// AntiBotError is returned when the fiscal portal serves an anti-bot/rate-limit
+// rejection page instead of the requested document. It unwraps to
+// ErrAntiBotRejection so callers can classify it with errors.Is, while carrying
+// only safe diagnostic metadata (never the portal body itself).
+type AntiBotError struct {
+	// StatusCode is the HTTP status the portal answered with (often 200).
+	StatusCode int
+	// SupportID is the reference ID printed on the rejection page, when any.
+	SupportID string
+	// BodyBytes is the size of the rejected response body.
+	BodyBytes int
+}
+
+func (e *AntiBotError) Error() string {
+	if e.SupportID != "" {
+		return fmt.Sprintf("fiscal portal rejected the request (status %d, support ID %s)", e.StatusCode, e.SupportID)
+	}
+	return fmt.Sprintf("fiscal portal rejected the request (status %d)", e.StatusCode)
+}
+
+// Unwrap makes errors.Is(err, ErrAntiBotRejection) hold for the typed error.
+func (e *AntiBotError) Unwrap() error { return ErrAntiBotRejection }
 
 // CaptchaError is returned by a Source when the portal answers with its
 // human-verification challenge instead of the receipt. It carries a handle

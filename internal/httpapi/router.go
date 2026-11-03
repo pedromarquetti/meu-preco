@@ -210,6 +210,7 @@ func newNfceResolver(cfg config.Config, log *slog.Logger) nfceResolver {
 			Timeout:     cfg.SEFAZTimeout,
 			BackoffBase: cfg.SEFAZBackoffBase,
 			BackoffCap:  cfg.SEFAZBackoffCap,
+			Cooldown:    cfg.SEFAZCooldown,
 			UserAgent:   cfg.SefazUserAgent,
 			Logger:      log,
 		})

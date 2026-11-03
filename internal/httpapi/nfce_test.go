@@ -236,6 +236,22 @@ func TestNfceNewUpstream(t *testing.T) {
 	}
 }
 
+func TestNfceNewAntiBotRejection(t *testing.T) {
+	rec := postNfce(t, nfceRouter(t, stubResolver{
+		err: &nfce.AntiBotError{
+			StatusCode: http.StatusOK,
+			SupportID:  "12345",
+			BodyBytes:  100,
+		},
+	}, nil), "/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "upstream_rate_limited" {
+		t.Errorf("code = %q, want upstream_rate_limited", code)
+	}
+}
+
 func TestNfceNewUnknownError(t *testing.T) {
 	rec := postNfce(t, nfceRouter(t, stubResolver{err: errors.New("mystery")}, nil),
 		"/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)

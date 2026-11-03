@@ -244,6 +244,9 @@ func respondResolveError(writer http.ResponseWriter, req *http.Request, err erro
 		httpx.Error(writer, req, http.StatusUnprocessableEntity, "invalid_qr_payload", err.Error())
 	case errors.Is(err, nfce.ErrUnsupportedUF):
 		httpx.Error(writer, req, http.StatusNotImplemented, "unsupported_uf", err.Error())
+	case errors.Is(err, nfce.ErrAntiBotRejection):
+		httpx.Error(writer, req, http.StatusTooManyRequests, "upstream_rate_limited",
+			"the fiscal portal is temporarily rejecting requests; try again later")
 	case errors.Is(err, nfce.ErrUpstream), errors.Is(err, nfce.ErrBadResponse):
 		httpx.Error(writer, req, http.StatusBadGateway, "upstream_error",
 			"the fiscal portal could not answer the request")

@@ -137,6 +137,89 @@ func TestHTTPSourceFetchNotFound(t *testing.T) {
 	}
 }
 
+func TestHTTPSourceFetchAntiBotRejectionStopsWithoutRetry(t *testing.T) {
+	var calls int
+	rejected := `<html><head><title>Request Rejected</title></head><body>` +
+		`The requested URL was rejected. Please consult with your administrator.` +
+		`<br><br>Your support ID is: <10138580085970928105></body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(rejected))
+	}))
+	defer srv.Close()
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 3,
+		Cooldown:   time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	var antiBotErr *AntiBotError
+	if !errors.As(err, &antiBotErr) {
+		t.Fatalf("fetch error = %v, want *AntiBotError", err)
+	}
+	if !errors.Is(err, ErrAntiBotRejection) {
+		t.Fatalf("fetch error = %v, want ErrAntiBotRejection", err)
+	}
+	if antiBotErr.StatusCode != http.StatusOK ||
+		antiBotErr.SupportID != "10138580085970928105" {
+		t.Fatalf("anti-bot error = %+v", antiBotErr)
+	}
+	if calls != 1 {
+		t.Fatalf("server calls = %d, want 1 (no immediate retry)", calls)
+	}
+}
+
+func TestHTTPSourceFetchAntiBotCooldownAppliesToNextRequest(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	rejected := []byte(`<html><body>Request Rejected. Support ID: 12345</body></html>`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = w.Write(rejected)
+			return
+		}
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	const cooldown = 40 * time.Millisecond
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 1,
+		Cooldown:   cooldown,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+	if _, err := src.Fetch(context.Background(), key, ""); !errors.Is(err, ErrAntiBotRejection) {
+		t.Fatalf("first fetch error = %v, want anti-bot rejection", err)
+	}
+
+	start := time.Now()
+	if _, err := src.Fetch(context.Background(), key, ""); err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < cooldown-10*time.Millisecond {
+		t.Fatalf("second fetch waited %v, want at least about %v", elapsed, cooldown)
+	}
+	if calls != 2 {
+		t.Fatalf("server calls = %d, want 2", calls)
+	}
+}
+
 func TestHTTPSourceRetriesThenFailsUpstream(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -182,6 +265,47 @@ func TestHTTPSourceRetriesThenSucceeds(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("server calls = %d, want 2", calls)
+	}
+}
+
+func TestHTTPSource429RetryAfterUsesCooldown(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "busy", http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:     srv.URL,
+		RPS:         1000,
+		MaxRetries:  2,
+		BackoffBase: time.Millisecond,
+		BackoffCap:  time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	start := time.Now()
+	if _, err := src.Fetch(context.Background(), key, ""); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
+		t.Fatalf("fetch completed after %v, want Retry-After cooldown", elapsed)
+	}
+	if calls != 2 {
+		t.Fatalf("server calls = %d, want 2", calls)
 	}
 }
 
@@ -261,6 +385,62 @@ func TestRateLimiterPaces(t *testing.T) {
 	}
 }
 
+func TestRateLimiterCooldownCancellation(t *testing.T) {
+	rl := newRateLimiter(1000)
+	rl.Cooldown(100 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := rl.Wait(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Wait error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestAntiBotRejectionVariants(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		rejected  bool
+		supportID string
+	}{
+		{
+			name:      "observed response",
+			body:      "Request Rejected. Your support ID is: <12345>",
+			rejected:  true,
+			supportID: "12345",
+		},
+		{
+			name:      "case and whitespace variant",
+			body:      "THE REQUESTED URL WAS REJECTED. Support ID:  abc-123",
+			rejected:  true,
+			supportID: "abc-123",
+		},
+		{
+			name:     "ordinary malformed page",
+			body:     "Consulta Resumida NFC-e is temporarily unavailable",
+			rejected: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotID, got := antiBotRejection([]byte(tt.body))
+			if got != tt.rejected || gotID != tt.supportID {
+				t.Fatalf("antiBotRejection() = %q, %v; want %q, %v",
+					gotID, got, tt.supportID, tt.rejected)
+			}
+		})
+	}
+}
+
+func TestParseRetryAfterDateUsesProvidedNow(t *testing.T) {
+	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+	header := http.Header{"Retry-After": []string{"Wed, 03 Nov 2026 12:00:05 GMT"}}
+	delay, ok := parseRetryAfter(header, now)
+	if !ok || delay != 5*time.Second {
+		t.Fatalf("parseRetryAfter() = %v, %v; want 5s, true", delay, ok)
+	}
+}
+
 func TestHTTPSourceFetchHeaders(t *testing.T) { // Fixed scope for srv
 	var capturedUA string
 
@@ -313,4 +493,3 @@ func TestHTTPSourceFetchHeaders(t *testing.T) { // Fixed scope for srv
 		t.Errorf("expected user agent %q, got %q", customUA, capturedUA)
 	}
 }
-

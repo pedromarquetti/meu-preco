@@ -52,8 +52,11 @@ type Config struct {
 	// Defaults to "Meu Preço/0.1".
 	SefazUserAgent string
 
-	// SefazBaseURL overrides the default SP NFC-e consultation QR URL. It is
+	// SEFAZCooldown is how long subsequent requests must wait after an
+	// anti-bot/rate-limit rejection page (no standard Retry-After header).
+	SEFAZCooldown time.Duration
 
+	// SefazBaseURL overrides the default SP NFC-e consultation QR URL. It is
 	// optional (tests and homologation are the main use cases).
 	SefazBaseURL string
 
@@ -154,6 +157,11 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	sefaCooldown, err := envDuration(env, "SEFAZ_COOLDOWN", 1*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+
 	sefaUserAgent := envString(env, "SEFAZ_USER_AGENT", "Meu Preço/0.1")
 
 	previewTTL, err := envDuration(env, "PREVIEWS_TTL", 15*time.Minute)
@@ -215,6 +223,7 @@ func load(env map[string]string) (Config, error) {
 		SEFAZTimeout:     sefaTimeout,
 		SEFAZBackoffBase: sefaBackoffBase,
 		SEFAZBackoffCap:  sefaBackoffCap,
+		SEFAZCooldown:    sefaCooldown,
 
 		SefazUserAgent: sefaUserAgent,
 
@@ -316,6 +325,9 @@ func (c Config) Validate() error {
 	}
 	if c.SEFAZBackoffCap < c.SEFAZBackoffBase {
 		return fmt.Errorf("config: SEFAZ_BACKOFF_CAP must be >= SEFAZ_BACKOFF_BASE")
+	}
+	if c.SEFAZCooldown <= 0 {
+		return fmt.Errorf("config: SEFAZ_COOLDOWN must be a positive duration")
 	}
 	if c.PreviewTTL <= 0 {
 		return fmt.Errorf("config: PREVIEWS_TTL must be a positive duration")

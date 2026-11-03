@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,6 +50,9 @@ type HTTPSourceOptions struct {
 	// BackoffCap caps every exponential retry delay. Defaults to 2s. Values
 	// below BackoffBase make the backoff flat (always at the cap).
 	BackoffCap time.Duration
+	// Cooldown is how long subsequent requests wait after the portal serves an
+	// anti-bot/rate-limit rejection page. Defaults to 1 minute.
+	Cooldown time.Duration
 	// ChallengeStore records captcha challenges for later resolution.
 	// Defaults to a fresh store.
 	ChallengeStore *ChallengeStore
@@ -65,6 +69,7 @@ type HTTPSource struct {
 	retries     int
 	backoffBase time.Duration
 	backoffCap  time.Duration
+	cooldown    time.Duration
 	challenges  *ChallengeStore
 }
 
@@ -102,6 +107,10 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 		opts.BackoffCap = opts.BackoffBase
 	}
 
+	if opts.Cooldown <= 0 {
+		opts.Cooldown = time.Minute
+	}
+
 	if opts.ChallengeStore == nil {
 		opts.ChallengeStore = NewChallengeStore()
 	}
@@ -137,6 +146,7 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 		retries:     opts.MaxRetries,
 		backoffBase: opts.BackoffBase,
 		backoffCap:  opts.BackoffCap,
+		cooldown:    opts.Cooldown,
 		challenges:  opts.ChallengeStore,
 	}, nil
 }
@@ -162,6 +172,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 
 	var lastErr error
 	for attempt := 1; attempt <= s.retries; attempt++ {
+		waitStarted := time.Now()
 		if err := s.limit.Wait(ctx); err != nil {
 			s.log.Debug("nfce: portal rate limiter wait failed",
 				"access_key", key.String(),
@@ -169,6 +180,13 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 				"err", err,
 			)
 			return nil, err
+		}
+		if waited := time.Since(waitStarted); waited > 0 {
+			s.log.Debug("nfce: portal limiter wait",
+				"access_key", key.String(),
+				"attempt", attempt,
+				"wait_ms", waited.Milliseconds(),
+			)
 		}
 
 		attemptStarted := time.Now()
@@ -178,7 +196,8 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 			"url", url,
 			"user_agent", s.user_agent,
 		)
-		status, body, err := s.doRequest(ctx, url)
+
+		status, header, body, err := s.doRequest(ctx, url)
 		duration := time.Since(attemptStarted)
 		if err != nil {
 			lastErr = err
@@ -215,8 +234,52 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 			"duration_ms", duration.Milliseconds(),
 		)
 
+		// Anti-bot/rate-limit rejection pages take precedence over generic
+		// status handling: the observed SEFAZ block is served with HTTP 200,
+		// and retrying it immediately would only amplify the block.
+		if !pageHasDANFE(body) {
+			if supportID, rejected := antiBotRejection(body); rejected {
+				cooldown := s.cooldown
+				reason := "anti_bot_rejection"
+				if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
+					s.log.Debug("Retry After", "retry", retryAfter)
+					cooldown = retryAfter
+					reason = "anti_bot_rejection_retry_after"
+				}
+				s.applyCooldown(reason, cooldown, attempt, status, len(body), supportID)
+				return nil, &AntiBotError{
+					StatusCode: status,
+					SupportID:  supportID,
+					BodyBytes:  len(body),
+				}
+			}
+		}
+
 		switch {
-		case status >= 500 || status == http.StatusTooManyRequests:
+		case status == http.StatusTooManyRequests:
+			// HTTP 429 is still retried within the configured budget, but a
+			// Retry-After header is honored through the shared cooldown so
+			// other callers do not hit the portal early either.
+			if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
+				s.applyCooldown("http_429_retry_after", retryAfter, attempt, status, len(body), "")
+			}
+			lastErr = fmt.Errorf("nfce: portal answered HTTP %d", status)
+			if attempt < s.retries {
+				delay := s.backoff(attempt)
+				s.log.Debug("nfce: portal HTTP retry scheduled",
+					"access_key", key.String(),
+					"attempt", attempt,
+					"next_attempt", attempt+1,
+					"status", status,
+					"backoff_ms", delay.Milliseconds(),
+				)
+				if !sleepCtx(ctx, delay) {
+					return nil, ctx.Err()
+				}
+				continue
+			}
+			return nil, fmt.Errorf("%w: %v", ErrUpstream, lastErr)
+		case status >= 500:
 			lastErr = fmt.Errorf("nfce: portal answered HTTP %d", status)
 			if attempt < s.retries {
 				delay := s.backoff(attempt)
@@ -269,10 +332,37 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 	}()
 }
 
-func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, []byte, error) {
+// applyCooldown records a shared cooldown and logs the safe transition fields
+// (never the response body).
+func (s *HTTPSource) applyCooldown(reason string, d time.Duration, attempt, status, bodyBytes int, supportID string) {
+	if d <= 0 {
+		return
+	}
+
+	until, changed := s.limit.Cooldown(d)
+	attrs := []any{
+		"reason", reason,
+		"duration_ms", d.Milliseconds(),
+		"cooldown_until", until,
+		"attempt", attempt,
+		"status", status,
+		"bytes", bodyBytes,
+	}
+	if supportID != "" {
+		attrs = append(attrs, "support_id", supportID)
+	}
+
+	if changed {
+		s.log.Warn("nfce: portal cooldown applied", attrs...)
+		return
+	}
+	s.log.Debug("nfce: portal cooldown already active", attrs...)
+}
+
+func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.Header, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	req.Header.Set("User-Agent", source.user_agent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
@@ -280,7 +370,7 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, []byt
 
 	resp, err := source.client.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 
 	defer func() {
@@ -290,9 +380,9 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, []byt
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return resp.StatusCode, nil, err
+		return resp.StatusCode, resp.Header, nil, err
 	}
-	return resp.StatusCode, body, nil
+	return resp.StatusCode, resp.Header, body, nil
 }
 
 // captureChallenge registers the session context of a captcha-challenged fetch
@@ -425,10 +515,52 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// normalizeWS collapses every run of whitespace (including nbsp) into a
-// single space and trims the result.
+func antiBotRejection(body []byte) (string, bool) {
+	s := string(body)
+	lower := strings.ToLower(s)
+	if !strings.Contains(lower, "request rejected") &&
+		!strings.Contains(lower, "the requested url was rejected") {
+		return "", false
+	}
+
+	// SEFAZ/Akamai may render the support ID as plain text, with a colon, or
+	// inside angle brackets. Return only the identifier, never the body.
+	supportID := regexp.MustCompile(`(?i)support\s*id(?:\s+is)?\s*:\s*[<\[]?([[:alnum:]_-]+)`)
+	if matches := supportID.FindStringSubmatch(s); len(matches) > 1 {
+		return matches[1], true
+	}
+	return "", true
+}
+
+func parseRetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
+	retryAfter := header.Get("Retry-After")
+	if retryAfter == "" {
+		return 0, false
+	}
+
+	// Try parsing as seconds first.
+	if sec, err := strconv.Atoi(retryAfter); err == nil {
+		if sec < 0 {
+			return 0, false
+		}
+		return time.Duration(sec) * time.Second, true
+	}
+
+	// Fallback to HTTP date (RFC1123/RFC850 etc.).
+	t, err := http.ParseTime(retryAfter)
+	if err != nil {
+		return 0, false
+	}
+	diff := t.Sub(now)
+	if diff < 0 {
+		// If the date is in the past, we treat it as immediate (no wait).
+		return 0, true
+	}
+	return diff, true
+}
+
+// normalizeWS collapses every run of whitespace, including non-breaking
+// spaces, into a single space and trims the result.
 func normalizeWS(s string) string {
-	return strings.Join(strings.FieldsFunc(s, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\u00a0'
-	}), " ")
+	return strings.Join(strings.Fields(s), " ")
 }
