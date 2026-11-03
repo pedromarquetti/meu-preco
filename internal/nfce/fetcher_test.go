@@ -260,3 +260,62 @@ func TestRateLimiterPaces(t *testing.T) {
 		t.Errorf("second Wait returned after %v, want >= ~100ms", elapsed)
 	}
 }
+
+func TestHTTPSourceFetchCustomUserAgent(t *testing.T) {
+	var capturedUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedUA = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`<html><body style="height:100px;width:100px;">Consulta Resumida NFC-e content here... This is a dummy DANFE page for testing purposes and it should be longer than one hundred characters to satisfy the requirements of the fetcher logic.</h1></body></html>`))
+	}))
+	defer srv.Close()
+
+	customUA := "Test Agent/1.0"
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        100,
+		MaxRetries: 1,
+		UserAgent:  customUA,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key, _ := ParseAccessKey(senateKey)
+	_, err = src.Fetch(context.Background(), key, "")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if capturedUA != customUA {
+		t.Errorf("expected user agent %q, got %q", customUA, capturedUA)
+	}
+}
+
+func TestHTTPSourceFetchDefaultUserAgent(t *testing.T) {
+	var capturedUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedUA = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`<html><body style="height:100px;width:100px;">Consulta Resumida NFC-e content here... This is a dummy DANFE page for testing purposes and it should be longer than one hundred characters to satisfy the requirements of the fetcher logic.</h1></body></html>`))
+	}))
+	defer srv.Close()
+
+	srcDefault, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        100,
+		MaxRetries: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key, _ := ParseAccessKey(senateKey)
+	_, err = srcDefault.Fetch(context.Background(), key, "")
+	if err != nil {
+		t.Fatalf("fetch with default: %v", err)
+	}
+
+	expectedDefaultUA := "Meu Preço/0.1" // Updated in fetcher.go
+	if capturedUA != expectedDefaultUA {
+		t.Errorf("expected default user agent %q, got %q", expectedDefaultUA, capturedUA)
+	}
+}

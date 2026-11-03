@@ -48,7 +48,12 @@ type Config struct {
 	// SEFAZBackoffCap caps each exponential retry delay.
 	SEFAZBackoffCap time.Duration
 
+	// SefazUserAgent specifies the user-agent string sent to the SP NFC-e portal.
+	// Defaults to "Meu Preço/0.1".
+	SefazUserAgent string
+
 	// SefazBaseURL overrides the default SP NFC-e consultation QR URL. It is
+
 	// optional (tests and homologation are the main use cases).
 	SefazBaseURL string
 
@@ -149,6 +154,8 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	sefaUserAgent := envString(env, "SEFAZ_USER_AGENT", "Meu Preço/0.1")
+
 	previewTTL, err := envDuration(env, "PREVIEWS_TTL", 15*time.Minute)
 	if err != nil {
 		return Config{}, err
@@ -208,6 +215,8 @@ func load(env map[string]string) (Config, error) {
 		SEFAZTimeout:     sefaTimeout,
 		SEFAZBackoffBase: sefaBackoffBase,
 		SEFAZBackoffCap:  sefaBackoffCap,
+
+		SefazUserAgent: sefaUserAgent,
 
 		PreviewTTL:        previewTTL,
 		PreviewGCInterval: previewGC,

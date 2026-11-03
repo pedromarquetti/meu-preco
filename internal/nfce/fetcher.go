@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultUserAgent = "meupreco/0.1 (receipt price collector)"
+	defaultUserAgent = "Meu Preço/0.1"
 	maxBodyBytes     = 2 << 20 // 2 MiB, DANFE pages are tens of KiB
 )
 
