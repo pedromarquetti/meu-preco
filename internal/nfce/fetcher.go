@@ -153,20 +153,53 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 		url = builder.FromPayload(payload)
 	}
 
+	s.log.Debug("nfce: portal fetch start",
+		"access_key", key.String(),
+		"url", url,
+		"user_agent", s.user_agent,
+		"max_retries", s.retries,
+	)
+
 	var lastErr error
 	for attempt := 1; attempt <= s.retries; attempt++ {
 		if err := s.limit.Wait(ctx); err != nil {
+			s.log.Debug("nfce: portal rate limiter wait failed",
+				"access_key", key.String(),
+				"attempt", attempt,
+				"err", err,
+			)
 			return nil, err
 		}
 
+		attemptStarted := time.Now()
+		s.log.Debug("nfce: portal request attempt",
+			"access_key", key.String(),
+			"attempt", attempt,
+			"url", url,
+			"user_agent", s.user_agent,
+		)
 		status, body, err := s.doRequest(ctx, url)
+		duration := time.Since(attemptStarted)
 		if err != nil {
 			lastErr = err
+			s.log.Debug("nfce: portal request failed",
+				"access_key", key.String(),
+				"attempt", attempt,
+				"duration_ms", duration.Milliseconds(),
+				"err", err,
+			)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			if attempt < s.retries {
-				if !sleepCtx(ctx, s.backoff(attempt)) {
+				delay := s.backoff(attempt)
+				s.log.Debug("nfce: portal retry scheduled",
+					"access_key", key.String(),
+					"attempt", attempt,
+					"next_attempt", attempt+1,
+					"backoff_ms", delay.Milliseconds(),
+				)
+				if !sleepCtx(ctx, delay) {
 					return nil, ctx.Err()
 				}
 				continue
@@ -174,11 +207,27 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 			return nil, lastErr
 		}
 
+		s.log.Debug("nfce: portal response received",
+			"access_key", key.String(),
+			"attempt", attempt,
+			"status", status,
+			"bytes", len(body),
+			"duration_ms", duration.Milliseconds(),
+		)
+
 		switch {
 		case status >= 500 || status == http.StatusTooManyRequests:
 			lastErr = fmt.Errorf("nfce: portal answered HTTP %d", status)
 			if attempt < s.retries {
-				if !sleepCtx(ctx, s.backoff(attempt)) {
+				delay := s.backoff(attempt)
+				s.log.Debug("nfce: portal HTTP retry scheduled",
+					"access_key", key.String(),
+					"attempt", attempt,
+					"next_attempt", attempt+1,
+					"status", status,
+					"backoff_ms", delay.Milliseconds(),
+				)
+				if !sleepCtx(ctx, delay) {
 					return nil, ctx.Err()
 				}
 				continue
@@ -189,6 +238,13 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 		}
 
 		if err := pageFailure(body); err != nil {
+			s.log.Debug("nfce: portal page rejected",
+				"access_key", key.String(),
+				"attempt", attempt,
+				"status", status,
+				"bytes", len(body),
+				"err", err,
+			)
 			capErr, asErr := errors.AsType[*CaptchaError](err)
 			if asErr {
 				ch := s.captureChallenge(url, payload, key, capErr.ImageURL, body)
@@ -197,6 +253,11 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 			}
 			return nil, err
 		}
+		s.log.Debug("nfce: portal DANFE accepted",
+			"access_key", key.String(),
+			"attempt", attempt,
+			"bytes", len(body),
+		)
 		return body, nil
 	}
 

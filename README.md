@@ -1,6 +1,7 @@
 # MeuPreço
 
 <!--toc:start-->
+
 - [MeuPreço](#meupreço)
   - [Goals](#goals)
   - [How it works](#how-it-works)
@@ -34,9 +35,11 @@
       - [Opt-in live Open Food Facts BR test (hermetic runs skip it)](#opt-in-live-open-food-facts-br-test-hermetic-runs-skip-it)
     - [Linting/git hooks](#lintinggit-hooks)
     - [Migrations](#migrations)
+    - [Debugging](#debugging)
   - [Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)](#import-a-bulk-open-food-facts-dump-789790-gtins-only-idempotent)
   - [Inspiration](#inspiration)
   - [Non-goals](#non-goals)
+
 <!--toc:end-->
 
 Backend-only Go service that tracks Brazilian supermarket prices from **NFC-e**
@@ -642,6 +645,16 @@ make hooks-install # enable the repository pre-push validations
 make migrate-up
 make migrate-down
 make migrate-version
+```
+
+### Debugging
+
+The server includes some lines for logging debug info
+
+```bash
+# this will enable debug logging
+# Note that this is verbose and intended for tracing where an error is coming from
+LOG_LEVEL=debug make run
 ```
 
 ## Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)

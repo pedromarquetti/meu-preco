@@ -78,6 +78,7 @@ func (api *nfceAPI) draft(writer http.ResponseWriter, req *http.Request) {
 	})
 
 	if err != nil {
+		api.svc.Log.Error("draft error", "err", err)
 		api.respondError(writer, req, err)
 		return
 	}

@@ -56,9 +56,11 @@ type HTTPChallengeSolverOptions struct {
 
 // NewHTTPChallengeSolver builds a solver sharing the portal's polite pacing.
 func NewHTTPChallengeSolver(opts HTTPChallengeSolverOptions) *HTTPChallengeSolver {
+
 	if opts.UserAgent == "" {
 		opts.UserAgent = defaultUserAgent
 	}
+
 	if opts.HTTPClient == nil {
 		if opts.Timeout <= 0 {
 			opts.Timeout = 30 * time.Second
