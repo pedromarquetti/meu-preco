@@ -12,12 +12,12 @@
 ALTER TABLE
 commodity_synonyms ADD COLUMN IF NOT EXISTS prefix_expansion TEXT;
 
-UPDATE commodity_synonyms 
+UPDATE commodity_synonyms
 SET prefix_expansion = 'queijo' WHERE synonym IN ('qj', 'qjo');
 
 -- Identity prefixes support glued full words 
 -- ("QUEIJO PRATO" -> exact match first, 
 -- but "queijoprato" can still be resolved via expansion if needed). 
 -- Safe because exact-match runs before prefix-expansion in the classifier.
-UPDATE commodity_synonyms 
+UPDATE commodity_synonyms
 SET prefix_expansion = synonym WHERE synonym IN ('queijo');

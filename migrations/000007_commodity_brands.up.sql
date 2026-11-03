@@ -124,8 +124,8 @@ ON CONFLICT (brand) DO NOTHING;
 -- brand-laden stems seeded in 000002 are no longer reached. Round out the
 -- abbreviation vocabulary the live receipts use ("QJ BRIE TIROLEZ KG" leaves
 -- "qj brie" once Tirolez is stripped).
-INSERT INTO commodity_synonyms 
-(synonym, canonical_name, category, unit, source) 
+INSERT INTO commodity_synonyms
+(synonym, canonical_name, category, unit, source)
 VALUES
 ('qj brie', 'queijo brie', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('brie', 'queijo brie', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP')

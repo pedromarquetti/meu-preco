@@ -6,27 +6,27 @@
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE users (
-id            BIGSERIAL PRIMARY KEY,
-name          TEXT NOT NULL UNIQUE,
-email         TEXT NOT NULL UNIQUE,
-password_hash TEXT NOT NULL,
-role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
-created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-CONSTRAINT users_name_not_blank CHECK (btrim(name) <> '')
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT users_name_not_blank CHECK (btrim(name) <> '')
 );
 
 CREATE TABLE supermarkets (
-id         BIGSERIAL PRIMARY KEY,
-cnpj       TEXT NOT NULL UNIQUE,
-legal_name TEXT NOT NULL,
-address    TEXT,
-created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    id BIGSERIAL PRIMARY KEY,
+    cnpj TEXT NOT NULL UNIQUE,
+    legal_name TEXT NOT NULL,
+    address TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- A GTIN barcode normalized to the GS1 zero-padded 14-digit form, or NULL for
 -- un-barcoded goods (fresh produce, bulk). normalize_gtin() is applied on
 -- write by the trigger below; raw 8/12/13-digit GTINs are padded to 14.
-CREATE FUNCTION normalize_gtin(text) RETURNS text
+CREATE FUNCTION normalize_gtin(TEXT) RETURNS TEXT
 LANGUAGE sql IMMUTABLE STRICT AS
 $fn$
     SELECT CASE WHEN $1 ~ '^\d{8}$' OR $1 ~ '^\d{12}$' OR $1 ~ '^\d{13}$' OR $1 ~ '^\d{14}$'
@@ -35,27 +35,29 @@ $fn$
 $fn$;
 
 CREATE TABLE products (
-id             BIGSERIAL PRIMARY KEY,
--- gtin(14) or sha256(canonical_stem|unit)
-product_key    TEXT NOT NULL UNIQUE,
--- normalized to 14 digits by trigger; nullable
-gtin           TEXT,
-name           TEXT NOT NULL,
-brand          TEXT,
-unit           TEXT NOT NULL,
-canonical_stem TEXT,
-needs_review   BOOLEAN NOT NULL DEFAULT false,
-created_by     BIGINT REFERENCES users(id),
-created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-CONSTRAINT products_gtin_check CHECK (gtin IS NULL OR gtin ~ '^\d{14}$')
+    id BIGSERIAL PRIMARY KEY,
+    -- gtin(14) or sha256(canonical_stem|unit)
+    product_key TEXT NOT NULL UNIQUE,
+    -- normalized to 14 digits by trigger; nullable
+    gtin TEXT,
+    name TEXT NOT NULL,
+    brand TEXT,
+    unit TEXT NOT NULL,
+    canonical_stem TEXT,
+    needs_review BOOLEAN NOT NULL DEFAULT false,
+    created_by BIGINT REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT products_gtin_check CHECK (gtin IS null OR gtin ~ '^\d{14}$')
 );
 
 CREATE INDEX products_trgm_idx
-ON products USING gin (name gin_trgm_ops,
-brand gin_trgm_ops,
-canonical_stem gin_trgm_ops);
+ON products USING gin (
+    name gin_trgm_ops,
+    brand gin_trgm_ops,
+    canonical_stem gin_trgm_ops
+);
 
-CREATE FUNCTION products_normalize_gtin() RETURNS trigger
+CREATE FUNCTION products_normalize_gtin() RETURNS TRIGGER
 LANGUAGE plpgsql AS
 $fn$
 BEGIN
@@ -72,83 +74,87 @@ BEFORE INSERT OR UPDATE ON products
 FOR EACH ROW EXECUTE FUNCTION products_normalize_gtin();
 
 CREATE TABLE nfces (
-id             BIGSERIAL PRIMARY KEY,
-access_key     TEXT NOT NULL UNIQUE,   -- 44-digit chave de acesso
-supermarket_id BIGINT NOT NULL REFERENCES supermarkets(id),
-number         TEXT NOT NULL,
-series         TEXT NOT NULL,
-issued_at      TIMESTAMPTZ,
-protocol       TEXT,
-environment    TEXT,
-total          NUMERIC(14,2) NOT NULL DEFAULT 0,
-discount       NUMERIC(14,2) NOT NULL DEFAULT 0,
-paid_value     NUMERIC(14,2) NOT NULL DEFAULT 0,
-payment_method TEXT,
-coo            TEXT,
--- stripped DANFE/XML for audit and re-play
-payload_raw    TEXT,
-created_by     BIGINT REFERENCES users(id),
-created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    id BIGSERIAL PRIMARY KEY,
+    access_key TEXT NOT NULL UNIQUE,   -- 44-digit chave de acesso
+    supermarket_id BIGINT NOT NULL REFERENCES supermarkets(id),
+    number TEXT NOT NULL,
+    series TEXT NOT NULL,
+    issued_at TIMESTAMPTZ,
+    protocol TEXT,
+    environment TEXT,
+    total NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    discount NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    paid_value NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    payment_method TEXT,
+    coo TEXT,
+    -- stripped DANFE/XML for audit and re-play
+    payload_raw TEXT,
+    created_by BIGINT REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX nfces_issued_at_idx ON nfces (issued_at);
 
 CREATE TABLE price_logs (
-id                   BIGSERIAL PRIMARY KEY,
-nfce_id              BIGINT NOT NULL REFERENCES nfces(id),
-product_id           BIGINT REFERENCES products(id),
-line                 INT NOT NULL,
-description_snapshot TEXT NOT NULL,
-qty                  NUMERIC(14,4) NOT NULL,
-unit                 TEXT NOT NULL,
-normalized_unit      TEXT,
-price_per_unit       NUMERIC(14,6),
-unit_price           NUMERIC(14,2) NOT NULL,
-total_price          NUMERIC(14,2) NOT NULL,
-identity_status      TEXT NOT NULL CHECK (identity_status IN (
-'gtin_known',
-'gtin_new',
-'commodity_fingerprint',
-'uid_uncertain',
-'parse_error'
-)),
-needs_review         BOOLEAN NOT NULL DEFAULT false,
-resolved_by          BIGINT REFERENCES users(id),
-resolution_note      TEXT,
-created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-CONSTRAINT price_logs_nfce_line_unique UNIQUE (nfce_id, line)
+    id BIGSERIAL PRIMARY KEY,
+    nfce_id BIGINT NOT NULL REFERENCES nfces(id),
+    product_id BIGINT REFERENCES products(id),
+    line INT NOT NULL,
+    description_snapshot TEXT NOT NULL,
+    qty NUMERIC(14, 4) NOT NULL,
+    unit TEXT NOT NULL,
+    normalized_unit TEXT,
+    price_per_unit NUMERIC(14, 6),
+    unit_price NUMERIC(14, 2) NOT NULL,
+    total_price NUMERIC(14, 2) NOT NULL,
+    identity_status TEXT NOT NULL CHECK (identity_status IN (
+        'gtin_known',
+        'gtin_new',
+        'commodity_fingerprint',
+        'uid_uncertain',
+        'parse_error'
+    )),
+    needs_review BOOLEAN NOT NULL DEFAULT false,
+    resolved_by BIGINT REFERENCES users(id),
+    resolution_note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT price_logs_nfce_line_unique UNIQUE (nfce_id, line)
 );
 
-CREATE INDEX price_logs_product_idx   ON price_logs (product_id);
-CREATE INDEX price_logs_nfce_idx      ON price_logs (nfce_id, created_at);
+CREATE INDEX price_logs_product_idx ON price_logs (product_id);
+CREATE INDEX price_logs_nfce_idx ON price_logs (nfce_id, created_at);
 
 CREATE TABLE previews (
-id              BIGSERIAL PRIMARY KEY,
-user_id         BIGINT NOT NULL REFERENCES users(id),
-access_key      TEXT NOT NULL,
-plan_items      JSONB NOT NULL DEFAULT '[]'::jsonb,
-plan_totals     JSONB,
-status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending',
-'committed',
-'expired')),
-idempotency_key TEXT NOT NULL UNIQUE,
-ttl             TIMESTAMPTZ NOT NULL,
-created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
+    access_key TEXT NOT NULL,
+    plan_items JSONB NOT NULL DEFAULT '[]'::JSONB,
+    plan_totals JSONB,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending',
+        'committed',
+        'expired'
+    )),
+    idempotency_key TEXT NOT NULL UNIQUE,
+    ttl TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX previews_ttl_idx            ON previews (ttl);
+CREATE INDEX previews_ttl_idx ON previews (ttl);
 CREATE INDEX previews_idempotency_key_idx ON previews (idempotency_key);
 
 CREATE TABLE commodity_synonyms (
-id             BIGSERIAL PRIMARY KEY,
-synonym        TEXT NOT NULL UNIQUE,
-canonical_name TEXT NOT NULL,
-category       TEXT,
-unit           TEXT,
-source         TEXT,
-created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    id BIGSERIAL PRIMARY KEY,
+    synonym TEXT NOT NULL UNIQUE,
+    canonical_name TEXT NOT NULL,
+    category TEXT,
+    unit TEXT,
+    source TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX commodity_synonyms_trgm_idx
-ON commodity_synonyms USING gin (synonym gin_trgm_ops,
-canonical_name gin_trgm_ops);
+ON commodity_synonyms USING gin (
+    synonym gin_trgm_ops,
+    canonical_name gin_trgm_ops
+);

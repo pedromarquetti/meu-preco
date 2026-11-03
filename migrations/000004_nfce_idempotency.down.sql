@@ -8,10 +8,9 @@ ALTER TABLE previews ADD COLUMN idempotency_key TEXT;
 UPDATE previews SET idempotency_key = access_key || ':' || id
 WHERE idempotency_key IS NULL
 ;
-ALTER TABLE previews ALTER column idempotency_key SET NOT NULL;
+ALTER TABLE previews ALTER COLUMN idempotency_key SET NOT NULL;
 
-ALTER TABLE previews 
+ALTER TABLE previews
 ADD CONSTRAINT previews_idempotency_key_key UNIQUE (idempotency_key);
 
 CREATE INDEX previews_idempotency_key_idx ON previews (idempotency_key);
-

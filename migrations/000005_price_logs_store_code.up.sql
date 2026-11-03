@@ -10,4 +10,3 @@ CREATE INDEX price_logs_store_code_idx ON price_logs (store_code);
 CREATE INDEX price_logs_review_idx
 ON price_logs (created_at DESC)
 WHERE needs_review = true;
- 

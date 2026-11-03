@@ -8,4 +8,3 @@ DROP INDEX IF EXISTS previews_idempotency_key_idx;
 
 CREATE UNIQUE INDEX previews_user_access_pending_idx
 ON previews (user_id, access_key) WHERE status = 'pending';
-

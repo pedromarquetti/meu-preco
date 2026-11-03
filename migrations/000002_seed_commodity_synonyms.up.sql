@@ -27,24 +27,26 @@ INSERT INTO commodity_synonyms (
 ('milho', 'milho verde', 'hortifruti', 'UN', 'generic fallback'),
 
 -- Iogurte natural (laticinios) - brand ITAMBÉ extracted at parse time
-('iogurte natural', 'iogurte natural', 
-'laticinios', 'UN', 'produtos.json sample'),
+(
+    'iogurte natural', 'iogurte natural',
+    'laticinios', 'UN', 'produtos.json sample'
+),
 ('iogurte natural 170g', 'iogurte natural', 'laticinios', 'UN', 'variation'),
 ('iogurte', 'iogurte natural', 'laticinios', 'UN', 'generic fallback'),
 
 (
-'batata inglesa',
-'batata inglesa',
-'hortifruti',
-'KG',
-'CONAB PROHORT / CEAGESP'
+    'batata inglesa',
+    'batata inglesa',
+    'hortifruti',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
 ),
 (
-'batata lisa',
-'batata inglesa',
-'hortifruti',
-'KG',
-'CONAB PROHORT / CEAGESP'
+    'batata lisa',
+    'batata inglesa',
+    'hortifruti',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
 ),
 ('batata', 'batata inglesa', 'hortifruti', 'KG', 'CONAB PROHORT / CEAGESP'),
 
@@ -66,29 +68,69 @@ INSERT INTO commodity_synonyms (
 ('laranja lima', 'laranja lima', 'hortifruti', 'KG', 'produtos.json sample'),
 ('laranja lima 1kg', 'laranja lima', 'hortifruti', 'KG', 'variation'),
 ('laranja', 'laranja lima', 'hortifruti', 'KG', 'generic fallback'),
-('laranha lima branca', 'laranja lima branca', 'hortifruti', 'KG', 'distinct variety'),
-('laranja lima amarela', 'laranja lima amarela', 'hortifruti', 'KG', 'distinct variety'),
+(
+    'laranha lima branca',
+    'laranja lima branca',
+    'hortifruti',
+    'KG',
+    'distinct variety'
+),
+(
+    'laranja lima amarela',
+    'laranja lima amarela',
+    'hortifruti',
+    'KG',
+    'distinct variety'
+),
 ('laranja pera', 'laranja pera', 'hortifruti', 'KG', 'distinct variety'),
 ('laranja natal', 'laranja natal', 'hortifruti', 'KG', 'distinct variety'),
 ('laranja baía', 'laranja baía', 'hortifruti', 'KG', 'distinct variety'),
 
 -- Cebola nacional / tipos de cebola (hortifruti)
-('cebola nacional', 'cebola nacional',
-'hortifruti', 'KG', 'produtos.json sample CEBOLA NAC'),
+(
+    'cebola nacional', 'cebola nacional',
+    'hortifruti', 'KG', 'produtos.json sample CEBOLA NAC'
+),
 ('cebola', 'cebola nacional', 'hortifruti', 'KG', 'generic fallback per user'),
-('cebola nac', 'cebola nacional', 'hortifruti', 'KG', 'generic fallback per user'),
+(
+    'cebola nac',
+    'cebola nacional',
+    'hortifruti',
+    'KG',
+    'generic fallback per user'
+),
 ('cebola roxa nacional', 'cebola roxa', 'hortifruti', 'KG', 'distinct variety'),
-('cebola branca nacional', 'cebola branca',
-'hortifruti', 'KG', 'distinct variety'),
+(
+    'cebola branca nacional', 'cebola branca',
+    'hortifruti', 'KG', 'distinct variety'
+),
 ('cebola roxa', 'cebola roxa', 'hortifruti', 'KG', 'accented form'),
 ('cebola branca', 'cebola branca', 'hortifruti', 'KG', 'accented form'),
 
 ('alho', 'alho', 'hortifruti', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('tomate', 'tomate', 'hortifruti', 'KG', 'CONAB PROHORT / CEAGESP'),
 
-('pimentao verde', 'pimentao verde', 'hortifruti', 'KG', 'CONAB PROHORT / CEAGESP'),
-('pimentao amarelo', 'pimentao amarelo', 'hortifruti', 'KG', 'CONAB PROHORT / CEAGESP'),
-('pimentao vermelho', 'pimentao vermelho', 'hortifruti', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'pimentao verde',
+    'pimentao verde',
+    'hortifruti',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'pimentao amarelo',
+    'pimentao amarelo',
+    'hortifruti',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'pimentao vermelho',
+    'pimentao vermelho',
+    'hortifruti',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
 
 ('cenoura', 'cenoura', 'hortifruti', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('alface', 'alface', 'hortifruti', 'UN', 'CONAB PROHORT / CEAGESP'),
@@ -105,23 +147,79 @@ INSERT INTO commodity_synonyms (
 
 -- Queijos maybe 
 -- TODO: The server should be able to parse/find these variations? we cannot guess all possible variations
-('queijo mussarela','queijo mussarela','laticinios','KG','CONAB PROHORT / CEAGESP'),
-('qj mussarela','queijo mussarela','laticinios','KG','CONAB PROHORT / CEAGESP'),
-('qjo mussarela','queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
-('qjomussarela','queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
-('qjmussarela','queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'queijo mussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qj mussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qjo mussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qjomussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qjmussarela',
+    'queijo mussarela',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
 ('queijo prato', 'queijo prato', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('qj prato', 'queijo prato', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('qjo prato', 'queijo prato', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 ('qjprato', 'queijo prato', 'laticinios', 'KG', 'merged form per user'),
 ('queijo minas', 'queijo minas', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
-('queijo minas padrao', 
-'queijo minas', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
+(
+    'queijo minas padrao',
+    'queijo minas', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'
+),
 ('queijo', 'queijo mussarela', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
-('queijo parmesao','queijo parmesao','laticinios','KG','CONAB PROHORT / CEAGESP'),
-('qj parmesao','queijo parmesao','laticinios','KG','CONAB PROHORT / CEAGESP'),
-('qjparmesao','queijo parmesao','laticinios','KG','CONAB PROHORT / CEAGESP'),
-('qjo parmesao','queijo parmesao','laticinios','KG','CONAB PROHORT / CEAGESP'),
+(
+    'queijo parmesao',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qj parmesao',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qjparmesao',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
+(
+    'qjo parmesao',
+    'queijo parmesao',
+    'laticinios',
+    'KG',
+    'CONAB PROHORT / CEAGESP'
+),
 ('parmesao', 'queijo parmesao', 'laticinios', 'KG', 'CONAB PROHORT / CEAGESP'),
 (
     'qj parmesao vigor',

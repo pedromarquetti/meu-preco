@@ -76,6 +76,7 @@ type Preview struct {
 	QRPayload  string
 	PlanItems  json.RawMessage // JSON array
 	PlanTotals json.RawMessage // JSON object
+	ReceiptSnapshot json.RawMessage // JSON snapshot of the parsed NFC-e
 	Status     string          // "pending" | "committed" | "expired"
 	TTL        time.Time
 	CreatedAt  time.Time
