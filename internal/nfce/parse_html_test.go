@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/shopspring/decimal"
 )
 
@@ -26,6 +27,42 @@ func mustDec(t *testing.T, s string) decimal.Decimal {
 		t.Fatalf("decode %q: %v", s, err)
 	}
 	return d
+}
+
+func TestParseRowTruncatesUnitsToTwoCharacters(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "kilogram suffix", raw: "KG0001", want: "KG"},
+		{name: "kilogram suffix", raw: "KG000001", want: "KG"},
+		{name: "unit suffix", raw: "UN0001", want: "UN"},
+		{name: "unit suffix", raw: "UN0 001", want: "UN"},
+		{name: "box suffix", raw: "CX0001", want: "CX"},
+		{name: "short unit", raw: "L", want: "L"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := goquery.NewDocumentFromReader(strings.NewReader(`
+				<table><tbody><tr>
+					<td>
+						<span class="txtTit">TEST</span>
+						<span class="Rqtd"><strong>Qtde.:</strong>1</span>
+						<span class="RUN"><strong>UN:</strong>` + tc.raw + `</span>
+						<span class="RvlUnit"><strong>Vl. Unit.:</strong>1,00</span>
+						<span class="valor">1,00</span>
+					</td>
+				</tr></tbody></table>`))
+			if err != nil {
+				t.Fatalf("parse row HTML: %v", err)
+			}
+
+			item := parseRow(doc.Find("tr").First(), 1)
+			if item.Unit != tc.want {
+				t.Errorf("unit = %q, want %q", item.Unit, tc.want)
+			}
+		})
+	}
 }
 
 func TestParseGroceryReceipt(t *testing.T) {

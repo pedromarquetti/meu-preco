@@ -129,6 +129,10 @@ func parseRow(row *goquery.Selection, line int) domain.NfceItem {
 	}
 
 	if u := scalarText(row, ".RUN"); u != "" {
+		u = strings.TrimSpace(u)
+		if len(u) > 2 {
+			u = u[:2]
+		}
 		item.Unit = u
 	} else {
 		item.Unit = "UN"
