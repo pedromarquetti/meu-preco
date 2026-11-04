@@ -35,7 +35,8 @@
       - [Opt-in live Open Food Facts BR test (hermetic runs skip it)](#opt-in-live-open-food-facts-br-test-hermetic-runs-skip-it)
     - [Linting/git hooks](#lintinggit-hooks)
     - [Migrations](#migrations)
-    - [Debugging](#debugging)
+    - [Diagnostic Command](#diagnostic-command)
+    - [Fetch test command](#fetch-test-command)
   - [Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)](#import-a-bulk-open-food-facts-dump-789790-gtins-only-idempotent)
   - [Inspiration](#inspiration)
   - [Non-goals](#non-goals)
@@ -647,14 +648,60 @@ make migrate-down
 make migrate-version
 ```
 
-### Debugging
+- [x] Diagnostics — a standalone command (`diag`) to reproduce SEFAZ regressions
+      with custom user agents and retry counts without modifying the server.
 
-The server includes some lines for logging debug info
+### Diagnostic Command
+
+The `diag` tool allows you to isolate variables (like User Agent or Base URL)
+that might be causing connection resets from the fiscal portal. It uses the same
+internal fetcher logic as the main application but prints detailed telemetry for
+every attempt directly to stdout/stderr.
+
+```sh
+# Basic usage:
+./cmd/diag <access_key>
+
+# Test a specific user agent and retry count (e.g., 10 attempts):
+./cmd/diag --user-agent "Mozilla/5.0" --retries 10 <access_key>
+
+# Test against a different base URL:
+./cmd/diag --base-url https://test.portal.gov.br <access_key>
+
+# Replay an exact QR payload (if known):
+./cmd/diag --payload "p=abc|3|1" <access_key>
+```
+
+**Warning:** This command contacts a live fiscal portal and should be run at low
+frequency with public test receipts only. Never use it to process production
+data or for high-frequency testing.
+
+### Fetch test command
+
+The server also includes `fetch-nfce` command
+
+Use this command to test basic SEFAZ fetcher (no parser, only fetch, mainly for
+rejection/debug quick local test)
 
 ```bash
-# this will enable debug logging
-# Note that this is verbose and intended for tracing where an error is coming from
-LOG_LEVEL=debug make run
+flag needs an argument: -h
+Usage: fetch-nfce [flags] <access_key> [payload]
+
+Flags:
+  -a string
+    	User agent for the request
+  -f string
+    	Set the logger's Log format (json or pretty print)
+  -h string
+    	Print this help menu
+  -l string
+    	Set the logger's Log level (default "info")
+  -r int
+    	Maximum number of attempts/retries (default 3)
+  -t string
+    	Timeout per attempt (e.g., 15s, 60s) (default "30s")
+  -u string
+    	SEFAZ base URL (default "https://www.nfce.fazenda.sp.gov.br/qrcode")
 ```
 
 ## Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)
