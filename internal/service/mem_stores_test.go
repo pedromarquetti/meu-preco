@@ -827,11 +827,6 @@ func (s memBrands) List(_ context.Context) ([]domain.CommodityBrand, error) {
 	return out, nil
 }
 
-// seedBrand registers a curated brand for the in-memory brand dictionary.
-func (m *memStores) seedBrand(display string) {
-	m.brands[strings.ToLower(display)] = &domain.CommodityBrand{Brand: strings.ToLower(display), Display: display}
-}
-
 // memUsers implements domain.UserStore.
 type memUsers struct{ m *memStores }
 

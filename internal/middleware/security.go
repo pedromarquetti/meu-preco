@@ -37,9 +37,7 @@ func StaticFS(root string) http.Handler {
 
 		// Strip the trailing slash for index.html lookup
 		path := r.URL.Path
-		if strings.HasSuffix(path, "/") {
-			path = strings.TrimSuffix(path, "/")
-		}
+		path = strings.TrimSuffix(path, "/")
 
 		// Construct the file path relative to the root
 		filePath := filepath.Join(root, path)

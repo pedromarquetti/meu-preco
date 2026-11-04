@@ -21,9 +21,12 @@ func TestTokenBucketAllowsBurstThenRefills(t *testing.T) {
 	now, advance := newTestClock()
 	b := newTokenBucket(1, 3, now)
 
-	if !b.allow() || !b.allow() || !b.allow() {
-		t.Fatal("burst of 3 should pass")
+	for i := 0; i < 3; i++ {
+		if !b.allow() {
+			t.Fatal("burst of 3 should pass")
+		}
 	}
+
 	if b.allow() {
 		t.Fatal("fourth token before refill should be rejected")
 	}
