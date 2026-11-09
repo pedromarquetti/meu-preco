@@ -12,6 +12,7 @@ import (
 const (
 	UnitKG = "KG"
 	UnitUN = "UN"
+	UnitCX = "CX"
 	UnitDZ = "DZ"
 	UnitGR = "GR"
 	UnitML = "ML"
@@ -28,7 +29,8 @@ var unitAliases = map[string]string{
 	// single pieces / packs counted individually
 	"UN": UnitUN, "UND": UnitUN, "UNID": UnitUN, "UNIDADE": UnitUN, "UNIDADES": UnitUN,
 	"PC": UnitUN, "PCS": UnitUN, "PCT": UnitUN, "PCTA": UnitUN, "PACOTE": UnitUN, "PECA": UnitUN, "PEÇA": UnitUN,
-	"CJ": UnitUN, "CX": UnitUN, "CXA": UnitUN, "CAIXA": UnitUN,
+	// Caixa -> a group of the same item, sold as one unit, counted as a group
+	"CJ": UnitCX, "CX": UnitCX, "CXA": UnitCX, "CAIXA": UnitCX,
 	// pieces that cross pack/count ambiguity: sold as single items
 	"DIV": UnitUN, "DIVERSOS": UnitUN, "FARDO": UnitUN, "FRD": UnitUN,
 	// dozen (count of 12)

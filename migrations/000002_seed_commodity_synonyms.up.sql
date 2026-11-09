@@ -146,7 +146,6 @@ INSERT INTO commodity_synonyms (
 ('melancia', 'melancia', 'hortifruti', 'KG', 'CONAB PROHORT / CEAGESP'),
 
 -- Queijos maybe 
--- TODO: The server should be able to parse/find these variations? we cannot guess all possible variations
 (
     'queijo mussarela',
     'queijo mussarela',

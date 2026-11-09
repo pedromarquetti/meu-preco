@@ -104,6 +104,7 @@ func (api *adminAPI) batchAssign(w http.ResponseWriter, r *http.Request) {
 	httpx.Respond(w, http.StatusOK, res)
 }
 
+// TODO: merge 'from' should accept a list of ints instead of a single int to prevent front-end having to call multiple times
 func (api *adminAPI) mergeProducts(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		FromID int64 `json:"from_id"`

@@ -20,7 +20,8 @@ func TestNormalizeUnit(t *testing.T) {
 		{"un", UnitUN, true},
 		{"UNIDADE", UnitUN, true},
 		{"PC", UnitUN, true},
-		{"CAIXA", UnitUN, true}, // pack counted as single item
+		{"CAIXA", UnitCX, true}, // pack counted as single item
+		{"CX", UnitCX, true},    // pack counted as single item
 		{"dz", UnitDZ, true},
 		{"ml", UnitML, true},
 		{"LT", UnitLT, true},
