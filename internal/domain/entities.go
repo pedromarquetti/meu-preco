@@ -65,6 +65,18 @@ type PriceLog struct {
 	CreatedAt           time.Time
 }
 
+// PriceLogEvent records an immutable action taken on a price log, such as
+// manual assignment or admin approval/rejection.
+type PriceLogEvent struct {
+	ID            int64
+	PriceLogID    int64
+	FromProductID *int64
+	ToProductID   *int64
+	UserID        int64
+	Action        string // "assign" | "approve" | "reject"
+	Timestamp     time.Time
+}
+
 // Preview is the transient, two-phase-commit record binding an ingestion plan
 // to a single confirm step. plan_items/plan_totals ride as JSON. Idempotency
 // is the receipt's access key: at most one live "pending" row may exist for a

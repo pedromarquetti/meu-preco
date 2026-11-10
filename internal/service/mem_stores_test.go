@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,6 +44,9 @@ type memStores struct {
 	logKeys   map[string]bool // "nfceID:line"
 	nextLogID int64
 
+	priceLogEvents []*domain.PriceLogEvent
+	nextEventID    int64
+
 	synonyms  map[string]*domain.CommoditySynonym
 	nextSynID int64
 
@@ -78,50 +82,54 @@ func (m *memStores) Tx(_ context.Context, fn func(domain.Stores) error) error {
 // memSnapshot is a shallow copy of the store maps/slices sufficient to roll
 // back a failed Tx: rows added mid-transaction are dropped, counters reset.
 type memSnapshot struct {
-	products     map[string]*domain.Product
-	byGtin       map[string]*domain.Product
-	byProductID  map[int64]*domain.Product
-	nextProdID   int64
-	previews     map[int64]*domain.Preview
-	previewKey   map[string]int64
-	nextPrevID   int64
-	supermarkets map[string]*domain.Supermarket
-	nextShopID   int64
-	nfces        map[string]*domain.Nfce
-	nextNfceID   int64
-	users        map[string]*domain.User
-	byUserID     map[int64]*domain.User
-	nextUser     int64
-	priceLogs    []*domain.PriceLog
-	logKeys      map[string]bool
-	nextLogID    int64
-	synonyms     map[string]*domain.CommoditySynonym
-	nextSynID    int64
-	brands       map[string]*domain.CommodityBrand
+	products       map[string]*domain.Product
+	byGtin         map[string]*domain.Product
+	byProductID    map[int64]*domain.Product
+	nextProdID     int64
+	previews       map[int64]*domain.Preview
+	previewKey     map[string]int64
+	nextPrevID     int64
+	supermarkets   map[string]*domain.Supermarket
+	nextShopID     int64
+	nfces          map[string]*domain.Nfce
+	nextNfceID     int64
+	users          map[string]*domain.User
+	byUserID       map[int64]*domain.User
+	nextUser       int64
+	priceLogs      []*domain.PriceLog
+	logKeys        map[string]bool
+	nextLogID      int64
+	priceLogEvents []*domain.PriceLogEvent
+	nextEventID    int64
+	synonyms       map[string]*domain.CommoditySynonym
+	nextSynID      int64
+	brands         map[string]*domain.CommodityBrand
 }
 
 func (m *memStores) snapshot() memSnapshot {
 	return memSnapshot{
-		products:     deepCopyMap(m.products),
-		byGtin:       deepCopyMap(m.byGtin),
-		byProductID:  deepCopyMap(m.byProductID),
-		nextProdID:   m.nextProdID,
-		previews:     deepCopyMap(m.previews),
-		previewKey:   copyMap(m.previewKey),
-		nextPrevID:   m.nextPrevID,
-		supermarkets: deepCopyMap(m.supermarkets),
-		nextShopID:   m.nextShopID,
-		nfces:        deepCopyMap(m.nfces),
-		nextNfceID:   m.nextNfceID,
-		users:        deepCopyMap(m.users),
-		byUserID:     deepCopyMap(m.byUserID),
-		nextUser:     m.nextUser,
-		priceLogs:    copyPriceLogs(m.priceLogs),
-		logKeys:      copyMap(m.logKeys),
-		nextLogID:    m.nextLogID,
-		synonyms:     deepCopyMap(m.synonyms),
-		nextSynID:    m.nextSynID,
-		brands:       deepCopyMap(m.brands),
+		products:       deepCopyMap(m.products),
+		byGtin:         deepCopyMap(m.byGtin),
+		byProductID:    deepCopyMap(m.byProductID),
+		nextProdID:     m.nextProdID,
+		previews:       deepCopyMap(m.previews),
+		previewKey:     copyMap(m.previewKey),
+		nextPrevID:     m.nextPrevID,
+		supermarkets:   deepCopyMap(m.supermarkets),
+		nextShopID:     m.nextShopID,
+		nfces:          deepCopyMap(m.nfces),
+		nextNfceID:     m.nextNfceID,
+		users:          deepCopyMap(m.users),
+		byUserID:       deepCopyMap(m.byUserID),
+		nextUser:       m.nextUser,
+		priceLogs:      copyPriceLogs(m.priceLogs),
+		logKeys:        copyMap(m.logKeys),
+		nextLogID:      m.nextLogID,
+		priceLogEvents: copyPriceLogEvents(m.priceLogEvents),
+		nextEventID:    m.nextEventID,
+		synonyms:       deepCopyMap(m.synonyms),
+		nextSynID:      m.nextSynID,
+		brands:         deepCopyMap(m.brands),
 	}
 }
 
@@ -154,6 +162,15 @@ func copyPriceLogs(src []*domain.PriceLog) []*domain.PriceLog {
 	return dst
 }
 
+func copyPriceLogEvents(src []*domain.PriceLogEvent) []*domain.PriceLogEvent {
+	dst := make([]*domain.PriceLogEvent, len(src))
+	for i, v := range src {
+		cp := *v
+		dst[i] = &cp
+	}
+	return dst
+}
+
 func (m *memStores) restore(s memSnapshot) {
 	m.products = s.products
 	m.byGtin = s.byGtin
@@ -172,6 +189,8 @@ func (m *memStores) restore(s memSnapshot) {
 	m.priceLogs = s.priceLogs
 	m.logKeys = s.logKeys
 	m.nextLogID = s.nextLogID
+	m.priceLogEvents = s.priceLogEvents
+	m.nextEventID = s.nextEventID
 	m.synonyms = s.synonyms
 	m.nextSynID = s.nextSynID
 	m.brands = s.brands
@@ -773,6 +792,32 @@ func (s memPriceLogs) CountByProduct(_ context.Context, productID int64) (int64,
 	return n, nil
 }
 
+// memPriceLogEvents implements domain.PriceLogEventStore. The append-only
+// semantics and the action CHECK constraint from the migration are mirrored so
+// service tests observe the same rejections as PostgreSQL.
+type memPriceLogEvents struct{ m *memStores }
+
+var validPriceLogEventActions = map[string]bool{
+	"assign":  true,
+	"approve": true,
+	"reject":  true,
+}
+
+func (s memPriceLogEvents) Create(_ context.Context, e *domain.PriceLogEvent) error {
+	if !validPriceLogEventActions[e.Action] {
+		return fmt.Errorf("memStores: invalid price log event action %q", e.Action)
+	}
+	m := s.m
+	m.nextEventID++
+	e.ID = m.nextEventID
+	if e.Timestamp.IsZero() {
+		e.Timestamp = time.Now()
+	}
+	cp := *e
+	m.priceLogEvents = append(m.priceLogEvents, &cp)
+	return nil
+}
+
 // memSynonyms implements domain.CommoditySynonymStore.
 type memSynonyms struct{ m *memStores }
 
@@ -914,6 +959,7 @@ func (m *memStores) Previews() domain.PreviewStore         { return memPreviews{
 func (m *memStores) Supermarkets() domain.SupermarketStore { return memSupermarkets{m} }
 func (m *memStores) Nfces() domain.NfceStore               { return memNfces{m} }
 func (m *memStores) PriceLogs() domain.PriceLogStore       { return memPriceLogs{m} }
+func (m *memStores) Events() domain.PriceLogEventStore     { return memPriceLogEvents{m} }
 func (m *memStores) Users() domain.UserStore               { return memUsers{m} }
 func (m *memStores) CommoditySynonyms() domain.CommoditySynonymStore {
 	return memSynonyms{m}

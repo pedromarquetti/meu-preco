@@ -100,6 +100,12 @@ type NfceStore interface {
 	Delete(ctx context.Context, id int64) error
 }
 
+// PriceLogEventStore persists an immutable action on a price log row, such as
+// manual assignment or admin approval/rejection.
+type PriceLogEventStore interface {
+	Create(ctx context.Context, event *PriceLogEvent) error
+}
+
 // PriceLogStore persists individual receipt lines.
 type PriceLogStore interface {
 	Create(ctx context.Context, l *PriceLog) error
@@ -184,6 +190,7 @@ type Stores interface {
 	Products() ProductStore
 	Nfces() NfceStore
 	PriceLogs() PriceLogStore
+	Events() PriceLogEventStore
 	Previews() PreviewStore
 	CommoditySynonyms() CommoditySynonymStore
 	Brands() CommodityBrandStore

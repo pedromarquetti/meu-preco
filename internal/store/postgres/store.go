@@ -111,6 +111,9 @@ func (s *Store) Brands() domain.CommodityBrandStore { return brandRepo{db: s.poo
 // RefreshTokens returns the refresh-token repository.
 func (s *Store) RefreshTokens() domain.RefreshTokenStore { return refreshTokenRepo{db: s.pool} }
 
+// Events returns the price log event repository.
+func (s *Store) Events() domain.PriceLogEventStore { return priceLogEventRepo{db: s.pool} }
+
 // Tx runs fn inside a real PostgreSQL transaction. The store handed to fn
 // binds its repositories to the open pgx transaction, so every write it makes
 // commits or rolls back together; fn returning an error aborts the whole unit.
@@ -137,6 +140,7 @@ func (s *txStores) Supermarkets() domain.SupermarketStore { return supermarketRe
 func (s *txStores) Products() domain.ProductStore         { return productRepo{db: s.db} }
 func (s *txStores) Nfces() domain.NfceStore               { return nfceRepo{db: s.db} }
 func (s *txStores) PriceLogs() domain.PriceLogStore       { return priceLogRepo{db: s.db} }
+func (s *txStores) Events() domain.PriceLogEventStore     { return priceLogEventRepo{db: s.db} }
 func (s *txStores) Previews() domain.PreviewStore         { return previewRepo{db: s.db} }
 func (s *txStores) CommoditySynonyms() domain.CommoditySynonymStore {
 	return synonymRepo{db: s.db}
