@@ -9,6 +9,7 @@ info:
     Conventions:
     - Every error is the canonical envelope: `{"error":{"code","message"}}`.
       A few codes (captcha challenges, rate limiting) add sibling fields.
+      Unexpected server failures answer `500` with `error.code = "internal_error"`.
     - Money is always transported as a decimal **string**, never a float.
     - All receipt/read/admin endpoints require a bearer access token; a
       reissue pair is obtained from `/auth/login` and rotated via
@@ -95,17 +96,21 @@ paths:
           description: Name or email already registered (`user_exists`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/UserExistsError" }
         "400":
           description: Malformed JSON body (`invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidRequestError" }
         "422":
           description: Invalid name, email or weak password (`invalid_name` / `invalid_email` / `invalid_password`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidNameError"
+                  - $ref: "#/components/schemas/InvalidEmailError"
+                  - $ref: "#/components/schemas/InvalidPasswordError"
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/auth/login:
@@ -128,12 +133,12 @@ paths:
           description: Malformed JSON body (`invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidRequestError" }
         "401":
           description: Bad credentials (`invalid_credentials`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidCredentialsError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/auth/refresh:
@@ -160,12 +165,15 @@ paths:
           description: Malformed JSON body (`invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidRequestError" }
         "401":
           description: Invalid/expired refresh token, or reuse detected (`invalid_refresh_token` / `refresh_reuse_detected`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidRefreshTokenError"
+                  - $ref: "#/components/schemas/RefreshReuseDetectedError"
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/auth/me:
@@ -208,14 +216,14 @@ paths:
           description: Malformed body (`invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidRequestError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: No receipt for the key (`receipt_not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ReceiptNotFoundError" }
         "412":
           description: Portal requires a captcha (`captcha_required`)
           content:
@@ -225,19 +233,32 @@ paths:
           description: Invalid key or QR payload (`invalid_access_key` / `invalid_qr_payload`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidAccessKeyError"
+                  - $ref: "#/components/schemas/InvalidQRPayloadError"
         "501":
           description: Unsupported issuing state (`unsupported_uf`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/UnsupportedUFError" }
         "502":
           description: Portal failure (`upstream_error`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/UpstreamError" }
         "429":
-          $ref: "#/components/responses/RateLimited"
+          description: Per-client budget spent (`rate_limited`) or the fiscal portal is throttling (`upstream_rate_limited`)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before retrying (present for `rate_limited`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/RateLimitedError"
+                  - $ref: "#/components/schemas/UpstreamRateLimitedError"
   /api/v1/nfce/submit:
     post:
       tags: [nfce]
@@ -267,26 +288,37 @@ paths:
           description: Malformed body or bad resolution (`invalid_request` / `invalid_resolution`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidRequestError"
+                  - $ref: "#/components/schemas/InvalidResolutionError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: Preview not found (`preview_not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/PreviewNotFoundError" }
         "409":
           description: Preview already committed (`preview_already_committed`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/PreviewAlreadyCommittedError" }
         "422":
           description: >-
             Preview expired (`preview_expired`) or a legacy draft has no stored
             receipt snapshot (`preview_snapshot_missing`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/PreviewExpiredError"
+                  - $ref: "#/components/schemas/PreviewSnapshotMissingError"
+        "500":
+          description: Stored receipt snapshot is corrupt or uses an unsupported schema (`preview_snapshot_unreadable`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreviewSnapshotUnreadableError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/nfce/delete:
@@ -313,19 +345,22 @@ paths:
           description: Malformed body or blank access key (`invalid_request` / `invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidRequestError"
+                  - $ref: "#/components/schemas/InvalidFilterError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           description: Not the owner nor an admin (`forbidden`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ForbiddenError" }
         "404":
           description: Receipt not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -348,19 +383,19 @@ paths:
           description: Missing challenge_id (`invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidRequestError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: Unknown challenge (`challenge_not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ChallengeNotFoundError" }
         "422":
           description: Challenge expired (`challenge_expired`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ChallengeExpiredError" }
         "429":
           $ref: "#/components/responses/RateLimited"
     post:
@@ -390,19 +425,19 @@ paths:
           description: Malformed body (`invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidRequestError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: Unknown challenge (`challenge_not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ChallengeNotFoundError" }
         "409":
           description: Challenge already solved (`challenge_used`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ChallengeUsedError" }
         "412":
           description: Wrong solution, retries remain (`captcha_wrong_solution`)
           content:
@@ -412,12 +447,19 @@ paths:
           description: Challenge expired (`challenge_expired`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ChallengeExpiredError" }
         "429":
           description: Challenge locked or per-IP budget spent (`challenge_locked` / `rate_limited`)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before retrying (present for `rate_limited`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ChallengeLockedError"
+                  - $ref: "#/components/schemas/RateLimitedError"
   /api/v1/nfce/captcha/image/{challenge_id}:
     get:
       tags: [captcha]
@@ -436,16 +478,36 @@ paths:
           description: Missing challenge id (`invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidRequestError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: Unknown challenge (`challenge_not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ChallengeNotFoundError" }
+        "409":
+          description: Challenge already solved (`challenge_used`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengeUsedError" }
+        "422":
+          description: Challenge expired (`challenge_expired`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengeExpiredError" }
         "429":
-          $ref: "#/components/responses/RateLimited"
+          description: Challenge locked or per-IP budget spent (`challenge_locked` / `rate_limited`)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before retrying (present for `rate_limited`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ChallengeLockedError"
+                  - $ref: "#/components/schemas/RateLimitedError"
 
   /api/v1/products:
     get:
@@ -468,7 +530,7 @@ paths:
           description: Bad pager or invalid gtin/unit filter (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -489,14 +551,14 @@ paths:
           description: Non-positive id (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: Not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/products/{id}/history:
@@ -517,14 +579,14 @@ paths:
           description: Bad window or non-positive id (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: Not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -545,7 +607,7 @@ paths:
           description: Bad pager (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -568,14 +630,14 @@ paths:
           description: Bad pager or non-positive id (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: Not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/supermarkets/{id}:
@@ -591,24 +653,24 @@ paths:
           description: Non-positive id (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           description: Not an admin (`forbidden`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ForbiddenError" }
         "404":
           description: Not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "409":
           description: Still referenced (`in_use`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InUseError" }
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -644,7 +706,7 @@ paths:
           description: Bad pager (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -673,19 +735,22 @@ paths:
           description: Invalid role or malformed body (`invalid_role` / `invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidRoleError"
+                  - $ref: "#/components/schemas/InvalidRequestError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           description: Not an admin, or self role change (`forbidden`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ForbiddenError" }
         "404":
           description: User not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/admin/products/needs-review:
@@ -705,7 +770,7 @@ paths:
           description: Bad pager (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -731,7 +796,10 @@ paths:
           description: Invalid assignment or malformed body (`invalid_assignment` / `invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidAssignmentError"
+                  - $ref: "#/components/schemas/InvalidRequestError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -762,7 +830,10 @@ paths:
           description: Invalid merge pair or malformed body (`invalid_assignment` / `invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidAssignmentError"
+                  - $ref: "#/components/schemas/InvalidRequestError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -771,7 +842,7 @@ paths:
           description: A product was not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/admin/products/{id}:
@@ -795,7 +866,10 @@ paths:
           description: Empty patch, malformed body or bad unit (`invalid_request` / `invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidRequestError"
+                  - $ref: "#/components/schemas/InvalidFilterError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -804,7 +878,7 @@ paths:
           description: Product not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
     delete:
@@ -823,7 +897,7 @@ paths:
           description: Non-positive id (`invalid_filter`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InvalidFilterError" }
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -832,12 +906,12 @@ paths:
           description: Product not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "409":
           description: Still referenced and no purge requested (`in_use`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/InUseError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/admin/synonym:
@@ -864,7 +938,10 @@ paths:
           description: Empty/unnormalizable synonym or canonical name, bad unit, or malformed body (`invalid_assignment` / `invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidAssignmentError"
+                  - $ref: "#/components/schemas/InvalidRequestError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -873,7 +950,7 @@ paths:
           description: Synonym already exists (`conflict`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/ConflictError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/admin/supermarkets/merge:
@@ -900,7 +977,10 @@ paths:
           description: Invalid CNPJ pair or malformed body (`invalid_assignment` / `invalid_request`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidAssignmentError"
+                  - $ref: "#/components/schemas/InvalidRequestError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -909,7 +989,7 @@ paths:
           description: An emitter was not found (`not_found`)
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -939,12 +1019,12 @@ components:
       description: Missing or invalid bearer token (`unauthorized`)
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema: { $ref: "#/components/schemas/UnauthorizedError" }
     Forbidden:
       description: Authenticated but not permitted (`forbidden`)
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema: { $ref: "#/components/schemas/ForbiddenError" }
     RateLimited:
       description: Client exceeded its request budget (`rate_limited`)
       headers:
@@ -953,9 +1033,67 @@ components:
           description: Seconds to wait before retrying
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema: { $ref: "#/components/schemas/RateLimitedError" }
   schemas:
     Error:
+      type: object
+      description: >
+        Canonical error envelope. Endpoints reference the per-code schemas
+        (e.g. `InvalidRequestError`) so only the codes they can emit are
+        advertised; this schema documents the complete envelope and the full
+        code set.
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: >
+                Stable machine-readable error code. Clients should switch on
+                this value rather than parsing `message`. Codes such as
+                `captcha_required` and `captcha_wrong_solution` also carry the
+                extra fields documented by their dedicated schemas.
+              enum:
+                - captcha_required
+                - captcha_wrong_solution
+                - challenge_expired
+                - challenge_locked
+                - challenge_not_found
+                - challenge_used
+                - conflict
+                - forbidden
+                - in_use
+                - internal_error
+                - invalid_access_key
+                - invalid_assignment
+                - invalid_credentials
+                - invalid_email
+                - invalid_filter
+                - invalid_name
+                - invalid_password
+                - invalid_qr_payload
+                - invalid_refresh_token
+                - invalid_request
+                - invalid_resolution
+                - invalid_role
+                - not_found
+                - preview_already_committed
+                - preview_expired
+                - preview_not_found
+                - preview_snapshot_missing
+                - preview_snapshot_unreadable
+                - rate_limited
+                - receipt_not_found
+                - refresh_reuse_detected
+                - unauthorized
+                - unsupported_uf
+                - upstream_error
+                - upstream_rate_limited
+                - user_exists
+            message: { type: string }
+    ChallengeExpiredError:
       type: object
       required: [error]
       properties:
@@ -963,7 +1101,337 @@ components:
           type: object
           required: [code, message]
           properties:
-            code: { type: string }
+            code: { const: challenge_expired }
+            message: { type: string }
+    ChallengeLockedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: challenge_locked }
+            message: { type: string }
+    ChallengeNotFoundError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: challenge_not_found }
+            message: { type: string }
+    ChallengeUsedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: challenge_used }
+            message: { type: string }
+    ConflictError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: conflict }
+            message: { type: string }
+    ForbiddenError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: forbidden }
+            message: { type: string }
+    InUseError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: in_use }
+            message: { type: string }
+    InternalError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: internal_error }
+            message: { type: string }
+    InvalidAccessKeyError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_access_key }
+            message: { type: string }
+    InvalidAssignmentError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_assignment }
+            message: { type: string }
+    InvalidCredentialsError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_credentials }
+            message: { type: string }
+    InvalidEmailError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_email }
+            message: { type: string }
+    InvalidFilterError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_filter }
+            message: { type: string }
+    InvalidNameError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_name }
+            message: { type: string }
+    InvalidPasswordError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_password }
+            message: { type: string }
+    InvalidQRPayloadError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_qr_payload }
+            message: { type: string }
+    InvalidRefreshTokenError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_refresh_token }
+            message: { type: string }
+    InvalidRequestError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_request }
+            message: { type: string }
+    InvalidResolutionError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_resolution }
+            message: { type: string }
+    InvalidRoleError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_role }
+            message: { type: string }
+    NotFoundError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: not_found }
+            message: { type: string }
+    PreviewAlreadyCommittedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: preview_already_committed }
+            message: { type: string }
+    PreviewExpiredError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: preview_expired }
+            message: { type: string }
+    PreviewNotFoundError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: preview_not_found }
+            message: { type: string }
+    PreviewSnapshotMissingError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: preview_snapshot_missing }
+            message: { type: string }
+    PreviewSnapshotUnreadableError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: preview_snapshot_unreadable }
+            message: { type: string }
+    RateLimitedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: rate_limited }
+            message: { type: string }
+    ReceiptNotFoundError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: receipt_not_found }
+            message: { type: string }
+    RefreshReuseDetectedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: refresh_reuse_detected }
+            message: { type: string }
+    UnauthorizedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: unauthorized }
+            message: { type: string }
+    UnsupportedUFError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: unsupported_uf }
+            message: { type: string }
+    UpstreamError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: upstream_error }
+            message: { type: string }
+    UpstreamRateLimitedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: upstream_rate_limited }
+            message: { type: string }
+    UserExistsError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: user_exists }
             message: { type: string }
     CaptchaChallenge:
       type: object
