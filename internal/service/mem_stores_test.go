@@ -577,6 +577,10 @@ func (s memPriceLogs) GetByID(_ context.Context, id int64) (*domain.PriceLog, er
 	return nil, domain.ErrNotFound
 }
 
+func (s memPriceLogs) GetByIDForUpdate(ctx context.Context, id int64) (*domain.PriceLog, error) {
+	return s.GetByID(ctx, id)
+}
+
 func (s memPriceLogs) GetByNfceLine(_ context.Context, nfceID int64, line int) (*domain.PriceLog, error) {
 	for _, l := range s.m.priceLogs {
 		if l.NfceID == nfceID && l.Line == line {
@@ -772,6 +776,16 @@ func (s memPriceLogs) SetProduct(_ context.Context, priceLogID, productID int64,
 	return domain.ErrNotFound
 }
 
+func (s memPriceLogs) SetNeedsReview(_ context.Context, priceLogID int64, needsReview bool) error {
+	for _, l := range s.m.priceLogs {
+		if l.ID == priceLogID {
+			l.NeedsReview = needsReview
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
 func (s memPriceLogs) DeleteByNfceID(_ context.Context, nfceID int64) (int64, error) {
 	var n int64
 	kept := s.m.priceLogs[:0]
@@ -836,6 +850,20 @@ func (s memPriceLogEvents) Create(_ context.Context, e *domain.PriceLogEvent) er
 	cp := *e
 	m.priceLogEvents = append(m.priceLogEvents, &cp)
 	return nil
+}
+
+func (s memPriceLogEvents) LatestByPriceLogID(_ context.Context, priceLogID int64) (*domain.PriceLogEvent, error) {
+	var latest *domain.PriceLogEvent
+	for _, e := range s.m.priceLogEvents {
+		if e.PriceLogID == priceLogID && (latest == nil || e.ID > latest.ID) {
+			latest = e
+		}
+	}
+	if latest == nil {
+		return nil, domain.ErrNotFound
+	}
+	cp := *latest
+	return &cp, nil
 }
 
 // memSynonyms implements domain.CommoditySynonymStore.

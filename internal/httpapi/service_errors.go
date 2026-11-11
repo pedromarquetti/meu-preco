@@ -30,10 +30,17 @@ func respondServiceError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_filter", err.Error())
 	case errors.Is(err, service.ErrInvalidAssignment):
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_assignment", err.Error())
+	case errors.Is(err, service.ErrInvalidReviewAction):
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_review_action", err.Error())
 	case errors.Is(err, service.ErrInvalidRole):
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_role", err.Error())
 	case errors.Is(err, domain.ErrNotFound):
 		httpx.Error(w, r, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, service.ErrPriceLogAlreadyProcessed):
+		// TODO: remember to add already_processed as a possible Error in openapi.yaml
+		httpx.Error(w, r, http.StatusConflict, "already_processed", "price log is already processed")
+	case errors.Is(err, service.ErrMissingProductForApproval):
+		httpx.Error(w, r, http.StatusBadRequest, "bad_request", "cannot approve price log without an assigned product")
 	case errors.Is(err, domain.ErrConflict):
 		httpx.Error(w, r, http.StatusConflict, "conflict", err.Error())
 	default:

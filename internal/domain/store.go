@@ -104,12 +104,19 @@ type NfceStore interface {
 // manual assignment or admin approval/rejection.
 type PriceLogEventStore interface {
 	Create(ctx context.Context, event *PriceLogEvent) error
+	// LatestByPriceLogID returns the newest event for a price log, or
+	// domain.ErrNotFound when the log has no event history.
+	LatestByPriceLogID(ctx context.Context, priceLogID int64) (*PriceLogEvent, error)
 }
 
 // PriceLogStore persists individual receipt lines.
 type PriceLogStore interface {
 	Create(ctx context.Context, l *PriceLog) error
 	GetByID(ctx context.Context, id int64) (*PriceLog, error)
+	// GetByIDForUpdate loads a price log while holding its row lock until the
+	// surrounding Stores.Tx completes. Review decisions use this to serialize
+	// competing admin actions.
+	GetByIDForUpdate(ctx context.Context, id int64) (*PriceLog, error)
 	// GetByNfceLine returns the log for a receipt line, or ErrNotFound.
 	GetByNfceLine(ctx context.Context, nfceID int64, line int) (*PriceLog, error)
 	// HistoryByProduct returns the price curve for a product, each point
@@ -132,6 +139,9 @@ type PriceLogStore interface {
 	// flag (admin batch-assign). heldBy frees the "(user_id, access_key)
 	// pending" slot after the review, so the queue stays clean.
 	SetProduct(ctx context.Context, priceLogID, productID int64, resolvedBy int64, note string) error
+	// SetNeedsReview changes only the materialized review state. It preserves
+	// the original assignment provenance.
+	SetNeedsReview(ctx context.Context, priceLogID int64, needsReview bool) error
 	// DeleteByNfceID removes every log of a receipt; returns the removed count.
 	DeleteByNfceID(ctx context.Context, nfceID int64) (int64, error)
 	// DeleteByProduct removes every log referencing a product; returns the

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -688,4 +689,61 @@ func derefString(s *string) string {
 func stableKey(parts ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])
+}
+
+// ReviewPriceLog handles admin decisions on manual assignments. An "approve" action
+// makes a price log public (needs_review = false) if it has an assigned product;
+// a "reject" action keeps the proposal pending but records the decision in history.
+func (s *Service) ReviewPriceLog(ctx context.Context, adminID, priceLogID int64, action string) (*ReviewProductView, error) {
+	if action != "approve" && action != "reject" {
+		return nil, ErrInvalidReviewAction
+	}
+
+	var result ReviewProductView
+	err := s.Stores.Tx(ctx, func(tx domain.Stores) error {
+		log, err := tx.PriceLogs().GetByIDForUpdate(ctx, priceLogID)
+		if err != nil {
+			return err
+		}
+
+		if !log.NeedsReview {
+			return ErrPriceLogAlreadyProcessed
+		}
+		if latest, err := tx.Events().LatestByPriceLogID(ctx, log.ID); err == nil &&
+			latest.Action == action {
+			return ErrPriceLogAlreadyProcessed
+		} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+
+		if log.ProductID != nil {
+			resultProduct, err := tx.Products().GetByID(ctx, *log.ProductID)
+			if err != nil {
+				return err
+			}
+			result = ReviewProductView{
+				ID: resultProduct.ID, ProductKey: resultProduct.ProductKey,
+				GTIN: resultProduct.GTIN, Name: resultProduct.Name, Unit: resultProduct.Unit,
+			}
+		}
+
+		if action == "approve" {
+			if log.ProductID == nil || *log.ProductID <= 0 {
+				return ErrMissingProductForApproval
+			}
+			if err := tx.PriceLogs().SetNeedsReview(ctx, log.ID, false); err != nil {
+				return err
+			}
+		}
+
+		return tx.Events().Create(ctx, &domain.PriceLogEvent{
+			PriceLogID: log.ID, FromProductID: log.ProductID,
+			ToProductID: log.ProductID, UserID: adminID, Action: action,
+		})
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("review price log: %w", err)
+	}
+	return &result, nil
 }

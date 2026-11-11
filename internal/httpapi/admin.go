@@ -104,6 +104,34 @@ func (api *adminAPI) batchAssign(w http.ResponseWriter, r *http.Request) {
 	httpx.Respond(w, http.StatusOK, res)
 }
 
+func (api *adminAPI) reviewProduct(w http.ResponseWriter, r *http.Request) {
+	productID, ok := pathID(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+
+	var body struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action != "approve" && body.Action != "reject" {
+		httpx.Error(w, r, http.StatusBadRequest, "invalid_request", "invalid request body. Body must be valid JSON: {'action':'reject|approve'}")
+		return
+	}
+
+	adminID, ok := subjectID(w, r)
+	if !ok {
+		return
+	}
+
+	res, err := api.svc.ReviewPriceLog(r.Context(), adminID, productID, body.Action)
+	if err != nil {
+		respondServiceError(w, r, err)
+		return
+	}
+
+	httpx.Respond(w, http.StatusOK, res)
+}
+
 // TODO: merge 'from' should accept a list of ints instead of a single int to prevent front-end having to call multiple times
 func (api *adminAPI) mergeProducts(w http.ResponseWriter, r *http.Request) {
 	var body struct {

@@ -58,6 +58,12 @@ var (
 	ErrInvalidAssignment = errors.New("invalid assignment")
 	// ErrInvalidRole reports a role value outside {"user","admin"}. 400.
 	ErrInvalidRole = errors.New("invalid role")
+	// Invalid price log review action
+	ErrInvalidReviewAction = errors.New("invalid price log review action")
+	// Price log is already processed
+	ErrPriceLogAlreadyProcessed = errors.New("price log is already processed")
+	// Cannot approve price log without an assigned product
+	ErrMissingProductForApproval = errors.New("cannot approve price log without an assigned product")
 )
 
 // Resolver is the fetch+parse slice every draft path needs: given a chave

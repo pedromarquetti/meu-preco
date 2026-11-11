@@ -45,6 +45,10 @@ func (r priceLogRepo) GetByID(ctx context.Context, id int64) (*domain.PriceLog, 
 	return r.scanOne(ctx, `WHERE id = $1`, id)
 }
 
+func (r priceLogRepo) GetByIDForUpdate(ctx context.Context, id int64) (*domain.PriceLog, error) {
+	return r.scanOne(ctx, `WHERE id = $1 FOR UPDATE`, id)
+}
+
 func (r priceLogRepo) GetByNfceLine(ctx context.Context, nfceID int64, line int) (*domain.PriceLog, error) {
 	return r.scanOne(ctx, `WHERE nfce_id = $1 AND line = $2`, nfceID, line)
 }
@@ -289,6 +293,18 @@ func (r priceLogRepo) SetProduct(ctx context.Context, priceLogID, productID int6
 	tag, err := r.db.Exec(ctx,
 		`UPDATE price_logs SET product_id = $2, needs_review = false, resolved_by = $3, resolution_note = $4
 		 WHERE id = $1`, priceLogID, productID, resolvedBy, note)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (r priceLogRepo) SetNeedsReview(ctx context.Context, priceLogID int64, needsReview bool) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE price_logs SET needs_review = $2 WHERE id = $1`, priceLogID, needsReview)
 	if err != nil {
 		return err
 	}

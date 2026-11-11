@@ -25,3 +25,18 @@ func (r priceLogEventRepo) Create(ctx context.Context, e *domain.PriceLogEvent) 
 	}
 	return nil
 }
+
+func (r priceLogEventRepo) LatestByPriceLogID(ctx context.Context, priceLogID int64) (*domain.PriceLogEvent, error) {
+	e := &domain.PriceLogEvent{}
+	err := r.db.QueryRow(ctx,
+		`SELECT id, price_log_id, from_product_id, to_product_id, user_id, action, timestamp
+		 FROM price_log_event
+		 WHERE price_log_id = $1
+		 ORDER BY timestamp DESC, id DESC
+		 LIMIT 1`, priceLogID,
+	).Scan(&e.ID, &e.PriceLogID, &e.FromProductID, &e.ToProductID, &e.UserID, &e.Action, &e.Timestamp)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	return e, nil
+}

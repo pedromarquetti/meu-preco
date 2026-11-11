@@ -146,6 +146,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 			ar.Get("/products/needs-review", adminAPI.needsReview)
 			ar.Post("/products/batch-assign", adminAPI.batchAssign)
 			ar.Post("/products/merge", adminAPI.mergeProducts)
+			ar.Post("/products/price-logs/{id}/review", adminAPI.reviewProduct)
 			ar.Patch("/products/{id}", adminAPI.patchProduct)
 			ar.Delete("/products/{id}", adminAPI.deleteProduct)
 			ar.Post("/supermarkets/merge", adminAPI.mergeSupermarkets)
