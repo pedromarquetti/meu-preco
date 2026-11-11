@@ -200,7 +200,10 @@ paths:
         DANFE from the issuing portal and returns an itemized plan bound to a
         pending preview. Re-drafting the same receipt while a pending preview
         exists replays that plan (200) without a refetch. May answer `412` with
-        a captcha challenge that must be solved first.
+        a captcha challenge that must be solved first. The preview distinguishes
+        lines that can be automatically saved from `uid_uncertain` lines that
+        need an explicit resolution during submit; no receipt or price log is
+        committed by this operation.
       requestBody:
         required: true
         content:
@@ -274,7 +277,11 @@ paths:
         that an admin can resolve later. A line is written nothing and counted
         under `skipped` only when `skip` is requested explicitly. `assign` links
         an existing product but keeps the row pending review: an assignment
-        only becomes public after an explicit admin approval.
+        only becomes public after an explicit admin approval. Automatically
+        identified lines are saved as trusted observations; manually assigned
+        lines are proposals. Proposals remain private until approval, and
+        assignment, approval, and rejection are recorded in the append-only
+        `price_log_event` audit history.
       requestBody:
         required: true
         content:
@@ -515,6 +522,11 @@ paths:
     get:
       tags: [products]
       summary: Search the shared product catalog
+      description: >
+        Returns only products with at least one approved, product-linked price
+        log (`needs_review = false`). Catalog seed rows and products referenced
+        only by pending manual assignments are hidden until an admin approves a
+        price observation.
       parameters:
         - { name: q, in: query, schema: { type: string }, description: fuzzy name query (pg_trgm) }
         - { name: gtin, in: query, schema: { type: string } }
@@ -541,6 +553,10 @@ paths:
     get:
       tags: [products]
       summary: Fetch one product
+      description: >
+        A product is public only when it has at least one approved price log.
+        Products with no approved observation, including products referenced by
+        pending proposals, return `404`.
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
@@ -567,6 +583,10 @@ paths:
     get:
       tags: [products]
       summary: Price curve + per-unit aggregate for a product
+      description: >
+        Returns only approved price observations. The product must have at
+        least one approved price log; pending or rejected proposals never
+        contribute to this history and otherwise produce `404`.
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
         - { name: from, in: query, schema: { type: string }, description: "YYYY-MM-DD or RFC3339" }
@@ -783,6 +803,60 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /api/v1/admin/products/price-logs/{id}/review:
+    post:
+      tags: [admin]
+      summary: Approve or reject a price-log proposal (admin)
+      description: |
+        Applies an administrative decision to one `needs_review` price log.
+        `approve` requires a proposed product and makes the row public by
+        setting `needs_review` to false. `reject` retains the proposed product,
+        the original assigning user, and `needs_review = true`, so the proposal
+        remains hidden and can later be approved. Every decision is appended to
+        the immutable `price_log_event` audit history; rejection is therefore
+        reversible and never deletes the proposal. The authenticated admin is
+        the event actor; `user_id` is not accepted in the request body.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewDecisionRequest" }
+      responses:
+        "200":
+          description: Decision recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewDecisionResult" }
+        "400":
+          description: Invalid request/action or approval without a product (`invalid_request` / `invalid_review_action` / `bad_request`)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InvalidRequestError"
+                  - $ref: "#/components/schemas/InvalidReviewActionError"
+                  - $ref: "#/components/schemas/BadRequestError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Price log not found (`not_found`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotFoundError" }
+        "409":
+          description: Price log is already in the requested terminal state (`already_processed`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlreadyProcessedError" }
         "429":
           $ref: "#/components/responses/RateLimited"
   /api/v1/admin/products/batch-assign:
@@ -1071,6 +1145,7 @@ components:
                 - challenge_not_found
                 - challenge_used
                 - conflict
+                - bad_request
                 - forbidden
                 - in_use
                 - internal_error
@@ -1085,6 +1160,7 @@ components:
                 - invalid_refresh_token
                 - invalid_request
                 - invalid_resolution
+                - invalid_review_action
                 - invalid_role
                 - not_found
                 - preview_already_committed
@@ -1093,6 +1169,7 @@ components:
                 - preview_snapshot_missing
                 - preview_snapshot_unreadable
                 - rate_limited
+                - already_processed
                 - receipt_not_found
                 - refresh_reuse_detected
                 - unauthorized
@@ -1150,6 +1227,16 @@ components:
           required: [code, message]
           properties:
             code: { const: conflict }
+            message: { type: string }
+    BadRequestError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: bad_request }
             message: { type: string }
     ForbiddenError:
       type: object
@@ -1281,6 +1368,16 @@ components:
           properties:
             code: { const: invalid_request }
             message: { type: string }
+    InvalidReviewActionError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: invalid_review_action }
+            message: { type: string }
     InvalidResolutionError:
       type: object
       required: [error]
@@ -1400,6 +1497,16 @@ components:
           required: [code, message]
           properties:
             code: { const: unauthorized }
+            message: { type: string }
+    AlreadyProcessedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: already_processed }
             message: { type: string }
     UnsupportedUFError:
       type: object
@@ -1819,6 +1926,28 @@ components:
           type: array
           items: { $ref: "#/components/schemas/ReviewItemView" }
         page: { $ref: "#/components/schemas/Page" }
+    ReviewDecisionRequest:
+      type: object
+      required: [action]
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+          enum: [approve, reject]
+          description: >
+            `approve` publishes a product-linked price log; `reject` retains
+            the proposal in the private review queue.
+    ReviewDecisionResult:
+      type: object
+      description: >
+        Product projection returned after a review decision. It is empty when
+        an unresolved row is rejected; it is not a public product response.
+      properties:
+        id: { type: integer }
+        product_key: { type: string }
+        gtin: { type: string, nullable: true }
+        name: { type: string }
+        unit: { type: string }
     Assignment:
       type: object
       required: [id, action]

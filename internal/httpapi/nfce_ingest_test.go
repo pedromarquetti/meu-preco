@@ -374,6 +374,10 @@ func TestNfceCommitAssignStaysPendingReview(t *testing.T) {
 	if err := st.Users().Create(ctx, u); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
+	admin := &domain.User{Name: "Admin", Email: "admin@example.com", PasswordHash: "h", Role: "admin"}
+	if err := st.Users().Create(ctx, admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
 	mustAddPGProduct(t, st)
 
 	target := &domain.Product{ProductKey: "limao-tahiti", Name: "LIMAO TAHITI", Unit: "KG"}
@@ -439,7 +443,9 @@ func TestNfceCommitAssignStaysPendingReview(t *testing.T) {
 
 	var priceLogID int64
 	if err := st.Pool().QueryRow(ctx,
-		`SELECT id FROM price_logs WHERE line = 2`).Scan(&priceLogID); err != nil {
+		`SELECT id FROM price_logs
+		   WHERE line = 2 AND product_id = $1 AND needs_review = true`, target.ID).
+		Scan(&priceLogID); err != nil {
 		t.Fatalf("read price log id: %v", err)
 	}
 
@@ -508,6 +514,74 @@ func TestNfceCommitAssignStaysPendingReview(t *testing.T) {
 	}
 	if eventsAfter != eventsBefore {
 		t.Errorf("invalid assign wrote event(s): before=%d after=%d", eventsBefore, eventsAfter)
+	}
+
+	// The complete review lifecycle is reversible: reject records an event and
+	// keeps the proposal private, then approve publishes the same row without
+	// changing the original assigner's identity.
+	adminRouter := roleRouter(t, st, pgResolver{receipt: ingestReceipt()}, admin.ID, "admin")
+	review := func(action string) (*httptest.ResponseRecorder, map[string]any) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost,
+			"/api/v1/admin/products/price-logs/"+strconvItoa(priceLogID)+"/review",
+			strings.NewReader(`{"action":"`+action+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		adminRouter.ServeHTTP(rec, req)
+		var out map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return rec, out
+	}
+
+	rec, _ = review("reject")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reject status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	rec, _ = do(http.MethodGet, "/api/v1/products/"+strconvItoa(target.ID)+"/history", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("rejected history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec, _ = review("approve")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approve status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	rec, _ = do(http.MethodGet, "/api/v1/products/"+strconvItoa(target.ID)+"/history", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approved history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var final struct {
+		NeedsReview bool
+		ResolvedBy  *int64
+	}
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT needs_review, resolved_by FROM price_logs WHERE id = $1`, priceLogID).
+		Scan(&final.NeedsReview, &final.ResolvedBy); err != nil {
+		t.Fatalf("read reviewed price log: %v", err)
+	}
+	if final.NeedsReview || final.ResolvedBy == nil || *final.ResolvedBy != u.ID {
+		t.Errorf("reviewed row = %+v, want approved with original assigner %d", final, u.ID)
+	}
+	var eventActions []string
+	rows, err := st.Pool().Query(ctx,
+		`SELECT action FROM price_log_event WHERE price_log_id = $1 ORDER BY timestamp, id`, priceLogID)
+	if err != nil {
+		t.Fatalf("read review events: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var action string
+		if err := rows.Scan(&action); err != nil {
+			t.Fatalf("scan review event: %v", err)
+		}
+		eventActions = append(eventActions, action)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate review events: %v", err)
+	}
+	if got, want := strings.Join(eventActions, ","), "assign,reject,approve"; got != want {
+		t.Errorf("event actions = %q, want %q", got, want)
 	}
 }
 

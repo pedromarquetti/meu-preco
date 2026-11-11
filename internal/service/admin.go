@@ -716,17 +716,6 @@ func (s *Service) ReviewPriceLog(ctx context.Context, adminID, priceLogID int64,
 			return err
 		}
 
-		if log.ProductID != nil {
-			resultProduct, err := tx.Products().GetByID(ctx, *log.ProductID)
-			if err != nil {
-				return err
-			}
-			result = ReviewProductView{
-				ID: resultProduct.ID, ProductKey: resultProduct.ProductKey,
-				GTIN: resultProduct.GTIN, Name: resultProduct.Name, Unit: resultProduct.Unit,
-			}
-		}
-
 		if action == "approve" {
 			if log.ProductID == nil || *log.ProductID <= 0 {
 				return ErrMissingProductForApproval
