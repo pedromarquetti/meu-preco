@@ -30,10 +30,25 @@ func (r productRepo) Create(ctx context.Context, p *domain.Product) (bool, error
 }
 
 func (r productRepo) GetByID(ctx context.Context, id int64) (*domain.Product, error) {
+	return r.getByID(ctx, id, true)
+}
+
+func (r productRepo) GetByIDForWrite(ctx context.Context, id int64) (*domain.Product, error) {
+	return r.getByID(ctx, id, false)
+}
+
+func (r productRepo) getByID(ctx context.Context, id int64, publicOnly bool) (*domain.Product, error) {
 	p := &domain.Product{}
+	visibility := ""
+	if publicOnly {
+		visibility = ` AND EXISTS (
+			SELECT 1 FROM price_logs pl
+			WHERE pl.product_id = products.id AND pl.needs_review = false
+		)`
+	}
 	err := r.db.QueryRow(ctx,
 		`SELECT id, product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by, created_at
-		 FROM products WHERE id = $1`, id,
+		 FROM products WHERE id = $1`+visibility, id,
 	).Scan(&p.ID, &p.ProductKey, &p.GTIN, &p.Name, &p.Brand, &p.Unit,
 		&p.CanonicalStem, &p.NeedsReview, &p.CreatedBy, &p.CreatedAt)
 	if err != nil {
@@ -42,7 +57,7 @@ func (r productRepo) GetByID(ctx context.Context, id int64) (*domain.Product, er
 	return p, nil
 }
 
-const productColumns = `id, product_key, gtin, name, brand, unit, canonical_stem, needs_review, created_by, created_at`
+const productColumns = `products.id, products.product_key, products.gtin, products.name, products.brand, products.unit, products.canonical_stem, products.needs_review, products.created_by, products.created_at`
 
 // scanProduct decodes a product row; pass sim!=nil to also read the trailing
 // similarity column used by rank-ordered queries.
@@ -76,14 +91,14 @@ func (r productRepo) SearchFiltered(ctx context.Context, f domain.ProductFilter,
 		offset = 0
 	}
 
-	wheres := []string{"needs_review = false"}
+	wheres := []string{"products.needs_review = false", "EXISTS (SELECT 1 FROM price_logs pl WHERE pl.product_id = products.id AND pl.needs_review = false)"}
 	args := []any{}
 
 	if q := strings.TrimSpace(f.Query); q != "" {
 		args = append(args, q)
 		n := len(args)
 		sim := fmt.Sprintf(
-			"greatest(similarity(name, $%d), similarity(COALESCE(brand, ''), $%d), similarity(COALESCE(canonical_stem, ''), $%d))",
+			"greatest(similarity(products.name, $%d), similarity(COALESCE(products.brand, ''), $%d), similarity(COALESCE(products.canonical_stem, ''), $%d))",
 			n, n, n)
 		wheres = append(wheres, sim+" > 0.1")
 	}
@@ -93,32 +108,32 @@ func (r productRepo) SearchFiltered(ctx context.Context, f domain.ProductFilter,
 
 		// gtin is stored 14-digit zero-padded; strip the pad so a bare barcode
 		// prefix (e.g. "7831") still matches "07891000412855".
-		wheres = append(wheres, fmt.Sprintf(`ltrim(COALESCE(gtin, ''), '0') LIKE $%d || '%%'`, n))
+		wheres = append(wheres, fmt.Sprintf(`ltrim(COALESCE(products.gtin, ''), '0') LIKE $%d || '%%'`, n))
 	}
 
 	if unit := strings.TrimSpace(f.Unit); unit != "" {
 		args = append(args, unit)
 		n := len(args)
-		wheres = append(wheres, fmt.Sprintf("unit = $%d", n))
+		wheres = append(wheres, fmt.Sprintf("products.unit = $%d", n))
 	}
 
 	if brand := strings.TrimSpace(f.Brand); brand != "" {
 		args = append(args, brand, brand)
 		n := len(args)
-		wheres = append(wheres, fmt.Sprintf("(brand ILIKE '%%' || $%d || '%%' OR name ILIKE '%%' || $%d || '%%')", n-1, n))
+		wheres = append(wheres, fmt.Sprintf("(products.brand ILIKE '%%' || $%d || '%%' OR products.name ILIKE '%%' || $%d || '%%')", n-1, n))
 	}
 
 	where := strings.Join(wheres, " AND ")
-	order := "name"
+	order := "products.name"
 	selectExtra := ""
 	withSim := false
 	if strings.Contains(where, "similarity") {
-		order = "sim DESC, name"
+		order = "sim DESC, products.name"
 		withSim = true
 		selectExtra = `, greatest(
-			similarity(name, $1),
-			similarity(COALESCE(brand, ''), $1),
-			similarity(COALESCE(canonical_stem, ''), $1)
+			similarity(products.name, $1),
+			similarity(COALESCE(products.brand, ''), $1),
+			similarity(COALESCE(products.canonical_stem, ''), $1)
 		) AS sim`
 	}
 

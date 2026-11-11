@@ -67,6 +67,9 @@ type SupermarketStore interface {
 type ProductStore interface {
 	Create(ctx context.Context, p *Product) (bool, error)
 	GetByID(ctx context.Context, id int64) (*Product, error)
+	// GetByIDForWrite resolves a product for internal mutations such as a
+	// pending assignment. Unlike GetByID, it is not a public-read lookup.
+	GetByIDForWrite(ctx context.Context, id int64) (*Product, error)
 	GetByKey(ctx context.Context, key string) (*Product, error)
 	GetByGTIN(ctx context.Context, gtin string) (*Product, error)
 	Search(ctx context.Context, query string, limit, offset int) ([]Product, error)

@@ -28,6 +28,18 @@ func TestSearchFiltered(t *testing.T) {
 			t.Fatalf("create product %d: %v", i, err)
 		}
 	}
+	sm := seedSupermarket(t, s)
+	n := seedNfce(t, s, sm)
+	for i := range rows[:3] {
+		if err := s.PriceLogs().Create(ctx, &domain.PriceLog{
+			NfceID: n.ID, ProductID: &rows[i].ID, Line: i + 1,
+			DescriptionSnapshot: rows[i].Name, Qty: decimal.NewFromInt(1), Unit: rows[i].Unit,
+			UnitPrice: decimal.NewFromInt(10), TotalPrice: decimal.NewFromInt(10),
+			IdentityStatus: "gtin_known",
+		}); err != nil {
+			t.Fatalf("create approved log %d: %v", i, err)
+		}
+	}
 
 	items, total, err := s.Products().SearchFiltered(ctx, domain.ProductFilter{}, 10, 0)
 	if err != nil {
@@ -88,6 +100,15 @@ func TestProductUpdate(t *testing.T) {
 		Name: "ARROZ", Brand: stringPtr("TIO JOAO"), Unit: "UN"}
 	if _, err := s.Products().Create(ctx, p); err != nil {
 		t.Fatalf("create: %v", err)
+	}
+	sm := seedSupermarket(t, s)
+	n := seedNfce(t, s, sm)
+	if err := s.PriceLogs().Create(ctx, &domain.PriceLog{
+		NfceID: n.ID, ProductID: &p.ID, Line: 1, DescriptionSnapshot: p.Name,
+		Qty: decimal.NewFromInt(1), Unit: p.Unit, UnitPrice: decimal.NewFromInt(10),
+		TotalPrice: decimal.NewFromInt(10), IdentityStatus: "gtin_known",
+	}); err != nil {
+		t.Fatalf("create approved log: %v", err)
 	}
 
 	name := "ARROZ BRANCO 5KG RENOMEADO"

@@ -467,13 +467,9 @@ func TestNfceCommitAssignStaysPendingReview(t *testing.T) {
 
 	// The proposal is not public: history has no points and the supermarket
 	// listing does not surface the target product.
-	rec, hist := do(http.MethodGet, "/api/v1/products/"+strconvItoa(target.ID)+"/history", "")
-	if rec.Code != http.StatusOK {
+	rec, _ = do(http.MethodGet, "/api/v1/products/"+strconvItoa(target.ID)+"/history", "")
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("history status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	points, _ := hist["points"].([]any)
-	if len(points) != 0 {
-		t.Errorf("pending assignment leaked into product history: %d point(s)", len(points))
 	}
 
 	var smID int64

@@ -248,6 +248,10 @@ func (s memProducts) GetByID(_ context.Context, id int64) (*domain.Product, erro
 	return nil, domain.ErrNotFound
 }
 
+func (s memProducts) GetByIDForWrite(ctx context.Context, id int64) (*domain.Product, error) {
+	return s.GetByID(ctx, id)
+}
+
 func (s memProducts) GetByKey(_ context.Context, key string) (*domain.Product, error) {
 	if p, ok := s.m.products[key]; ok {
 		return p, nil

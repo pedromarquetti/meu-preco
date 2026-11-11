@@ -146,6 +146,9 @@ func (*nilProductStore) Create(context.Context, *domain.Product) (bool, error) {
 func (*nilProductStore) GetByID(context.Context, int64) (*domain.Product, error) {
 	return nil, domain.ErrNotFound
 }
+func (*nilProductStore) GetByIDForWrite(context.Context, int64) (*domain.Product, error) {
+	return nil, domain.ErrNotFound
+}
 func (*nilProductStore) GetByKey(context.Context, string) (*domain.Product, error) {
 	return nil, domain.ErrNotFound
 }

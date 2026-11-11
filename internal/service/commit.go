@@ -279,7 +279,7 @@ func resolveLineProduct(ctx context.Context, tx domain.Stores, req CommitRequest
 		case ActionNeedsReview:
 			return nil, true, ActionNeedsReview, nil
 		case ActionAssign:
-			if _, err := tx.Products().GetByID(ctx, r.ProductID); err != nil {
+			if _, err := tx.Products().GetByIDForWrite(ctx, r.ProductID); err != nil {
 				if errors.Is(err, domain.ErrNotFound) {
 					return nil, false, "", fmt.Errorf("%w: product %d does not exist", ErrInvalidResolution, r.ProductID)
 				}

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/shopspring/decimal"
+
 	"meupreco/internal/domain"
 )
 
@@ -28,6 +30,15 @@ func TestProductStoreLifecycle(t *testing.T) {
 	}
 	if p.GTIN == nil || *p.GTIN != "07896008038717" {
 		t.Errorf("gtin normalized = %v, want 14-digit 07896008038717", *p.GTIN)
+	}
+	sm := seedSupermarket(t, s)
+	n := seedNfce(t, s, sm)
+	if err := s.PriceLogs().Create(ctx, &domain.PriceLog{
+		NfceID: n.ID, ProductID: &p.ID, Line: 1, DescriptionSnapshot: p.Name,
+		Qty: decimal.NewFromInt(1), Unit: p.Unit, UnitPrice: decimal.NewFromInt(10),
+		TotalPrice: decimal.NewFromInt(10), IdentityStatus: "gtin_known",
+	}); err != nil {
+		t.Fatalf("create approved log: %v", err)
 	}
 
 	byID, err := s.Products().GetByID(ctx, p.ID)
@@ -223,3 +234,147 @@ func itoa(i int) string {
 }
 
 func stringPtr(s string) *string { return &s }
+
+func TestProductVisibility(t *testing.T) {
+	store := testStore
+	truncate(t)
+	ctx := context.Background()
+	sm := seedSupermarket(t, store)
+	nfce := seedNfce(t, store, sm)
+
+	addLog := func(t *testing.T, productID *int64, line int, pending bool) {
+		t.Helper()
+		l := &domain.PriceLog{
+			NfceID: nfce.ID, ProductID: productID, Line: line,
+			DescriptionSnapshot: "test price", StoreCode: "STORE",
+			Qty: decimal.NewFromInt(1), Unit: "UN",
+			UnitPrice: decimal.NewFromInt(10), TotalPrice: decimal.NewFromInt(10),
+			IdentityStatus: "gtin_known", NeedsReview: pending,
+		}
+		if err := store.PriceLogs().Create(ctx, l); err != nil {
+			t.Fatalf("create price log: %v", err)
+		}
+	}
+
+	// Scenario A: No logs -> Excluded from search and 404 on lookup.
+	pA := &domain.Product{
+		ProductKey: "test-no-logs",
+		Name:       "No Logs Product",
+		Unit:       "UN",
+	}
+	_, err := store.Products().Create(ctx, pA)
+	if err != nil {
+		t.Fatalf("create pA: %v", err)
+	}
+
+	hits, _, _ := store.Products().SearchFiltered(ctx, domain.ProductFilter{Query: "no-logs"}, 10, 0)
+	if len(hits) > 0 {
+		t.Errorf("Scenario A failed: product with no logs found in search")
+	}
+
+	_, err = store.Products().GetByID(ctx, pA.ID)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("Scenario A failed: expected ErrNotFound for lookup, got %v", err)
+	}
+
+	// Scenario B: Pending Only -> Hidden from public view.
+	pB := &domain.Product{
+		ProductKey: "test-pending-only",
+		Name:       "Pending Product",
+		Unit:       "UN",
+	}
+	if _, err := store.Products().Create(ctx, pB); err != nil {
+		t.Fatalf("create pB: %v", err)
+	}
+
+	addLog(t, &pB.ID, 1, true)
+
+	hits, _, _ = store.Products().SearchFiltered(ctx, domain.ProductFilter{Query: "pending-product"}, 10, 0)
+	if len(hits) > 0 {
+		t.Errorf("Scenario B failed: product with only pending logs found in search")
+	}
+
+	_, err = store.Products().GetByID(ctx, pB.ID)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("Scenario B failed: expected ErrNotFound for lookup of pending-only product, got %v", err)
+	}
+
+	// Scenario C: Approved Only -> Visible in search and history.
+	pC := &domain.Product{
+		ProductKey: "test-approved-only",
+		Name:       "Approved Product",
+		Unit:       "UN",
+	}
+	if _, err := store.Products().Create(ctx, pC); err != nil {
+		t.Fatalf("create pC: %v", err)
+	}
+
+	addLog(t, &pC.ID, 2, false)
+
+	hits, _, _ = store.Products().SearchFiltered(ctx, domain.ProductFilter{Query: "approved-product"}, 10, 0)
+	if len(hits) == 0 || hits[0].ID != pC.ID {
+		t.Errorf("Scenario C failed: product with approved log not found in search")
+	}
+
+	_, err = store.Products().GetByID(ctx, pC.ID)
+	if err != nil {
+		t.Fatalf("Scenario C failed: expected success for lookup of approved-only product, got %v", err)
+	}
+
+	// Scenario D: Mixed Logs -> Visible to the public (presence of an approval "unlocks" visibility).
+	pD := &domain.Product{
+		ProductKey: "test-mixed-logs",
+		Name:       "Mixed Product",
+		Unit:       "UN",
+	}
+	if _, err := store.Products().Create(ctx, pD); err != nil {
+		t.Fatalf("create pD: %v", err)
+	}
+
+	addLog(t, &pD.ID, 3, false)
+	addLog(t, &pD.ID, 4, true)
+
+	hits, _, _ = store.Products().SearchFiltered(ctx, domain.ProductFilter{Query: "mixed-product"}, 10, 0)
+	if len(hits) == 0 || hits[0].ID != pD.ID {
+		t.Errorf("Scenario D failed: product with mixed logs not found in search")
+	}
+
+	// Scenario E: Search Totals match the filtered result page.
+	pE1 := &domain.Product{ProductKey: "e1", Name: "Prod 1", Unit: "UN"}
+	if _, err := store.Products().Create(ctx, pE1); err != nil {
+		t.Fatalf("create pE1: %v", err)
+	}
+	addLog(t, &pE1.ID, 5, false)
+
+	pE2 := &domain.Product{ProductKey: "e2", Name: "Prod 2", Unit: "UN"}
+	if _, err := store.Products().Create(ctx, pE2); err != nil {
+		t.Fatalf("create pE2: %v", err)
+	}
+	addLog(t, &pE2.ID, 6, false)
+
+	pE3 := &domain.Product{ProductKey: "e3", Name: "Prod 3 (Pending)", Unit: "UN"}
+	if _, err := store.Products().Create(ctx, pE3); err != nil {
+		t.Fatalf("create pE3: %v", err)
+	}
+	addLog(t, &pE3.ID, 7, true)
+
+	// The approved products (C, D, E1, and E2) are visible; E3 is excluded.
+	hits, total, err := store.Products().SearchFiltered(ctx, domain.ProductFilter{}, 10, 0)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+
+	if len(hits) != 4 {
+		t.Errorf("Scenario E failed: expected 4 approved-product hits, got %d", len(hits))
+	}
+	if total != 4 {
+		t.Errorf("Scenario E failed: expected count of 4, got %d", total)
+	}
+
+	// Verify that the search results are correct (E1 and E2 only)
+	for _, h := range hits {
+		if h.ProductKey == "e3" {
+			t.Errorf("Scenario E failed: found pending product in result")
+		}
+	}
+}

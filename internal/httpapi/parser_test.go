@@ -422,12 +422,9 @@ func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
 
 	// The pending proposal must not leak into public price reads.
 	userAPI := roleRouter(t, st, pgResolver{}, assigner.ID, "user")
-	rec, out = do(t, userAPI, http.MethodGet, fmt.Sprintf("/api/v1/products/%d/history", proposed.ID), "")
-	if rec.Code != http.StatusOK {
+	rec, _ = do(t, userAPI, http.MethodGet, fmt.Sprintf("/api/v1/products/%d/history", proposed.ID), "")
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("product history = %d (%s)", rec.Code, rec.Body.String())
-	}
-	if pts, _ := out["points"].([]any); len(pts) != 0 {
-		t.Errorf("pending proposal leaked into product history: %v (%s)", out["points"], rec.Body.String())
 	}
 	rec, out = do(t, userAPI, http.MethodGet, fmt.Sprintf("/api/v1/supermarkets/%d/products", sm.ID), "")
 	if rec.Code != http.StatusOK {
