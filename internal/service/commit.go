@@ -27,7 +27,9 @@ const (
 // single database transaction — auto-saving barcoded/commodity lines and
 // honoring per-line uid_uncertain resolutions (needs_review | skip | assign).
 // A uid_uncertain line with no resolution defaults to needs_review; skip must
-// be requested explicitly. It then upserts the supermarket by CNPJ and the
+// be requested explicitly. An assign links the proposed product but persists
+// the row with needs_review=true — assignments are proposals until an admin
+// explicitly approves them. It then upserts the supermarket by CNPJ and the
 // receipt by access key, inserting
 // price_logs (UNIQUE(nfce_id, line) makes duplicates no-ops) and finally
 // flipping the preview to committed. Any error rolls the whole unit back.
@@ -159,7 +161,7 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 				continue
 			}
 
-			productID, needsReview, err := resolveLineProduct(ctx, tx, req, pi, resolutions)
+			productID, needsReview, action, err := resolveLineProduct(ctx, tx, req, pi, resolutions)
 			if err != nil {
 				return err
 			}
@@ -185,12 +187,13 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 				IdentityStatus:      pi.Status,
 				NeedsReview:         needsReview,
 			}
-			if needsReview {
-				note := ActionNeedsReview
-				log.ResolutionNote = &note
-			} else if productID != nil && pi.Status == product.StatusUIDUncertain {
+			switch action {
+			case ActionAssign:
 				note := ActionAssign
 				log.ResolvedBy = &req.UserID
+				log.ResolutionNote = &note
+			case ActionNeedsReview:
+				note := ActionNeedsReview
 				log.ResolutionNote = &note
 			}
 
@@ -204,12 +207,29 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 				return err
 			}
 
+			if action == ActionAssign {
+				// The price log id exists now; record the immutable proposal in
+				// the same transaction. An uncertain line has no prior product,
+				// so from_product_id stays NULL.
+				event := &domain.PriceLogEvent{
+					PriceLogID:  log.ID,
+					ToProductID: productID,
+					UserID:      req.UserID,
+					Action:      ActionAssign,
+				}
+				if err := tx.Events().Create(ctx, event); err != nil {
+					return err
+				}
+			}
+
 			res.Written++
 			switch {
+			case action == ActionAssign:
+				res.Assigned++
+				res.PendingReview++
 			case needsReview:
 				res.Review++
-			case pi.Status == product.StatusUIDUncertain:
-				res.Assigned++
+				res.PendingReview++
 			default:
 				res.AutoSaved++
 			}
@@ -234,17 +254,18 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 // it ensures the products row exists (creating gtin_new / commodity_fingerprint
 // identities inside the tx) and returns its id. For uid_uncertain it applies
 // the line's resolution, defaulting to needs_review when none was submitted.
-// parse_error lines and an explicit "skip" produce no row (nil id,
-// needsReview=false).
-func resolveLineProduct(ctx context.Context, tx domain.Stores, req CommitRequest, pi *PlanItem, resolutions map[int]Resolution) (productID *int64, needsReview bool, err error) {
+// An assign always returns needsReview=true: a product-linked proposal is not
+// public until an admin explicitly approves it. parse_error lines and an
+// explicit "skip" produce no row (nil id, needsReview=false).
+func resolveLineProduct(ctx context.Context, tx domain.Stores, req CommitRequest, pi *PlanItem, resolutions map[int]Resolution) (productID *int64, needsReview bool, action string, err error) {
 	switch pi.Status {
 	case product.StatusGtinKnown, product.StatusGtinNew, product.StatusCommodityFingerprint:
 		id, err := ensureProduct(ctx, tx, pi)
 		if err != nil {
-			return nil, false, err
+			return nil, false, "", err
 		}
 
-		return &id, false, nil
+		return &id, false, "", nil
 
 	case product.StatusUIDUncertain:
 		r := resolutions[pi.Line]
@@ -254,23 +275,25 @@ func resolveLineProduct(ctx context.Context, tx domain.Stores, req CommitRequest
 
 		switch r.Action {
 		case ActionSkip:
-			return nil, false, nil
+			return nil, false, ActionSkip, nil
 		case ActionNeedsReview:
-			return nil, true, nil
+			return nil, true, ActionNeedsReview, nil
 		case ActionAssign:
 			if _, err := tx.Products().GetByID(ctx, r.ProductID); err != nil {
 				if errors.Is(err, domain.ErrNotFound) {
-					return nil, false, fmt.Errorf("%w: product %d does not exist", ErrInvalidResolution, r.ProductID)
+					return nil, false, "", fmt.Errorf("%w: product %d does not exist", ErrInvalidResolution, r.ProductID)
 				}
-				return nil, false, err
+				return nil, false, "", err
 			}
 			id := r.ProductID
-			return &id, false, nil
+			// An assignment is always a proposal, regardless of the caller's
+			// role: only the explicit admin approval endpoint publishes it.
+			return &id, true, ActionAssign, nil
 		default:
-			return nil, false, fmt.Errorf("%w: unknown action %q", ErrInvalidResolution, r.Action)
+			return nil, false, "", fmt.Errorf("%w: unknown action %q", ErrInvalidResolution, r.Action)
 		}
 	default: // parse_error
-		return nil, false, nil
+		return nil, false, "", nil
 	}
 }
 

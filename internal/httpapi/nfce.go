@@ -129,9 +129,15 @@ func (api *nfceAPI) confirm(writer http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
+	claims := auth.Principal(req.Context())
+	userRole := ""
+	if claims != nil {
+		userRole = claims.Role
+	}
 
 	res, err := api.svc.CommitPreview(req.Context(), service.CommitRequest{
 		UserID:      userID,
+		UserRole:    userRole,
 		PreviewID:   body.PreviewID,
 		Confirm:     *body.Confirm,
 		Resolutions: body.Resolutions,

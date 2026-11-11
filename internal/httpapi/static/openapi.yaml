@@ -272,7 +272,9 @@ paths:
         Each `uid_uncertain` line with no matching entry in `resolutions`
         defaults to `needs_review`: a private price log with `product_id` NULL
         that an admin can resolve later. A line is written nothing and counted
-        under `skipped` only when `skip` is requested explicitly.
+        under `skipped` only when `skip` is requested explicitly. `assign` links
+        an existing product but keeps the row pending review: an assignment
+        only becomes public after an explicit admin approval.
       requestBody:
         required: true
         content:
@@ -757,6 +759,12 @@ paths:
     get:
       tags: [admin]
       summary: Needs-review queue (admin)
+      description: >
+        Every `price_logs` row with `needs_review = true`: unresolved lines
+        (`product_id` null) and manual assignments proposed by users. For a
+        proposal the item carries `proposed_product`, `resolved_by` and
+        `resolution_note` so an admin can compare it with the receipt line.
+        Approval (not this queue) is what publishes a proposal.
       parameters:
         - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
@@ -1578,7 +1586,8 @@ components:
         Per-line decision for a `uid_uncertain` line. `needs_review` (the
         backend default when the line is omitted) persists a private row with
         no product; `skip` discards the line and must be requested explicitly;
-        `assign` links an existing `product_id`.
+        `assign` links an existing `product_id` and records a proposal that
+        stays `needs_review` until an admin approves it.
       required: [line, action]
       properties:
         line: { type: integer }
@@ -1615,12 +1624,18 @@ components:
           type: integer
           description: >
             `uid_uncertain` rows resolved to an existing product via an explicit
-            `assign` resolution.
+            `assign` resolution. These rows are pending review: `assigned` never
+            means publicly trusted.
         needs_review:
           type: integer
           description: >
-            `uid_uncertain` rows persisted as private review rows (the default
-            for unresolved lines).
+            `uid_uncertain` rows persisted as private review rows without a
+            product (the default for unresolved lines).
+        pending_review:
+          type: integer
+          description: >
+            Total rows written awaiting admin review (`assigned + needs_review`).
+            Only approved rows are public.
         skipped:
           type: integer
           description: >
@@ -1747,6 +1762,18 @@ components:
         aggregate:
           type: array
           items: { $ref: "#/components/schemas/UnitStats" }
+    ReviewProductView:
+      type: object
+      description: >
+        Product proposed by a user for a `uid_uncertain` receipt line. Only the
+        admin review queue exposes it; public product reads never include
+        pending proposals.
+      properties:
+        id: { type: integer }
+        product_key: { type: string }
+        gtin: { type: string, nullable: true }
+        name: { type: string }
+        unit: { type: string }
     ReviewItemView:
       type: object
       properties:
@@ -1764,6 +1791,26 @@ components:
         unit_price: { type: string }
         total_price: { type: string }
         suggested_stem: { type: string }
+        proposed_product:
+          description: >
+            Present when a user manually assigned the line: the product is a
+            proposal pending admin review. Absent for an unresolved line.
+          oneOf:
+            - $ref: "#/components/schemas/ReviewProductView"
+            - type: "null"
+        resolved_by:
+          type: integer
+          nullable: true
+          description: User id that proposed the assignment (absent when unresolved).
+        resolution_note:
+          type: string
+          nullable: true
+          description: >
+            `assign` for a manual proposal, `needs_review` for an unresolved
+            line.
+        needs_review:
+          type: boolean
+          description: Always true in the queue; approval is what removes a row.
         created_at: { type: string, format: date-time }
     ReviewQueuePage:
       type: object

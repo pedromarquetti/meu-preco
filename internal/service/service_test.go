@@ -261,7 +261,7 @@ func TestCommitDefaultsUnresolvedToNeedsReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	if out.Written != 2 || out.AutoSaved != 1 || out.Review != 1 || out.Skipped != 0 {
+	if out.Written != 2 || out.AutoSaved != 1 || out.Review != 1 || out.PendingReview != 1 || out.Skipped != 0 {
 		t.Errorf("commit result = %+v, want 2 written (1 auto, 1 review), 0 skipped", out)
 	}
 	if out.NfceID == 0 {
@@ -338,6 +338,9 @@ func TestCommitExplicitSkipWritesNothing(t *testing.T) {
 		if l.Line == 2 {
 			t.Errorf("explicit skip wrote a line-2 row: %+v", l)
 		}
+	}
+	if len(m.priceLogEvents) != 0 {
+		t.Errorf("explicit skip wrote %d event(s), want 0", len(m.priceLogEvents))
 	}
 }
 
@@ -416,14 +419,14 @@ func TestCommitAssignResolution(t *testing.T) {
 	}
 
 	out, err := svc.CommitPreview(context.Background(), CommitRequest{
-		UserID: 1, PreviewID: res.PreviewID, Confirm: true,
+		UserID: 1, UserRole: UserRoleUser, PreviewID: res.PreviewID, Confirm: true,
 		Resolutions: []Resolution{{Line: 2, Action: ActionAssign, ProductID: target.ID}},
 	})
 	if err != nil {
 		t.Fatalf("commit: %v", err)
 	}
-	if out.Written != 2 || out.Assigned != 1 {
-		t.Errorf("commit result = %+v, want 2 written, 1 assigned", out)
+	if out.Written != 2 || out.Assigned != 1 || out.PendingReview != 1 || out.Review != 0 {
+		t.Errorf("commit result = %+v, want 2 written, 1 assigned, 1 pending review", out)
 	}
 
 	var assigned *domain.PriceLog
@@ -438,8 +441,113 @@ func TestCommitAssignResolution(t *testing.T) {
 	if assigned.ProductID == nil || *assigned.ProductID != target.ID {
 		t.Errorf("assign product = %v, want %d", assigned.ProductID, target.ID)
 	}
+	if !assigned.NeedsReview {
+		t.Error("assigned row must stay pending admin review")
+	}
 	if assigned.ResolvedBy == nil || *assigned.ResolvedBy != 1 {
 		t.Errorf("resolved_by = %v, want user 1", assigned.ResolvedBy)
+	}
+	if assigned.ResolutionNote == nil || *assigned.ResolutionNote != ActionAssign {
+		t.Errorf("resolution_note = %v, want assign", assigned.ResolutionNote)
+	}
+
+	events := eventsForLog(m, assigned.ID)
+	if len(events) != 1 {
+		t.Fatalf("assign events = %d, want 1", len(events))
+	}
+	ev := events[0]
+	if ev.Action != ActionAssign || ev.UserID != 1 {
+		t.Errorf("event = %+v, want action assign by user 1", ev)
+	}
+	if ev.FromProductID != nil {
+		t.Errorf("event from_product_id = %v, want NULL", *ev.FromProductID)
+	}
+	if ev.ToProductID == nil || *ev.ToProductID != target.ID {
+		t.Errorf("event to_product_id = %v, want %d", ev.ToProductID, target.ID)
+	}
+	if ev.Timestamp.IsZero() {
+		t.Error("event timestamp not set")
+	}
+}
+
+// TestCommitAssignStaysPendingForAdmin: an admin assignment through the commit
+// path is still a proposal — only an explicit approval publishes it.
+func TestCommitAssignStaysPendingForAdmin(t *testing.T) {
+	m := newMemStores()
+	m.seedKnownProduct()
+	svc := newTestService(m)
+	res := previewForTest(t, svc, m, 1)
+
+	target := &domain.Product{ProductKey: "limao", Name: "LIMÃO TAHITI", Unit: "KG"}
+	if _, err := m.Products().Create(context.Background(), target); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	out, err := svc.CommitPreview(context.Background(), CommitRequest{
+		UserID: 1, UserRole: UserRoleAdmin, PreviewID: res.PreviewID, Confirm: true,
+		Resolutions: []Resolution{{Line: 2, Action: ActionAssign, ProductID: target.ID}},
+	})
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if out.Assigned != 1 || out.PendingReview != 1 {
+		t.Errorf("commit result = %+v, want 1 assigned and pending", out)
+	}
+
+	var assigned *domain.PriceLog
+	for _, l := range m.priceLogs {
+		if l.Line == 2 {
+			assigned = l
+		}
+	}
+	if assigned == nil || !assigned.NeedsReview {
+		t.Errorf("admin assignment = %+v, want needs_review=true", assigned)
+	}
+	if len(eventsForLog(m, assigned.ID)) != 1 {
+		t.Errorf("admin assignment events = %d, want 1", len(eventsForLog(m, assigned.ID)))
+	}
+}
+
+// TestAssignedPendingRowHiddenFromPublicReads: a product-linked proposal must
+// not leak into the price history or the supermarket product listing.
+func TestAssignedPendingRowHiddenFromPublicReads(t *testing.T) {
+	m := newMemStores()
+	m.seedKnownProduct()
+	svc := newTestService(m)
+	res := previewForTest(t, svc, m, 1)
+
+	target := &domain.Product{ProductKey: "limao", Name: "LIMÃO TAHITI", Unit: "KG"}
+	if _, err := m.Products().Create(context.Background(), target); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	if _, err := svc.CommitPreview(context.Background(), CommitRequest{
+		UserID: 1, UserRole: UserRoleUser, PreviewID: res.PreviewID, Confirm: true,
+		Resolutions: []Resolution{{Line: 2, Action: ActionAssign, ProductID: target.ID}},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	hist, err := svc.ProductHistory(context.Background(), target.ID, nil, nil)
+	if err != nil {
+		t.Fatalf("product history: %v", err)
+	}
+	if len(hist.Points) != 0 {
+		t.Errorf("pending assignment leaked into history: %d point(s)", len(hist.Points))
+	}
+
+	sm := m.supermarkets["12345678000199"]
+	if sm == nil {
+		t.Fatal("seeded supermarket missing")
+	}
+	page, err := svc.SupermarketProducts(context.Background(), sm.ID, 1, 20)
+	if err != nil {
+		t.Fatalf("supermarket products: %v", err)
+	}
+	for _, it := range page.Items {
+		if it.Product.ID == target.ID {
+			t.Error("pending assignment leaked into supermarket products")
+		}
 	}
 }
 
@@ -458,6 +566,9 @@ func TestCommitAssignMissingProductRejected(t *testing.T) {
 	}
 	if len(m.priceLogs) != 0 {
 		t.Errorf("failed commit wrote %d rows", len(m.priceLogs))
+	}
+	if len(m.priceLogEvents) != 0 {
+		t.Errorf("failed commit wrote %d event(s), want 0", len(m.priceLogEvents))
 	}
 }
 
@@ -666,4 +777,16 @@ func TestCommitCrossUserDedup(t *testing.T) {
 	if len(m.priceLogs) != firstCommit.Written {
 		t.Errorf("price_logs = %d, want %d (no duplicate lines)", len(m.priceLogs), firstCommit.Written)
 	}
+}
+
+// eventsForLog returns the in-memory audit trail of one price log in insertion
+// order (the mem store only appends, mirroring the real repository).
+func eventsForLog(m *memStores, priceLogID int64) []domain.PriceLogEvent {
+	var out []domain.PriceLogEvent
+	for _, e := range m.priceLogEvents {
+		if e.PriceLogID == priceLogID {
+			out = append(out, *e)
+		}
+	}
+	return out
 }

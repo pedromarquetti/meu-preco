@@ -464,7 +464,7 @@
           "nfce"
         ],
         "summary": "Confirm a preview and commit it atomically",
-        "description": "With `confirm=false` it reports what a commit *would* write without\nwriting. Cross-user re-submits and already-ingested receipts are the\nsilent dedup path (200, `written:0`). Confirming the same `preview_id`\ntwice answers `409`.\n\nEach `uid_uncertain` line with no matching entry in `resolutions`\ndefaults to `needs_review`: a private price log with `product_id` NULL\nthat an admin can resolve later. A line is written nothing and counted\nunder `skipped` only when `skip` is requested explicitly.\n",
+        "description": "With `confirm=false` it reports what a commit *would* write without\nwriting. Cross-user re-submits and already-ingested receipts are the\nsilent dedup path (200, `written:0`). Confirming the same `preview_id`\ntwice answers `409`.\n\nEach `uid_uncertain` line with no matching entry in `resolutions`\ndefaults to `needs_review`: a private price log with `product_id` NULL\nthat an admin can resolve later. A line is written nothing and counted\nunder `skipped` only when `skip` is requested explicitly. `assign` links\nan existing product but keeps the row pending review: an assignment\nonly becomes public after an explicit admin approval.\n",
         "requestBody": {
           "required": true,
           "content": {
@@ -1520,6 +1520,7 @@
           "admin"
         ],
         "summary": "Needs-review queue (admin)",
+        "description": "Every `price_logs` row with `needs_review = true`: unresolved lines (`product_id` null) and manual assignments proposed by users. For a proposal the item carries `proposed_product`, `resolved_by` and `resolution_note` so an admin can compare it with the receipt line. Approval (not this queue) is what publishes a proposal.\n",
         "parameters": [
           {
             "name": "page",
@@ -3243,7 +3244,7 @@
       },
       "Resolution": {
         "type": "object",
-        "description": "Per-line decision for a `uid_uncertain` line. `needs_review` (the backend default when the line is omitted) persists a private row with no product; `skip` discards the line and must be requested explicitly; `assign` links an existing `product_id`.\n",
+        "description": "Per-line decision for a `uid_uncertain` line. `needs_review` (the backend default when the line is omitted) persists a private row with no product; `skip` discards the line and must be requested explicitly; `assign` links an existing `product_id` and records a proposal that stays `needs_review` until an admin approves it.\n",
         "required": [
           "line",
           "action"
@@ -3307,11 +3308,15 @@
           },
           "assigned": {
             "type": "integer",
-            "description": "`uid_uncertain` rows resolved to an existing product via an explicit `assign` resolution.\n"
+            "description": "`uid_uncertain` rows resolved to an existing product via an explicit `assign` resolution. These rows are pending review: `assigned` never means publicly trusted.\n"
           },
           "needs_review": {
             "type": "integer",
-            "description": "`uid_uncertain` rows persisted as private review rows (the default for unresolved lines).\n"
+            "description": "`uid_uncertain` rows persisted as private review rows without a product (the default for unresolved lines).\n"
+          },
+          "pending_review": {
+            "type": "integer",
+            "description": "Total rows written awaiting admin review (`assigned + needs_review`). Only approved rows are public.\n"
           },
           "skipped": {
             "type": "integer",
@@ -3647,6 +3652,28 @@
           }
         }
       },
+      "ReviewProductView": {
+        "type": "object",
+        "description": "Product proposed by a user for a `uid_uncertain` receipt line. Only the admin review queue exposes it; public product reads never include pending proposals.\n",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "product_key": {
+            "type": "string"
+          },
+          "gtin": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
       "ReviewItemView": {
         "type": "object",
         "properties": {
@@ -3692,6 +3719,31 @@
           },
           "suggested_stem": {
             "type": "string"
+          },
+          "proposed_product": {
+            "description": "Present when a user manually assigned the line: the product is a proposal pending admin review. Absent for an unresolved line.\n",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReviewProductView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "resolved_by": {
+            "type": "integer",
+            "nullable": true,
+            "description": "User id that proposed the assignment (absent when unresolved)."
+          },
+          "resolution_note": {
+            "type": "string",
+            "nullable": true,
+            "description": "`assign` for a manual proposal, `needs_review` for an unresolved line.\n"
+          },
+          "needs_review": {
+            "type": "boolean",
+            "description": "Always true in the queue; approval is what removes a row."
           },
           "created_at": {
             "type": "string",

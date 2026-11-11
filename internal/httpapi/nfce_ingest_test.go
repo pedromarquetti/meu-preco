@@ -359,6 +359,162 @@ func TestNfceTwoPhaseIngestion(t *testing.T) {
 	}
 }
 
+// TestNfceCommitAssignStaysPendingReview drives a user assignment through the
+// real commit path: the product link is persisted together with its assign
+// event, but the row remains in the review queue and is invisible to public
+// product history and supermarket listings.
+func TestNfceCommitAssignStaysPendingReview(t *testing.T) {
+	st := integrationStore(t)
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	ctx := context.Background()
+
+	u := &domain.User{Name: "User", Email: "user@example.com", PasswordHash: "h", Role: "user"}
+	if err := st.Users().Create(ctx, u); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	mustAddPGProduct(t, st)
+
+	target := &domain.Product{ProductKey: "limao-tahiti", Name: "LIMAO TAHITI", Unit: "KG"}
+	if _, err := st.Products().Create(ctx, target); err != nil {
+		t.Fatalf("create target product: %v", err)
+	}
+
+	router := ingestionRouter(t, st, pgResolver{receipt: ingestReceipt()}, u.ID)
+	do := func(method, path, body string) (*httptest.ResponseRecorder, map[string]any) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(rec, req)
+		var out map[string]any
+		if rec.Body.Len() > 0 {
+			_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		}
+		return rec, out
+	}
+
+	rec, plan := do(http.MethodPost, "/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("new status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	previewID := int64(plan["preview_id"].(float64))
+
+	rec, out := do(http.MethodPost, "/api/v1/nfce/submit",
+		`{"preview_id":`+strconvItoa(previewID)+`,"confirm":true,"resolutions":[{"line":2,"action":"assign","product_id":`+strconvItoa(target.ID)+`}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("submit status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if out["written"].(float64) != 2 || out["auto_saved"].(float64) != 1 ||
+		out["assigned"].(float64) != 1 || out["needs_review"].(float64) != 0 ||
+		out["pending_review"].(float64) != 1 {
+		t.Errorf("commit result = %v, want 2 written / 1 auto / 1 assigned / 1 pending review", out)
+	}
+
+	var row struct {
+		ProductID      *int64
+		NeedsReview    bool
+		ResolvedBy     *int64
+		ResolutionNote *string
+	}
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT product_id, needs_review, resolved_by, resolution_note
+		   FROM price_logs WHERE line = 2`).
+		Scan(&row.ProductID, &row.NeedsReview, &row.ResolvedBy, &row.ResolutionNote); err != nil {
+		t.Fatalf("scan price log: %v", err)
+	}
+	if row.ProductID == nil || *row.ProductID != target.ID {
+		t.Errorf("product_id = %v, want %d", row.ProductID, target.ID)
+	}
+	if !row.NeedsReview {
+		t.Error("assigned row must stay needs_review=true")
+	}
+	if row.ResolvedBy == nil || *row.ResolvedBy != u.ID {
+		t.Errorf("resolved_by = %v, want %d", row.ResolvedBy, u.ID)
+	}
+	if row.ResolutionNote == nil || *row.ResolutionNote != "assign" {
+		t.Errorf("resolution_note = %v, want assign", row.ResolutionNote)
+	}
+
+	var priceLogID int64
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT id FROM price_logs WHERE line = 2`).Scan(&priceLogID); err != nil {
+		t.Fatalf("read price log id: %v", err)
+	}
+
+	var ev struct {
+		FromProductID *int64
+		ToProductID   *int64
+		UserID        int64
+		Action        string
+	}
+	if err := st.Pool().QueryRow(ctx,
+		`SELECT from_product_id, to_product_id, user_id, action
+		   FROM price_log_event WHERE price_log_id = $1`, priceLogID).
+		Scan(&ev.FromProductID, &ev.ToProductID, &ev.UserID, &ev.Action); err != nil {
+		t.Fatalf("read assign event: %v", err)
+	}
+	if ev.FromProductID != nil {
+		t.Errorf("event from_product_id = %v, want NULL", *ev.FromProductID)
+	}
+	if ev.ToProductID == nil || *ev.ToProductID != target.ID {
+		t.Errorf("event to_product_id = %v, want %d", ev.ToProductID, target.ID)
+	}
+	if ev.UserID != u.ID || ev.Action != "assign" {
+		t.Errorf("event = %+v, want user %d / action assign", ev, u.ID)
+	}
+
+	// The proposal is not public: history has no points and the supermarket
+	// listing does not surface the target product.
+	rec, hist := do(http.MethodGet, "/api/v1/products/"+strconvItoa(target.ID)+"/history", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("history status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	points, _ := hist["points"].([]any)
+	if len(points) != 0 {
+		t.Errorf("pending assignment leaked into product history: %d point(s)", len(points))
+	}
+
+	var smID int64
+	if err := st.Pool().QueryRow(ctx, `SELECT id FROM supermarkets LIMIT 1`).Scan(&smID); err != nil {
+		t.Fatalf("read supermarket id: %v", err)
+	}
+	rec, sp := do(http.MethodGet, "/api/v1/supermarkets/"+strconvItoa(smID)+"/products", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("supermarket products status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	for _, it := range sp["items"].([]any) {
+		prod := it.(map[string]any)["product"].(map[string]any)
+		if int64(prod["id"].(float64)) == target.ID {
+			t.Error("pending assignment leaked into supermarket products")
+		}
+	}
+
+	// A bad product id is still a 400 and writes no event.
+	var eventsBefore int64
+	if err := st.Pool().QueryRow(ctx, `SELECT count(*) FROM price_log_event`).Scan(&eventsBefore); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	rec, plan = do(http.MethodPost, "/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second draft status = %d", rec.Code)
+	}
+	preview2 := int64(plan["preview_id"].(float64))
+	rec, _ = do(http.MethodPost, "/api/v1/nfce/submit",
+		`{"preview_id":`+strconvItoa(preview2)+`,"confirm":true,"resolutions":[{"line":2,"action":"assign","product_id":999999}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid assign status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+	var eventsAfter int64
+	if err := st.Pool().QueryRow(ctx, `SELECT count(*) FROM price_log_event`).Scan(&eventsAfter); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if eventsAfter != eventsBefore {
+		t.Errorf("invalid assign wrote event(s): before=%d after=%d", eventsBefore, eventsAfter)
+	}
+}
+
 // TestNfceCommitPersistsCreatedProductIDs pins the product↔price_log
 // relationship for the auto-save tiers. ensureProduct used to return p.ID in
 // the same statement that created the row (`return p.ID, Create(...)`); Go does

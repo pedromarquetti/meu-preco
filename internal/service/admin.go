@@ -17,24 +17,38 @@ import (
 // user role management. Every mutation lives behind a single Stores.Tx so a
 // failed batch never leaves a half-applied plan.
 
+// ReviewProductView is the product a user proposed for an unresolved receipt
+// line. It is only exposed through the admin queue.
+type ReviewProductView struct {
+	ID         int64   `json:"id"`
+	ProductKey string  `json:"product_key,omitempty"`
+	GTIN       *string `json:"gtin,omitempty"`
+	Name       string  `json:"name"`
+	Unit       string  `json:"unit"`
+}
+
 // ReviewItemView is one queue row: the raw line plus the store context an admin
 // needs to curate it, with a suggested canonical stem for the create path.
 type ReviewItemView struct {
-	PriceLogID    int64     `json:"price_log_id"`
-	NfceID        int64     `json:"nfce_id"`
-	AccessKey     string    `json:"access_key"`
-	Line          int       `json:"line"`
-	Description   string    `json:"description"`
-	StoreCode     string    `json:"store_code"`
-	CNPJBase      string    `json:"cnpj_base"`
-	StoreName     string    `json:"store_name"`
-	Unit          string    `json:"unit"`
-	Qty           string    `json:"qty"`
-	PricePerUnit  *string   `json:"price_per_unit,omitempty"`
-	UnitPrice     string    `json:"unit_price"`
-	TotalPrice    string    `json:"total_price"`
-	SuggestedStem string    `json:"suggested_stem"`
-	CreatedAt     time.Time `json:"created_at"`
+	PriceLogID      int64              `json:"price_log_id"`
+	NfceID          int64              `json:"nfce_id"`
+	AccessKey       string             `json:"access_key"`
+	Line            int                `json:"line"`
+	Description     string             `json:"description"`
+	StoreCode       string             `json:"store_code"`
+	CNPJBase        string             `json:"cnpj_base"`
+	StoreName       string             `json:"store_name"`
+	Unit            string             `json:"unit"`
+	Qty             string             `json:"qty"`
+	PricePerUnit    *string            `json:"price_per_unit,omitempty"`
+	UnitPrice       string             `json:"unit_price"`
+	TotalPrice      string             `json:"total_price"`
+	SuggestedStem   string             `json:"suggested_stem"`
+	ProposedProduct *ReviewProductView `json:"proposed_product,omitempty"`
+	ResolvedBy      *int64             `json:"resolved_by,omitempty"`
+	ResolutionNote  *string            `json:"resolution_note,omitempty"`
+	NeedsReview     bool               `json:"needs_review"`
+	CreatedAt       time.Time          `json:"created_at"`
 }
 
 // ReviewQueuePage is the paginated needs-review queue.
@@ -124,24 +138,36 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 
 	for _, it := range items {
 		v := ReviewItemView{
-			PriceLogID:    it.PriceLogID,
-			NfceID:        it.NfceID,
-			AccessKey:     it.AccessKey,
-			Line:          it.Line,
-			Description:   it.Description,
-			StoreCode:     it.StoreCode,
-			CNPJBase:      it.CNPJBase,
-			StoreName:     it.StoreName,
-			Unit:          it.Unit,
-			Qty:           it.Qty.String(),
-			UnitPrice:     it.UnitPrice.String(),
-			TotalPrice:    it.TotalPrice.String(),
-			SuggestedStem: s.suggestStem(ctx, it.Description, it.Unit, brands),
-			CreatedAt:     it.CreatedAt,
+			PriceLogID:     it.PriceLogID,
+			NfceID:         it.NfceID,
+			AccessKey:      it.AccessKey,
+			Line:           it.Line,
+			Description:    it.Description,
+			StoreCode:      it.StoreCode,
+			CNPJBase:       it.CNPJBase,
+			StoreName:      it.StoreName,
+			Unit:           it.Unit,
+			Qty:            it.Qty.String(),
+			UnitPrice:      it.UnitPrice.String(),
+			TotalPrice:     it.TotalPrice.String(),
+			SuggestedStem:  s.suggestStem(ctx, it.Description, it.Unit, brands),
+			ResolvedBy:     it.ResolvedBy,
+			ResolutionNote: it.ResolutionNote,
+			NeedsReview:    true,
+			CreatedAt:      it.CreatedAt,
 		}
 		if it.PricePerUnit != nil {
 			ppu := it.PricePerUnit.String()
 			v.PricePerUnit = &ppu
+		}
+		if it.ProductID != nil {
+			v.ProposedProduct = &ReviewProductView{
+				ID:         *it.ProductID,
+				ProductKey: derefString(it.ProductKey),
+				GTIN:       it.ProductGTIN,
+				Name:       derefString(it.ProductName),
+				Unit:       derefString(it.ProductUnit),
+			}
 		}
 		out = append(out, v)
 	}
@@ -649,6 +675,14 @@ func validateMerge(fromID, toID int64) error {
 		return ErrInvalidAssignment
 	}
 	return nil
+}
+
+// derefString returns the pointed-to string or "" for a nil pointer.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func stableKey(parts ...string) string {

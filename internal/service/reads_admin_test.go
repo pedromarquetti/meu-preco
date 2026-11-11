@@ -354,6 +354,104 @@ func TestNeedsReviewQueue(t *testing.T) {
 	}
 }
 
+func TestNeedsReviewQueueShowsProposedAssignments(t *testing.T) {
+	m := newMemStores()
+	assigner := &domain.User{Email: "assigner@example.com", Name: "Assigner", Role: "user"}
+	if err := m.Users().Create(context.Background(), assigner); err != nil {
+		t.Fatal(err)
+	}
+	proposed := &domain.Product{
+		ProductKey: "07891000412855",
+		GTIN:       strPtr("07891000412855"),
+		Name:       "LIMAO TAHTI",
+		Unit:       "KG",
+	}
+	if _, err := m.Products().Create(context.Background(), proposed); err != nil {
+		t.Fatal(err)
+	}
+	sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO DO CENTRO"}
+	if err := m.Supermarkets().Upsert(context.Background(), sm); err != nil {
+		t.Fatal(err)
+	}
+	nf := &domain.Nfce{AccessKey: nextNfceKey(), Supermarket: *sm}
+	if err := m.Nfces().Create(context.Background(), nf); err != nil {
+		t.Fatal(err)
+	}
+
+	assignNote := ActionAssign
+	assigned := &domain.PriceLog{
+		NfceID: nf.ID, ProductID: &proposed.ID, Line: 1,
+		DescriptionSnapshot: "LIMAO TAHITI KG", StoreCode: "000222",
+		Qty: mustDecimal("1"), Unit: "KG", UnitPrice: mustDecimal("5.99"),
+		TotalPrice: mustDecimal("5.99"), NeedsReview: true,
+		ResolvedBy: &assigner.ID, ResolutionNote: &assignNote,
+	}
+	if err := m.PriceLogs().Create(context.Background(), assigned); err != nil {
+		t.Fatal(err)
+	}
+	reviewNote := ActionNeedsReview
+	unresolved := &domain.PriceLog{
+		NfceID: nf.ID, Line: 2, DescriptionSnapshot: "FRUTA AVULSA",
+		StoreCode: "000333", Qty: mustDecimal("1"), Unit: "KG",
+		UnitPrice: mustDecimal("1.00"), TotalPrice: mustDecimal("1.00"),
+		NeedsReview: true, ResolutionNote: &reviewNote,
+	}
+	if err := m.PriceLogs().Create(context.Background(), unresolved); err != nil {
+		t.Fatal(err)
+	}
+
+	q, err := newTestService(m).NeedsReviewQueue(context.Background(), 1, 20)
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if len(q.Items) != 2 || q.Page.Total != 2 {
+		t.Fatalf("queue = %d items (total %d), want both pending rows", len(q.Items), q.Page.Total)
+	}
+
+	byID := map[int64]ReviewItemView{}
+	for _, it := range q.Items {
+		byID[it.PriceLogID] = it
+	}
+
+	got, ok := byID[assigned.ID]
+	if !ok {
+		t.Fatal("manually assigned row missing from queue")
+	}
+	if got.ProposedProduct == nil {
+		t.Fatal("proposed product missing for manual assignment")
+	}
+	if got.ProposedProduct.ID != proposed.ID ||
+		got.ProposedProduct.Name != proposed.Name ||
+		got.ProposedProduct.Unit != proposed.Unit ||
+		got.ProposedProduct.ProductKey != proposed.ProductKey ||
+		got.ProposedProduct.GTIN == nil || *got.ProposedProduct.GTIN != *proposed.GTIN {
+		t.Errorf("proposed product = %+v", got.ProposedProduct)
+	}
+	if got.ResolvedBy == nil || *got.ResolvedBy != assigner.ID {
+		t.Errorf("resolved_by = %v, want %d", got.ResolvedBy, assigner.ID)
+	}
+	if got.ResolutionNote == nil || *got.ResolutionNote != ActionAssign {
+		t.Errorf("resolution_note = %v, want assign", got.ResolutionNote)
+	}
+	if !got.NeedsReview {
+		t.Error("queue item not marked needs_review")
+	}
+
+	plain, ok := byID[unresolved.ID]
+	if !ok {
+		t.Fatal("unresolved row missing from queue")
+	}
+	if plain.ProposedProduct != nil || plain.ResolvedBy != nil {
+		t.Errorf("unresolved item = %+v, want no proposal/resolver", plain)
+	}
+	if plain.ResolutionNote == nil || *plain.ResolutionNote != ActionNeedsReview {
+		t.Errorf("unresolved note = %v, want needs_review", plain.ResolutionNote)
+	}
+	if !plain.NeedsReview {
+		t.Error("unresolved queue item not marked needs_review")
+	}
+}
+
 func TestBatchAssignExistingAndCreate(t *testing.T) {
 	m := newMemStores()
 	admin := &domain.User{Email: "admin@example.com", Role: "admin"}

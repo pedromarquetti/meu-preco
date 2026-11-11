@@ -149,7 +149,11 @@ type Resolution struct {
 
 // CommitRequest is the input to CommitPreview.
 type CommitRequest struct {
-	UserID      int64
+	UserID int64
+	// UserRole is the authenticated caller's role ("user"|"admin"). An
+	// assignment is a proposal either way; the commit path never publishes a
+	// product-linked row (only an explicit admin approval does).
+	UserRole    string
 	PreviewID   int64
 	Confirm     bool
 	Resolutions []Resolution
@@ -157,15 +161,16 @@ type CommitRequest struct {
 
 // CommitResult reports what the confirming transaction actually wrote.
 type CommitResult struct {
-	PreviewID int64  `json:"preview_id"`
-	Confirmed bool   `json:"confirmed"`
-	Written   int    `json:"written"`      // price_log rows inserted
-	AutoSaved int    `json:"auto_saved"`   // barcoded/commodity rows
-	Assigned  int    `json:"assigned"`     // uid_uncertain rows resolved to a product
-	Review    int    `json:"needs_review"` // uid_uncertain rows kept private
-	Skipped   int    `json:"skipped"`      // lines written nothing (skip/unparseable/dup)
-	NfceID    int64  `json:"nfce_id,omitempty"`
-	AccessKey string `json:"access_key"`
+	PreviewID     int64  `json:"preview_id"`
+	Confirmed     bool   `json:"confirmed"`
+	Written       int    `json:"written"`        // price_log rows inserted
+	AutoSaved     int    `json:"auto_saved"`     // barcoded/commodity rows
+	Assigned      int    `json:"assigned"`       // uid_uncertain rows resolved to a product (pending review)
+	Review        int    `json:"needs_review"`   // uid_uncertain rows kept private without a product
+	PendingReview int    `json:"pending_review"` // rows written awaiting admin review (assigned + review)
+	Skipped       int    `json:"skipped"`        // lines written nothing (skip/unparseable/dup)
+	NfceID        int64  `json:"nfce_id,omitempty"`
+	AccessKey     string `json:"access_key"`
 }
 
 // Service wires the pipeline and owns the transaction boundary.

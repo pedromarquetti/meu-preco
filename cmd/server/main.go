@@ -72,6 +72,7 @@ func run() error {
 		}
 	}()
 
+	// TODO: implement configurable root path for API
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           httpapi.New(cfg, log, db),

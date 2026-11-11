@@ -593,6 +593,10 @@ func (s memPriceLogs) HistoryByProduct(_ context.Context, productID int64, from,
 		if l.ProductID == nil || *l.ProductID != productID {
 			continue
 		}
+		if l.NeedsReview {
+			// Pending assignments are not public prices yet.
+			continue
+		}
 		nf := nfceByID(m, l.NfceID)
 		if nf == nil {
 			continue
@@ -707,22 +711,38 @@ func (s memPriceLogs) NeedsReview(_ context.Context, limit, offset int) ([]domai
 			storeName = nf.Supermarket.LegalName
 			accessKey = nf.AccessKey
 		}
+		var productKey, productGTIN, productName, productUnit *string
+		if l.ProductID != nil {
+			if p, ok := m.byProductID[*l.ProductID]; ok {
+				productKey = &p.ProductKey
+				productGTIN = p.GTIN
+				productName = &p.Name
+				productUnit = &p.Unit
+			}
+		}
 		page = append(page, domain.ReviewItem{
-			PriceLogID:    l.ID,
-			NfceID:        l.NfceID,
-			AccessKey:     accessKey,
-			Line:          l.Line,
-			Description:   l.DescriptionSnapshot,
-			StoreCode:     l.StoreCode,
-			CNPJBase:      cnpjBase,
-			StoreName:     storeName,
-			Unit:          l.Unit,
-			Qty:           l.Qty,
-			PricePerUnit:  l.PricePerUnit,
-			UnitPrice:     l.UnitPrice,
-			TotalPrice:    l.TotalPrice,
-			SuggestedStem: "",
-			CreatedAt:     l.CreatedAt,
+			PriceLogID:     l.ID,
+			NfceID:         l.NfceID,
+			AccessKey:      accessKey,
+			Line:           l.Line,
+			Description:    l.DescriptionSnapshot,
+			StoreCode:      l.StoreCode,
+			CNPJBase:       cnpjBase,
+			StoreName:      storeName,
+			Unit:           l.Unit,
+			Qty:            l.Qty,
+			PricePerUnit:   l.PricePerUnit,
+			UnitPrice:      l.UnitPrice,
+			TotalPrice:     l.TotalPrice,
+			SuggestedStem:  "",
+			CreatedAt:      l.CreatedAt,
+			ProductID:      l.ProductID,
+			ProductKey:     productKey,
+			ProductGTIN:    productGTIN,
+			ProductName:    productName,
+			ProductUnit:    productUnit,
+			ResolvedBy:     l.ResolvedBy,
+			ResolutionNote: l.ResolutionNote,
 		})
 	}
 	return page, total, nil

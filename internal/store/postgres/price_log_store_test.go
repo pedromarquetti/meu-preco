@@ -101,3 +101,88 @@ func TestPriceLogStoreNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// TestNeedsReviewProjectsProposal checks the admin queue includes both an
+// unresolved row (null product) and a manual assignment, exposing the proposed
+// product and its resolver through the join projection.
+func TestNeedsReviewProjectsProposal(t *testing.T) {
+	s := testStore
+	truncate(t)
+	ctx := context.Background()
+
+	u := seedUser(t, s)
+	sm := seedSupermarket(t, s)
+	n := seedNfce(t, s, sm)
+	product := &domain.Product{
+		ProductKey: "07891000412855",
+		GTIN:       stringPtr("07891000412855"),
+		Name:       "LIMAO TAHTI",
+		Unit:       "KG",
+	}
+	if _, err := s.Products().Create(ctx, product); err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	assignNote := "assign"
+	assigned := &domain.PriceLog{
+		NfceID: n.ID, ProductID: &product.ID, Line: 1,
+		DescriptionSnapshot: "LIMAO TAHITI KG", StoreCode: "000222",
+		Qty: decimal.NewFromFloat(1), Unit: "KG",
+		UnitPrice: decimal.NewFromFloat(5.99), TotalPrice: decimal.NewFromFloat(5.99),
+		IdentityStatus: "uid_uncertain", NeedsReview: true,
+		ResolvedBy: &u.ID, ResolutionNote: &assignNote,
+	}
+	if err := s.PriceLogs().Create(ctx, assigned); err != nil {
+		t.Fatalf("create assigned log: %v", err)
+	}
+	reviewNote := "needs_review"
+	unresolved := &domain.PriceLog{
+		NfceID: n.ID, Line: 2,
+		DescriptionSnapshot: "FRUTA AVULSA", StoreCode: "000333",
+		Qty: decimal.NewFromFloat(1), Unit: "KG",
+		UnitPrice: decimal.NewFromFloat(1), TotalPrice: decimal.NewFromFloat(1),
+		IdentityStatus: "uid_uncertain", NeedsReview: true,
+		ResolutionNote: &reviewNote,
+	}
+	if err := s.PriceLogs().Create(ctx, unresolved); err != nil {
+		t.Fatalf("create unresolved log: %v", err)
+	}
+
+	items, total, err := s.PriceLogs().NeedsReview(ctx, 20, 0)
+	if err != nil {
+		t.Fatalf("needs review: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("queue = %d rows (total %d), want 2", len(items), total)
+	}
+
+	byID := map[int64]domain.ReviewItem{}
+	for _, it := range items {
+		byID[it.PriceLogID] = it
+	}
+
+	got := byID[assigned.ID]
+	if got.ProductID == nil || *got.ProductID != product.ID {
+		t.Errorf("product_id = %v, want %d", got.ProductID, product.ID)
+	}
+	if got.ProductKey == nil || *got.ProductKey != product.ProductKey ||
+		got.ProductGTIN == nil || *got.ProductGTIN != *product.GTIN ||
+		got.ProductName == nil || *got.ProductName != product.Name ||
+		got.ProductUnit == nil || *got.ProductUnit != product.Unit {
+		t.Errorf("proposed product projection = %+v", got)
+	}
+	if got.ResolvedBy == nil || *got.ResolvedBy != u.ID {
+		t.Errorf("resolved_by = %v, want %d", got.ResolvedBy, u.ID)
+	}
+	if got.ResolutionNote == nil || *got.ResolutionNote != assignNote {
+		t.Errorf("resolution_note = %v, want assign", got.ResolutionNote)
+	}
+
+	plain := byID[unresolved.ID]
+	if plain.ProductID != nil || plain.ProductName != nil || plain.ResolvedBy != nil {
+		t.Errorf("unresolved projection = %+v, want null proposal", plain)
+	}
+	if plain.ResolutionNote == nil || *plain.ResolutionNote != reviewNote {
+		t.Errorf("unresolved note = %v, want needs_review", plain.ResolutionNote)
+	}
+}

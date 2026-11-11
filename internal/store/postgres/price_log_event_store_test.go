@@ -8,6 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"meupreco/internal/domain"
+	"meupreco/migrations"
 )
 
 // seedPriceLogForEvents creates the FK rows an event needs: a user (actor), a
@@ -244,5 +245,75 @@ func TestPriceLogEventStoreRollback(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("event survived rollback: %d row(s)", n)
+	}
+}
+
+// TestPriceLogEventBackfillIdempotent proves the legacy-assignment migration
+// quarantines the row, records exactly one assign event, and is safe to re-run.
+func TestPriceLogEventBackfillIdempotent(t *testing.T) {
+	s := testStore
+	truncate(t)
+	ctx := context.Background()
+
+	l, p, u := seedPriceLogForEvents(t, s)
+	note := "assign"
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE price_logs
+		    SET product_id = $2, needs_review = false, resolved_by = $3, resolution_note = $4
+		  WHERE id = $1`, l.ID, p.ID, u.ID, note); err != nil {
+		t.Fatalf("seed legacy assignment: %v", err)
+	}
+
+	backfill, err := migrations.FS.ReadFile("000015_price_log_event_backfill.up.sql")
+	if err != nil {
+		t.Fatalf("read backfill migration: %v", err)
+	}
+	for run := 1; run <= 2; run++ {
+		if _, err := s.pool.Exec(ctx, string(backfill)); err != nil {
+			t.Fatalf("backfill run %d: %v", run, err)
+		}
+	}
+
+	var needsReview bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT needs_review FROM price_logs WHERE id = $1`, l.ID).Scan(&needsReview); err != nil {
+		t.Fatalf("read price log: %v", err)
+	}
+	if !needsReview {
+		t.Error("legacy assignment was not quarantined (needs_review=false)")
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT from_product_id, to_product_id, user_id, action
+		   FROM price_log_event WHERE price_log_id = $1`, l.ID)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var from, to *int64
+		var userID int64
+		var action string
+		if err := rows.Scan(&from, &to, &userID, &action); err != nil {
+			t.Fatalf("scan event: %v", err)
+		}
+		count++
+		if from != nil {
+			t.Errorf("backfilled from_product_id = %v, want NULL", *from)
+		}
+		if to == nil || *to != p.ID {
+			t.Errorf("backfilled to_product_id = %v, want %d", to, p.ID)
+		}
+		if userID != u.ID || action != "assign" {
+			t.Errorf("backfilled event = user:%d action:%s, want %d/assign", userID, action, u.ID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("backfill created %d events across two runs, want 1", count)
 	}
 }

@@ -92,9 +92,10 @@ func scanDecimalPtrOrNil(d *decimal.Decimal) any {
 }
 
 // HistoryByProduct returns the price curve for a product, each point annotated
-// with its receipt and emitter, optionally windowed by issued_at.
+// with its receipt and emitter, optionally windowed by issued_at. Rows still
+// awaiting review are excluded: pending assignments are not public prices.
 func (r priceLogRepo) HistoryByProduct(ctx context.Context, productID int64, from, to *time.Time) ([]domain.PricePoint, error) {
-	where := `l.product_id = $1`
+	where := `l.product_id = $1 AND l.needs_review = false`
 	args := []any{productID}
 	if from != nil {
 		args = append(args, *from)
@@ -165,7 +166,8 @@ func (r priceLogRepo) LatestBySupermarket(ctx context.Context, supermarketID int
 	const base = `FROM price_logs l
 		JOIN nfces n     ON n.id = l.nfce_id
 		JOIN products p  ON p.id = l.product_id
-		WHERE n.supermarket_id = $1 AND l.product_id IS NOT NULL AND p.needs_review = false`
+		WHERE n.supermarket_id = $1 AND l.product_id IS NOT NULL
+		  AND l.needs_review = false AND p.needs_review = false`
 
 	var total int64
 	if err := r.db.QueryRow(ctx, `SELECT count(DISTINCT p.id) `+base, supermarketID).Scan(&total); err != nil {
@@ -229,10 +231,13 @@ func (r priceLogRepo) NeedsReview(ctx context.Context, limit, offset int) ([]dom
 		`SELECT l.id, l.nfce_id, n.access_key, l.line, l.description_snapshot,
 		        COALESCE(l.store_code, ''), left(s.cnpj, 8), s.legal_name,
 		        l.unit, l.qty::text, l.price_per_unit::text,
-		        l.unit_price::text, l.total_price::text, l.created_at
+		        l.unit_price::text, l.total_price::text, l.created_at,
+		        l.product_id, p.product_key, p.gtin, p.name, p.unit,
+		        l.resolved_by, l.resolution_note
 		 FROM price_logs l
-		 JOIN nfces n       ON n.id = l.nfce_id
+		 JOIN nfces n        ON n.id = l.nfce_id
 		 JOIN supermarkets s ON s.id = n.supermarket_id
+		 LEFT JOIN products p ON p.id = l.product_id
 		 WHERE l.needs_review = true
 		 ORDER BY l.created_at, l.id
 		 LIMIT $1 OFFSET $2`, limit, offset)
@@ -248,7 +253,9 @@ func (r priceLogRepo) NeedsReview(ctx context.Context, limit, offset int) ([]dom
 		var ppu *string
 		if err := rows.Scan(&it.PriceLogID, &it.NfceID, &it.AccessKey, &it.Line, &it.Description,
 			&it.StoreCode, &it.CNPJBase, &it.StoreName,
-			&it.Unit, &qty, &ppu, &unitPrice, &totalPrice, &it.CreatedAt); err != nil {
+			&it.Unit, &qty, &ppu, &unitPrice, &totalPrice, &it.CreatedAt,
+			&it.ProductID, &it.ProductKey, &it.ProductGTIN, &it.ProductName, &it.ProductUnit,
+			&it.ResolvedBy, &it.ResolutionNote); err != nil {
 			return nil, 0, err
 		}
 		it.Qty = decimal.RequireFromString(qty)

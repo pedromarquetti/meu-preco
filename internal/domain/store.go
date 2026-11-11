@@ -114,15 +114,16 @@ type PriceLogStore interface {
 	GetByNfceLine(ctx context.Context, nfceID int64, line int) (*PriceLog, error)
 	// HistoryByProduct returns the price curve for a product, each point
 	// annotated with its receipt and supermarket, optionally filtered by the
-	// receipt's issued_at window.
+	// receipt's issued_at window. Rows still awaiting review are excluded.
 	HistoryByProduct(ctx context.Context, productID int64, from, to *time.Time) ([]PricePoint, error)
 	// LatestBySupermarket returns the products sold at a supermarket with
 	// their most recent logged price, excluding needs_review rows, plus the
 	// distinct-product total for pagination.
 	LatestBySupermarket(ctx context.Context, supermarketID int64, limit, offset int) ([]SupermarketProduct, int64, error)
 	// NeedsReview returns the admin review queue: price_logs rows flagged
-	// needs_review, annotated with store code, CNPJ base and store name, plus
-	// the queue size for pagination.
+	// needs_review, annotated with store code, CNPJ base, store name and the
+	// product/user proposed by a manual assignment, plus the queue size for
+	// pagination.
 	NeedsReview(ctx context.Context, limit, offset int) ([]ReviewItem, int64, error)
 	// RePointProduct re-attaches every log to another product (admin merge);
 	// returns how many logs moved.

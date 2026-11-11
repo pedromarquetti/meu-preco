@@ -317,6 +317,139 @@ func TestRoleGating(t *testing.T) {
 	}
 }
 
+// TestAdminReviewQueueShowsProposedAssignment proves the admin queue carries
+// the product a user proposed (plus who proposed it), while the pending row
+// stays invisible to public product reads and non-admins cannot call the queue.
+func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
+	st := integrationStore(t)
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	ctx := context.Background()
+
+	assigner := &domain.User{Name: "Assigner", Email: "assigner@example.com", PasswordHash: "h", Role: "user"}
+	admin := &domain.User{Name: "Root", Email: "root@example.com", PasswordHash: "h", Role: "admin"}
+	if err := st.Users().Create(ctx, assigner); err != nil {
+		t.Fatalf("create assigner: %v", err)
+	}
+	if err := st.Users().Create(ctx, admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+
+	sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO BOM PRECO LTDA"}
+	if err := st.Supermarkets().Upsert(ctx, sm); err != nil {
+		t.Fatalf("upsert supermarket: %v", err)
+	}
+
+	proposed := &domain.Product{
+		ProductKey: "07891000412855",
+		GTIN:       strptr("07891000412855"),
+		Name:       "LIMAO TAHTI",
+		Unit:       "KG",
+	}
+	if _, err := st.Products().Create(ctx, proposed); err != nil {
+		t.Fatalf("create proposed product: %v", err)
+	}
+
+	issued := time.Date(2024, 11, 1, 8, 0, 0, 0, time.UTC)
+	nf := &domain.Nfce{
+		AccessKey:   fmt.Sprintf("35241152323688000144650020000002571115675%08d", httpNfceSeq.Add(1)),
+		Supermarket: *sm, IssuedAt: &issued, CreatedBy: &assigner.ID,
+	}
+	if err := st.Nfces().Create(ctx, nf); err != nil {
+		t.Fatalf("create nfce: %v", err)
+	}
+	assignNote := "assign"
+	assigned := &domain.PriceLog{
+		NfceID: nf.ID, ProductID: &proposed.ID, Line: 1,
+		DescriptionSnapshot: "LIMAO TAHITI KG", StoreCode: "000222",
+		Qty: decimal.NewFromFloat(1), Unit: "KG",
+		UnitPrice: decimal.RequireFromString("5.99"), TotalPrice: decimal.RequireFromString("5.99"),
+		IdentityStatus: "uid_uncertain", NeedsReview: true,
+		ResolvedBy: &assigner.ID, ResolutionNote: &assignNote,
+	}
+	if err := st.PriceLogs().Create(ctx, assigned); err != nil {
+		t.Fatalf("create assigned log: %v", err)
+	}
+	unresolved := seedHTTPLog(t, st, sm, "UN", nil, issued, "1.00", true, assigner.ID)
+
+	api := roleRouter(t, st, pgResolver{}, admin.ID, "admin")
+	rec, out := do(t, api, http.MethodGet, "/api/v1/admin/products/needs-review?limit=50", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("needs-review = %d (%s)", rec.Code, rec.Body.String())
+	}
+	items := out["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("queue = %d items, want unresolved + assigned (%s)", len(items), rec.Body.String())
+	}
+
+	var gotAssigned, gotUnresolved map[string]any
+	for _, raw := range items {
+		item := raw.(map[string]any)
+		switch jint(item["price_log_id"]) {
+		case assigned.ID:
+			gotAssigned = item
+		case unresolved.ID:
+			gotUnresolved = item
+		}
+	}
+	if gotAssigned == nil || gotUnresolved == nil {
+		t.Fatalf("queue missing rows: assigned=%v unresolved=%v (%s)", gotAssigned != nil, gotUnresolved != nil, rec.Body.String())
+	}
+
+	proposal, ok := gotAssigned["proposed_product"].(map[string]any)
+	if !ok {
+		t.Fatalf("assigned row has no proposed_product: %+v", gotAssigned)
+	}
+	if jint(proposal["id"]) != proposed.ID || proposal["name"] != proposed.Name ||
+		proposal["unit"] != proposed.Unit || proposal["product_key"] != proposed.ProductKey ||
+		proposal["gtin"] != *proposed.GTIN {
+		t.Errorf("proposed_product = %+v", proposal)
+	}
+	if jint(gotAssigned["resolved_by"]) != assigner.ID {
+		t.Errorf("resolved_by = %v, want %d", gotAssigned["resolved_by"], assigner.ID)
+	}
+	if gotAssigned["resolution_note"] != "assign" || gotAssigned["needs_review"] != true {
+		t.Errorf("assigned audit fields = %+v", gotAssigned)
+	}
+
+	if _, present := gotUnresolved["proposed_product"]; present {
+		t.Errorf("unresolved row exposes a proposed_product: %+v", gotUnresolved)
+	}
+	if _, present := gotUnresolved["resolved_by"]; present {
+		t.Errorf("unresolved row exposes resolved_by: %+v", gotUnresolved)
+	}
+
+	// The pending proposal must not leak into public price reads.
+	userAPI := roleRouter(t, st, pgResolver{}, assigner.ID, "user")
+	rec, out = do(t, userAPI, http.MethodGet, fmt.Sprintf("/api/v1/products/%d/history", proposed.ID), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("product history = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if pts, _ := out["points"].([]any); len(pts) != 0 {
+		t.Errorf("pending proposal leaked into product history: %v (%s)", out["points"], rec.Body.String())
+	}
+	rec, out = do(t, userAPI, http.MethodGet, fmt.Sprintf("/api/v1/supermarkets/%d/products", sm.ID), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("supermarket products = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if items, _ := out["items"].([]any); len(items) != 0 {
+		t.Errorf("pending proposal leaked into supermarket products: %v (%s)", out["items"], rec.Body.String())
+	}
+
+	// Public clients cannot call the queue: 403 as a user, 401 unauthenticated.
+	rec, _ = do(t, userAPI, http.MethodGet, "/api/v1/admin/products/needs-review", "")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("user queue access = %d, want 403", rec.Code)
+	}
+	raw := newRouter(config.Config{JWTSecret: testJWTSecret, CORSOrigins: []string{"https://app.example.com"}},
+		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil)
+	rec, _ = do(t, raw, http.MethodGet, "/api/v1/admin/products/needs-review", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous queue access = %d, want 401", rec.Code)
+	}
+}
+
 func TestAdminCuration(t *testing.T) {
 	st := integrationStore(t)
 	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
