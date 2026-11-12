@@ -19,7 +19,11 @@ const (
 	// it persists a private row with no product so an admin can resolve it.
 	ActionNeedsReview = "needs_review"
 	// ActionAssign attaches an existing product_id to the line.
-	ActionAssign = "assign"
+	ActionAssign  = "assign"
+	ActionReject  = "reject"
+	ActionApprove = "approve"
+	ActionAccept  = "accept"
+	ActionPending = "pending"
 )
 
 // CommitPreview implements the commit half of the two-phase commit: it

@@ -200,4 +200,7 @@ type ReviewItem struct {
 	ProductUnit    *string // proposed canonical unit
 	ResolvedBy     *int64  // user who proposed the assignment
 	ResolutionNote *string // "assign" for a proposal, "needs_review" otherwise
+	// LastReviewAction is the latest proposal event action, or nil when the
+	// price log has no review-event history.
+	LastReviewAction *string
 }

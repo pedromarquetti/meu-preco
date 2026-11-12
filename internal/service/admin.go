@@ -28,28 +28,38 @@ type ReviewProductView struct {
 	Unit       string  `json:"unit"`
 }
 
+// Proposal status describes the current proposal decision, while NeedsReview
+// remains the materialized flag that controls whether the row is published and
+// appears in the queue. A rejected proposal therefore remains in the queue.
+const (
+	ProposalStatusPending  = "pending"
+	ProposalStatusRejected = "rejected"
+)
+
 // ReviewItemView is one queue row: the raw line plus the store context an admin
 // needs to curate it, with a suggested canonical stem for the create path.
 type ReviewItemView struct {
-	PriceLogID      int64              `json:"price_log_id"`
-	NfceID          int64              `json:"nfce_id"`
-	AccessKey       string             `json:"access_key"`
-	Line            int                `json:"line"`
-	Description     string             `json:"description"`
-	StoreCode       string             `json:"store_code"`
-	CNPJBase        string             `json:"cnpj_base"`
-	StoreName       string             `json:"store_name"`
-	Unit            string             `json:"unit"`
-	Qty             string             `json:"qty"`
-	PricePerUnit    *string            `json:"price_per_unit,omitempty"`
-	UnitPrice       string             `json:"unit_price"`
-	TotalPrice      string             `json:"total_price"`
-	SuggestedStem   string             `json:"suggested_stem"`
-	ProposedProduct *ReviewProductView `json:"proposed_product,omitempty"`
-	ResolvedBy      *int64             `json:"resolved_by,omitempty"`
-	ResolutionNote  *string            `json:"resolution_note,omitempty"`
-	NeedsReview     bool               `json:"needs_review"`
-	CreatedAt       time.Time          `json:"created_at"`
+	PriceLogID       int64              `json:"price_log_id"`
+	NfceID           int64              `json:"nfce_id"`
+	AccessKey        string             `json:"access_key"`
+	Line             int                `json:"line"`
+	Description      string             `json:"description"`
+	StoreCode        string             `json:"store_code"`
+	CNPJBase         string             `json:"cnpj_base"`
+	StoreName        string             `json:"store_name"`
+	Unit             string             `json:"unit"`
+	Qty              string             `json:"qty"`
+	PricePerUnit     *string            `json:"price_per_unit,omitempty"`
+	UnitPrice        string             `json:"unit_price"`
+	TotalPrice       string             `json:"total_price"`
+	SuggestedStem    string             `json:"suggested_stem"`
+	ProposedProduct  *ReviewProductView `json:"proposed_product,omitempty"`
+	ResolvedBy       *int64             `json:"resolved_by,omitempty"`
+	ResolutionNote   *string            `json:"resolution_note,omitempty"`
+	NeedsReview      bool               `json:"needs_review"`
+	ProposalStatus   string             `json:"proposal_status"`
+	LastReviewAction *string            `json:"last_review_action,omitempty"`
+	CreatedAt        time.Time          `json:"created_at"`
 }
 
 // ReviewQueuePage is the paginated needs-review queue.
@@ -139,23 +149,25 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 
 	for _, it := range items {
 		v := ReviewItemView{
-			PriceLogID:     it.PriceLogID,
-			NfceID:         it.NfceID,
-			AccessKey:      it.AccessKey,
-			Line:           it.Line,
-			Description:    it.Description,
-			StoreCode:      it.StoreCode,
-			CNPJBase:       it.CNPJBase,
-			StoreName:      it.StoreName,
-			Unit:           it.Unit,
-			Qty:            it.Qty.String(),
-			UnitPrice:      it.UnitPrice.String(),
-			TotalPrice:     it.TotalPrice.String(),
-			SuggestedStem:  s.suggestStem(ctx, it.Description, it.Unit, brands),
-			ResolvedBy:     it.ResolvedBy,
-			ResolutionNote: it.ResolutionNote,
-			NeedsReview:    true,
-			CreatedAt:      it.CreatedAt,
+			PriceLogID:       it.PriceLogID,
+			NfceID:           it.NfceID,
+			AccessKey:        it.AccessKey,
+			Line:             it.Line,
+			Description:      it.Description,
+			StoreCode:        it.StoreCode,
+			CNPJBase:         it.CNPJBase,
+			StoreName:        it.StoreName,
+			Unit:             it.Unit,
+			Qty:              it.Qty.String(),
+			UnitPrice:        it.UnitPrice.String(),
+			TotalPrice:       it.TotalPrice.String(),
+			SuggestedStem:    s.suggestStem(ctx, it.Description, it.Unit, brands),
+			ResolvedBy:       it.ResolvedBy,
+			ResolutionNote:   it.ResolutionNote,
+			NeedsReview:      true,
+			ProposalStatus:   proposalStatus(it.LastReviewAction),
+			LastReviewAction: it.LastReviewAction,
+			CreatedAt:        it.CreatedAt,
 		}
 		if it.PricePerUnit != nil {
 			ppu := it.PricePerUnit.String()
@@ -173,6 +185,16 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 		out = append(out, v)
 	}
 	return &ReviewQueuePage{Items: out, Page: newPage(page, limit, total)}, nil
+}
+
+// proposalStatus derives proposal state from the latest event. Missing and
+// non-rejection actions (including assign and approve) describe a pending
+// proposal; only the latest reject event produces rejected.
+func proposalStatus(lastAction *string) string {
+	if lastAction != nil && *lastAction == ActionReject {
+		return ProposalStatusRejected
+	}
+	return ProposalStatusPending
 }
 
 // suggestStem derives the admin-facing canonical stem:
@@ -695,7 +717,7 @@ func stableKey(parts ...string) string {
 // makes a price log public (needs_review = false) if it has an assigned product;
 // a "reject" action keeps the proposal pending but records the decision in history.
 func (s *Service) ReviewPriceLog(ctx context.Context, adminID, priceLogID int64, action string) (*ReviewProductView, error) {
-	if action != "approve" && action != "reject" {
+	if action != ActionApprove && action != ActionReject {
 		return nil, ErrInvalidReviewAction
 	}
 
@@ -716,7 +738,7 @@ func (s *Service) ReviewPriceLog(ctx context.Context, adminID, priceLogID int64,
 			return err
 		}
 
-		if action == "approve" {
+		if action == ActionApprove {
 			if log.ProductID == nil || *log.ProductID <= 0 {
 				return ErrMissingProductForApproval
 			}

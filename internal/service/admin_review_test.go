@@ -24,6 +24,32 @@ func reviewTestLog(t *testing.T, m *memStores, productID *int64, needsReview boo
 	return log
 }
 
+func TestProposalStatus(t *testing.T) {
+	assign := ActionAssign
+	approve := ActionApprove
+	reject := ActionReject
+
+	tests := []struct {
+		name   string
+		action *string
+		want   string
+	}{
+		{name: "no event", want: ProposalStatusPending},
+		{name: "empty action", action: strPtr(""), want: ProposalStatusPending},
+		{name: "assign", action: &assign, want: ProposalStatusPending},
+		{name: "approve", action: &approve, want: ProposalStatusPending},
+		{name: "reject", action: &reject, want: ProposalStatusRejected},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := proposalStatus(tt.action); got != tt.want {
+				t.Errorf("proposalStatus(%v) = %q, want %q", tt.action, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReviewPriceLogApproveAndReject(t *testing.T) {
 	m := newMemStores()
 	p := &domain.Product{ProductKey: "lime", Name: "Limao", Unit: "KG"}
