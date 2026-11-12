@@ -784,7 +784,11 @@ paths:
         (`product_id` null) and manual assignments proposed by users. For a
         proposal the item carries `proposed_product`, `resolved_by` and
         `resolution_note` so an admin can compare it with the receipt line.
-        Approval (not this queue) is what publishes a proposal.
+        `proposal_status` reflects the latest price-log event: `rejected` when
+        the latest action is `reject`, otherwise `pending`. A rejected proposal
+        remains visible in the queue and unpublished; batch assignment creates a
+        new pending proposal, and approval is what clears `needs_review` and
+        publishes the row.
       parameters:
         - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
@@ -810,14 +814,18 @@ paths:
       tags: [admin]
       summary: Approve or reject a price-log proposal (admin)
       description: |
-        Applies an administrative decision to one `needs_review` price log.
-        `approve` requires a proposed product and makes the row public by
-        setting `needs_review` to false. `reject` retains the proposed product,
-        the original assigning user, and `needs_review = true`, so the proposal
-        remains hidden and can later be approved. Every decision is appended to
-        the immutable `price_log_event` audit history; rejection is therefore
-        reversible and never deletes the proposal. The authenticated admin is
-        the event actor; `user_id` is not accepted in the request body.
+        Applies an administrative decision to one `needs_review` price log that
+        has a proposed product. The decision is appended to the immutable
+        `price_log_event` history as `approve` or `reject`. `approve` sets
+        `needs_review` to false and publishes the row. `reject` retains the
+        proposed product, the original assigning user, and `needs_review =
+        true`, so the proposal remains hidden and reports `proposal_status:
+        rejected`. A subsequent batch assignment appends a new `assign` event
+        and resets the proposal to `pending`, allowing another approve or reject
+        decision. Repeating the same decision without an intervening assignment
+        returns `already_processed`; unresolved rows without a proposed product
+        cannot be reviewed. The authenticated admin is the event actor;
+        `user_id` is not accepted in the request body.
       parameters:
         - name: id
           in: path
@@ -835,7 +843,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ReviewDecisionResult" }
         "400":
-          description: Invalid request/action or approval without a product (`invalid_request` / `invalid_review_action` / `bad_request`)
+          description: Invalid request/action or review without a proposed product (`invalid_request` / `invalid_review_action` / `bad_request`)
           content:
             application/json:
               schema:
@@ -853,7 +861,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/NotFoundError" }
         "409":
-          description: Price log is already in the requested terminal state (`already_processed`)
+          description: Price log is not in review or the latest event already records the requested decision (`already_processed`)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AlreadyProcessedError" }
@@ -864,11 +872,13 @@ paths:
       tags: [admin]
       summary: Propose products for needs-review rows (admin)
       description: |
-        Records the product proposed for each queued receipt line. The update
-        keeps `needs_review` true: batch assignment only changes the pending
-        proposal, so a rejected proposal can be reassigned. Publication happens
-        through a separate approve decision. Every successful proposal update
-        appends an `assign` event; one invalid entry rolls back the whole batch.
+        Records or replaces the product proposed for each queued receipt line.
+        The update keeps `needs_review` true: batch assignment only changes the
+        pending proposal, so a rejected proposal can be reassigned. A new
+        assignment after a rejection resets `proposal_status` to `pending`;
+        publication happens through a separate approve decision. Every
+        successful proposal update appends an `assign` event in the same
+        transaction; one invalid entry rolls back the whole batch.
       requestBody:
         required: true
         content:
@@ -1923,18 +1933,24 @@ components:
             line.
         needs_review:
           type: boolean
-          description: Always true in the queue; approval is what removes a row.
+          description: >
+            Always true in the queue; approval sets it to false and publishes
+            the row.
         proposal_status:
           type: string
           enum: [pending, rejected]
           description: >
             Current proposal state derived from the latest price-log event.
+            `pending` when there is no event or the latest action is `assign`
+            or `approve`; `rejected` when the latest action is `reject`.
             Rejected proposals remain in the queue and can be reassigned.
         last_review_action:
           type: string
           nullable: true
           enum: [assign, reject, approve]
-          description: Latest price-log event action, or null when no event exists.
+          description: >
+            Latest price-log event action. Null when the price log has no
+            review-event history.
         created_at: { type: string, format: date-time }
     ReviewQueuePage:
       type: object
@@ -1952,13 +1968,14 @@ components:
           type: string
           enum: [approve, reject]
           description: >
-            `approve` publishes a product-linked price log; `reject` retains
-            the proposal in the private review queue.
+            `approve` publishes the product-linked proposal; `reject` keeps it
+            in the private review queue and marks it rejected. Both require a
+            proposed product.
     ReviewDecisionResult:
       type: object
       description: >
-        Product projection returned after a review decision. It is empty when
-        an unresolved row is rejected; it is not a public product response.
+        Product projection returned after a review decision. The authoritative
+        record of the decision is the price-log event history.
       properties:
         id: { type: integer }
         product_key: { type: string }
