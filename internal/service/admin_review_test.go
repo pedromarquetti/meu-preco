@@ -52,7 +52,13 @@ func TestProposalStatus(t *testing.T) {
 
 func TestReviewPriceLogApproveAndReject(t *testing.T) {
 	m := newMemStores()
-	p := &domain.Product{ProductKey: "lime", Name: "Limao", Unit: "KG"}
+	p := &domain.Product{
+		ProductKey: "lime",
+		GTIN:       strPtr("07891000412855"),
+		Name:       "Limao",
+		Brand:      strPtr("VIGOR"),
+		Unit:       "KG",
+	}
 	if _, err := m.Products().Create(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
@@ -60,15 +66,26 @@ func TestReviewPriceLogApproveAndReject(t *testing.T) {
 	log := reviewTestLog(t, m, &productID, true)
 	svc := newTestService(m)
 
-	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "reject"); err != nil {
+	rejected, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "reject")
+	if err != nil {
 		t.Fatalf("reject: %v", err)
+	}
+	if rejected.ID != p.ID || rejected.ProductKey != p.ProductKey ||
+		rejected.Name != p.Name || rejected.Unit != p.Unit ||
+		rejected.Brand == nil || *rejected.Brand != *p.Brand ||
+		rejected.GTIN == nil || *rejected.GTIN != *p.GTIN {
+		t.Errorf("reject result = %+v, want product %+v", rejected, p)
 	}
 	if !log.NeedsReview || len(m.priceLogEvents) != 1 || m.priceLogEvents[0].Action != "reject" {
 		t.Fatalf("rejection did not preserve pending state: log=%+v events=%+v", log, m.priceLogEvents)
 	}
 
-	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "approve"); err != nil {
+	approved, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "approve")
+	if err != nil {
 		t.Fatalf("approve after reject: %v", err)
+	}
+	if approved.ID != p.ID || approved.Name != p.Name {
+		t.Errorf("approve result = %+v, want product %d", approved, p.ID)
 	}
 	if log.NeedsReview || len(m.priceLogEvents) != 2 || m.priceLogEvents[1].Action != "approve" {
 		t.Fatalf("approval did not publish and append event: log=%+v events=%+v", log, m.priceLogEvents)

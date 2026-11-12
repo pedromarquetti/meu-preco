@@ -866,7 +866,7 @@ paths:
             schema: { $ref: "#/components/schemas/ReviewDecisionRequest" }
       responses:
         "200":
-          description: Decision recorded
+          description: Decision recorded; returns the reviewed product
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ReviewDecisionResult" }
@@ -1924,6 +1924,7 @@ components:
         product_key: { type: string }
         gtin: { type: string, nullable: true }
         name: { type: string }
+        brand: { type: string, nullable: true }
         unit: { type: string }
     ReviewItemView:
       type: object
@@ -2009,6 +2010,7 @@ components:
         product_key: { type: string }
         gtin: { type: string, nullable: true }
         name: { type: string }
+        brand: { type: string, nullable: true }
         unit: { type: string }
     Assignment:
       type: object

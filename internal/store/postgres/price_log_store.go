@@ -236,7 +236,7 @@ func (r priceLogRepo) NeedsReview(ctx context.Context, limit, offset int) ([]dom
 		        COALESCE(l.store_code, ''), left(s.cnpj, 8), s.legal_name,
 		        l.unit, l.qty::text, l.price_per_unit::text,
 		        l.unit_price::text, l.total_price::text, l.created_at,
-		        l.product_id, p.product_key, p.gtin, p.name, p.unit,
+		        l.product_id, p.product_key, p.gtin, p.name, p.unit, p.brand,
 		        l.resolved_by, l.resolution_note, e.action as last_review_action
 		 FROM price_logs l
 		 JOIN nfces n        ON n.id = l.nfce_id
@@ -265,7 +265,7 @@ func (r priceLogRepo) NeedsReview(ctx context.Context, limit, offset int) ([]dom
 		if err := rows.Scan(&it.PriceLogID, &it.NfceID, &it.AccessKey, &it.Line, &it.Description,
 			&it.StoreCode, &it.CNPJBase, &it.StoreName,
 			&it.Unit, &qty, &ppu, &unitPrice, &totalPrice, &it.CreatedAt,
-			&it.ProductID, &it.ProductKey, &it.ProductGTIN, &it.ProductName, &it.ProductUnit,
+			&it.ProductID, &it.ProductKey, &it.ProductGTIN, &it.ProductName, &it.ProductUnit, &it.ProductBrand,
 			&it.ResolvedBy, &it.ResolutionNote, &lastAction); err != nil {
 			return nil, 0, err
 		}

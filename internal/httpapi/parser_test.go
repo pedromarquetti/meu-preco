@@ -394,6 +394,7 @@ func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
 		ProductKey: "07891000412855",
 		GTIN:       strptr("07891000412855"),
 		Name:       "LIMAO TAHTI",
+		Brand:      strptr("VIGOR"),
 		Unit:       "KG",
 	}
 	if _, err := st.Products().Create(ctx, proposed); err != nil {
@@ -452,7 +453,7 @@ func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
 	}
 	if jint(proposal["id"]) != proposed.ID || proposal["name"] != proposed.Name ||
 		proposal["unit"] != proposed.Unit || proposal["product_key"] != proposed.ProductKey ||
-		proposal["gtin"] != *proposed.GTIN {
+		proposal["gtin"] != *proposed.GTIN || proposal["brand"] != *proposed.Brand {
 		t.Errorf("proposed_product = %+v", proposal)
 	}
 	if jint(gotAssigned["resolved_by"]) != assigner.ID {
@@ -743,11 +744,15 @@ func TestAdminCuration(t *testing.T) {
 		t.Errorf("pending proposal missing product: %+v", pend)
 	}
 
-	// Approve publishes the proposal and empties the queue.
-	rec, _ = do(t, api, http.MethodPost, fmt.Sprintf("/api/v1/admin/products/price-logs/%d/review", reviewLog.ID),
+	// Approve publishes the proposal and empties the queue. The response is the
+	// reviewed product, including its brand.
+	rec, out = do(t, api, http.MethodPost, fmt.Sprintf("/api/v1/admin/products/price-logs/%d/review", reviewLog.ID),
 		`{"action":"approve"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("approve = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if jint(out["id"]) == 0 || out["name"] != "MAÇA FUJI" || out["brand"] != "IMPORTADA" {
+		t.Errorf("approve result = %+v, want the reviewed product with its brand", out)
 	}
 	rec, out = do(t, api, http.MethodGet, "/api/v1/admin/products/needs-review?limit=50", "")
 	if rec.Code != http.StatusOK || jint(out["page"].(map[string]any)["total"]) != 0 {

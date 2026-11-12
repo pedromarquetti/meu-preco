@@ -25,6 +25,7 @@ type ReviewProductView struct {
 	ProductKey string  `json:"product_key,omitempty"`
 	GTIN       *string `json:"gtin,omitempty"`
 	Name       string  `json:"name"`
+	Brand      *string `json:"brand"`
 	Unit       string  `json:"unit"`
 }
 
@@ -181,6 +182,7 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 				ProductKey: derefString(it.ProductKey),
 				GTIN:       it.ProductGTIN,
 				Name:       derefString(it.ProductName),
+				Brand:      it.ProductBrand,
 				Unit:       derefString(it.ProductUnit),
 			}
 		}
@@ -797,6 +799,24 @@ func (s *Service) ReviewPriceLog(ctx context.Context, adminID, priceLogID int64,
 				return ErrMissingProductForApproval
 			}
 			return ErrMissingProductForRejection
+		}
+
+		// The proposal is still unpublished, so the public GetByID visibility
+		// guard would hide it; the admin review needs the write-side read.
+		product, err := tx.Products().GetByIDForWrite(ctx, *log.ProductID)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				return ErrProductNotFound
+			}
+			return err
+		}
+		result = ReviewProductView{
+			ID:         product.ID,
+			ProductKey: product.ProductKey,
+			GTIN:       product.GTIN,
+			Name:       product.Name,
+			Brand:      product.Brand,
+			Unit:       product.Unit,
 		}
 
 		if action == ActionApprove {

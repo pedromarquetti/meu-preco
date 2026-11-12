@@ -364,6 +364,7 @@ func TestNeedsReviewQueueShowsProposedAssignments(t *testing.T) {
 		ProductKey: "07891000412855",
 		GTIN:       strPtr("07891000412855"),
 		Name:       "LIMAO TAHTI",
+		Brand:      strPtr("VIGOR"),
 		Unit:       "KG",
 	}
 	if _, err := m.Products().Create(context.Background(), proposed); err != nil {
@@ -433,6 +434,7 @@ func TestNeedsReviewQueueShowsProposedAssignments(t *testing.T) {
 		got.ProposedProduct.Name != proposed.Name ||
 		got.ProposedProduct.Unit != proposed.Unit ||
 		got.ProposedProduct.ProductKey != proposed.ProductKey ||
+		got.ProposedProduct.Brand == nil || *got.ProposedProduct.Brand != *proposed.Brand ||
 		got.ProposedProduct.GTIN == nil || *got.ProposedProduct.GTIN != *proposed.GTIN {
 		t.Errorf("proposed product = %+v", got.ProposedProduct)
 	}

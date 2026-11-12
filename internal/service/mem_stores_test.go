@@ -730,12 +730,13 @@ func (s memPriceLogs) NeedsReview(_ context.Context, limit, offset int) ([]domai
 			storeName = nf.Supermarket.LegalName
 			accessKey = nf.AccessKey
 		}
-		var productKey, productGTIN, productName, productUnit *string
+		var productKey, productGTIN, productName, productBrand, productUnit *string
 		if l.ProductID != nil {
 			if p, ok := m.byProductID[*l.ProductID]; ok {
 				productKey = &p.ProductKey
 				productGTIN = p.GTIN
 				productName = &p.Name
+				productBrand = p.Brand
 				productUnit = &p.Unit
 			}
 		}
@@ -765,6 +766,7 @@ func (s memPriceLogs) NeedsReview(_ context.Context, limit, offset int) ([]domai
 			ProductKey:       productKey,
 			ProductGTIN:      productGTIN,
 			ProductName:      productName,
+			ProductBrand:     productBrand,
 			ProductUnit:      productUnit,
 			ResolvedBy:       l.ResolvedBy,
 			ResolutionNote:   l.ResolutionNote,

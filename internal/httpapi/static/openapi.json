@@ -1668,7 +1668,7 @@
         },
         "responses": {
           "200": {
-            "description": "Decision recorded",
+            "description": "Decision recorded; returns the reviewed product",
             "content": {
               "application/json": {
                 "schema": {
@@ -3896,6 +3896,10 @@
           "name": {
             "type": "string"
           },
+          "brand": {
+            "type": "string",
+            "nullable": true
+          },
           "unit": {
             "type": "string"
           }
@@ -4043,6 +4047,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "brand": {
+            "type": "string",
+            "nullable": true
           },
           "unit": {
             "type": "string"
