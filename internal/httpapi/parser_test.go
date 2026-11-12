@@ -459,6 +459,156 @@ func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
 	}
 }
 
+// TestAdminReviewLifecycleReassignment walks the public admin contract through
+// assign -> reject -> reassign -> approve, asserting queue visibility and the
+// proposal_status/last_review_action fields at every step.
+func TestAdminReviewLifecycleReassignment(t *testing.T) {
+	st := integrationStore(t)
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	ctx := context.Background()
+
+	admin := &domain.User{Name: "Root", Email: "root@example.com", PasswordHash: "h", Role: "admin"}
+	if err := st.Users().Create(ctx, admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO BOM PRECO LTDA"}
+	if err := st.Supermarkets().Upsert(ctx, sm); err != nil {
+		t.Fatalf("upsert supermarket: %v", err)
+	}
+	productA := &domain.Product{ProductKey: "banana-a", Name: "BANANA A", Unit: "KG"}
+	productB := &domain.Product{ProductKey: "banana-b", Name: "BANANA B", Unit: "KG"}
+	for _, p := range []*domain.Product{productA, productB} {
+		if _, err := st.Products().Create(ctx, p); err != nil {
+			t.Fatalf("create product: %v", err)
+		}
+	}
+
+	log := seedHTTPLog(t, st, sm, "KG", nil, time.Date(2024, 11, 4, 8, 0, 0, 0, time.UTC), "5.00", true, admin.ID)
+	api := roleRouter(t, st, pgResolver{}, admin.ID, "admin")
+
+	queue := func() ([]any, int64) {
+		t.Helper()
+		rec, out := do(t, api, http.MethodGet, "/api/v1/admin/products/needs-review?limit=50", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("queue = %d (%s)", rec.Code, rec.Body.String())
+		}
+		return out["items"].([]any), jint(out["page"].(map[string]any)["total"])
+	}
+	assign := func(productID int64) {
+		t.Helper()
+		rec, out := do(t, api, http.MethodPost, "/api/v1/admin/products/batch-assign",
+			fmt.Sprintf(`{"assignments":[{"id":%d,"action":"existing","product_id":%d}]}`, log.ID, productID))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("assign %d = %d (%s)", productID, rec.Code, rec.Body.String())
+		}
+		if jint(out["assigned"]) != 1 {
+			t.Errorf("assign %d result = %+v", productID, out)
+		}
+	}
+	review := func(action string) (*httptest.ResponseRecorder, map[string]any) {
+		t.Helper()
+		return do(t, api, http.MethodPost,
+			fmt.Sprintf("/api/v1/admin/products/price-logs/%d/review", log.ID),
+			fmt.Sprintf(`{"action":%q}`, action))
+	}
+
+	// Initial state: an unresolved row with no proposal or event history.
+	items, total := queue()
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("initial queue = %d items (total %d), want 1 (%+v)", len(items), total, items)
+	}
+	item := items[0].(map[string]any)
+	if item["proposal_status"] != "pending" || item["needs_review"] != true {
+		t.Errorf("initial item = %+v, want pending/needs_review", item)
+	}
+	if _, present := item["proposed_product"]; present {
+		t.Errorf("unresolved item exposes proposed_product: %+v", item)
+	}
+	if _, present := item["last_review_action"]; present {
+		t.Errorf("unresolved item exposes last_review_action: %+v", item)
+	}
+
+	// A decision without a proposal is invalid and writes nothing.
+	rec, out := review("reject")
+	if rec.Code != http.StatusBadRequest || out["error"].(map[string]any)["code"] != "bad_request" {
+		t.Fatalf("reject unresolved = %d (%s), want 400 bad_request", rec.Code, rec.Body.String())
+	}
+	if items, _ = queue(); len(items) != 1 {
+		t.Fatalf("failed rejection changed the queue: %+v", items)
+	}
+	if it := items[0].(map[string]any); it["proposal_status"] != "pending" {
+		t.Errorf("failed rejection changed proposal_status: %+v", it)
+	}
+
+	// First assignment: visible and pending.
+	assign(productA.ID)
+	items, total = queue()
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("queue after assign A = %d items (total %d), want 1", len(items), total)
+	}
+	item = items[0].(map[string]any)
+	if item["proposal_status"] != "pending" || item["last_review_action"] != "assign" || item["needs_review"] != true {
+		t.Errorf("assigned item = %+v, want pending/assign/needs_review", item)
+	}
+	if pp, ok := item["proposed_product"].(map[string]any); !ok || jint(pp["id"]) != productA.ID {
+		t.Errorf("proposed_product = %+v, want A (%d)", item["proposed_product"], productA.ID)
+	}
+
+	// Rejection: still visible, still unpublished, reports rejected.
+	if rec, _ = review("reject"); rec.Code != http.StatusOK {
+		t.Fatalf("reject = %d (%s)", rec.Code, rec.Body.String())
+	}
+	items, total = queue()
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("queue after reject = %d items (total %d), want 1", len(items), total)
+	}
+	item = items[0].(map[string]any)
+	if item["proposal_status"] != "rejected" || item["last_review_action"] != "reject" || item["needs_review"] != true {
+		t.Errorf("rejected item = %+v, want rejected/reject/needs_review", item)
+	}
+	if pp, ok := item["proposed_product"].(map[string]any); !ok || jint(pp["id"]) != productA.ID {
+		t.Errorf("rejection hid the proposal: %+v", item)
+	}
+
+	// Repeating the same rejection is a conflict.
+	rec, out = review("reject")
+	if rec.Code != http.StatusConflict || out["error"].(map[string]any)["code"] != "already_processed" {
+		t.Fatalf("duplicate reject = %d (%s), want 409 already_processed", rec.Code, rec.Body.String())
+	}
+
+	// Reassignment resets the proposal to pending with product B.
+	assign(productB.ID)
+	items, total = queue()
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("queue after assign B = %d items (total %d), want 1", len(items), total)
+	}
+	item = items[0].(map[string]any)
+	if item["proposal_status"] != "pending" || item["last_review_action"] != "assign" {
+		t.Errorf("reassigned item = %+v, want pending/assign", item)
+	}
+	if pp, ok := item["proposed_product"].(map[string]any); !ok || jint(pp["id"]) != productB.ID {
+		t.Errorf("proposed_product after reassignment = %+v, want B (%d)", item["proposed_product"], productB.ID)
+	}
+
+	// Approval publishes the row and removes it from the queue.
+	if rec, _ = review("approve"); rec.Code != http.StatusOK {
+		t.Fatalf("approve = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if items, total = queue(); total != 0 || len(items) != 0 {
+		t.Errorf("queue after approve = %d items (total %d), want empty", len(items), total)
+	}
+
+	latest, err := st.Events().LatestByPriceLogID(ctx, log.ID)
+	if err != nil {
+		t.Fatalf("latest event: %v", err)
+	}
+	if latest.Action != "approve" {
+		t.Errorf("latest event action = %q, want approve", latest.Action)
+	}
+}
+
 func TestAdminCuration(t *testing.T) {
 	st := integrationStore(t)
 	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {

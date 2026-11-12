@@ -384,8 +384,10 @@ func (s *Service) BatchAssign(ctx context.Context, adminID int64, req BatchAssig
 			switch assignment.Action {
 			case "existing":
 				// The target product must exist: assigning a dangling id would
-				// silently poison future history reads.
-				if _, err := tx.Products().GetByID(ctx, assignment.ProductID); err != nil {
+				// silently poison future history reads. Use the write lookup so
+				// an unpublished product (no approved price log yet) can still
+				// be proposed.
+				if _, err := tx.Products().GetByIDForWrite(ctx, assignment.ProductID); err != nil {
 					if errors.Is(err, domain.ErrNotFound) {
 						return ErrInvalidAssignment
 					}

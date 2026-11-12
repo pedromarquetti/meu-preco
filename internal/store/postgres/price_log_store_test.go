@@ -244,3 +244,103 @@ func TestNeedsReviewProjectsProposal(t *testing.T) {
 		}
 	}
 }
+
+// TestNeedsReviewReassignmentPaginationAndVisibility verifies that the queue
+// reflects the current product after reassignment, keeps count/pagination
+// intact and excludes rows already approved out of review.
+func TestNeedsReviewReassignmentPaginationAndVisibility(t *testing.T) {
+	s := testStore
+	truncate(t)
+	ctx := context.Background()
+
+	u := seedUser(t, s)
+	sm := seedSupermarket(t, s)
+	n := seedNfce(t, s, sm)
+
+	productA := &domain.Product{ProductKey: "banana-a", Name: "BANANA A", Unit: "KG"}
+	productB := &domain.Product{ProductKey: "banana-b", Name: "BANANA B", Unit: "KG"}
+	for _, p := range []*domain.Product{productA, productB} {
+		if _, err := s.Products().Create(ctx, p); err != nil {
+			t.Fatalf("create product: %v", err)
+		}
+	}
+
+	base := func(line int, productID *int64, needsReview bool) *domain.PriceLog {
+		return &domain.PriceLog{
+			NfceID: n.ID, ProductID: productID, Line: line,
+			DescriptionSnapshot: "BANANA KG", StoreCode: "000222",
+			Qty: decimal.NewFromFloat(1), Unit: "KG",
+			UnitPrice: decimal.NewFromFloat(5), TotalPrice: decimal.NewFromFloat(5),
+			IdentityStatus: "uid_uncertain", NeedsReview: needsReview,
+		}
+	}
+
+	unresolved := base(1, nil, true)
+	assigned := base(2, &productA.ID, true)
+	approved := base(3, &productB.ID, false)
+	for _, l := range []*domain.PriceLog{unresolved, assigned, approved} {
+		if err := s.PriceLogs().Create(ctx, l); err != nil {
+			t.Fatalf("create price log: %v", err)
+		}
+	}
+
+	// assign A -> reject -> assign B, then move the current product to B.
+	ts := time.Date(2024, 11, 3, 9, 0, 0, 0, time.UTC)
+	for i, action := range []string{"assign", "reject", "assign"} {
+		var fromProductID *int64
+		if i > 0 {
+			fromProductID = &productA.ID
+		}
+		toProductID := productA.ID
+		if i == 2 {
+			toProductID = productB.ID
+		}
+		if _, err := s.Pool().Exec(ctx,
+			`INSERT INTO price_log_event (price_log_id, from_product_id, to_product_id, user_id, action, timestamp)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			assigned.ID, fromProductID, toProductID, u.ID, action, ts.Add(time.Duration(i)*time.Minute)); err != nil {
+			t.Fatalf("insert %s event: %v", action, err)
+		}
+	}
+	if err := s.PriceLogs().SetProductProposal(ctx, assigned.ID, productB.ID, u.ID, "assign"); err != nil {
+		t.Fatalf("reassign product: %v", err)
+	}
+
+	items, total, err := s.PriceLogs().NeedsReview(ctx, 20, 0)
+	if err != nil {
+		t.Fatalf("needs review: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("queue = %d rows (total %d), want 2", len(items), total)
+	}
+	for _, it := range items {
+		if it.PriceLogID == approved.ID {
+			t.Error("approved row leaked into the needs-review queue")
+		}
+		if it.PriceLogID == assigned.ID {
+			if it.ProductID == nil || *it.ProductID != productB.ID {
+				t.Errorf("product after reassignment = %v, want %d", it.ProductID, productB.ID)
+			}
+			if it.LastReviewAction == nil || *it.LastReviewAction != "assign" {
+				t.Errorf("latest action after reassignment = %v, want assign", it.LastReviewAction)
+			}
+		}
+	}
+
+	// Count and pagination remain stable across the event-aware query.
+	first, firstTotal, err := s.PriceLogs().NeedsReview(ctx, 1, 0)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	second, secondTotal, err := s.PriceLogs().NeedsReview(ctx, 1, 1)
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if firstTotal != 2 || secondTotal != 2 || len(first) != 1 || len(second) != 1 {
+		t.Fatalf("pagination = (%d/%d) (%d/%d), want 1 of 2 per page",
+			len(first), firstTotal, len(second), secondTotal)
+	}
+	if first[0].PriceLogID == second[0].PriceLogID {
+		t.Errorf("pagination returned the same row twice: %d", first[0].PriceLogID)
+	}
+}

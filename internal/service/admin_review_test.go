@@ -113,6 +113,122 @@ func TestReviewPriceLogRequiresProductAndIsAtomic(t *testing.T) {
 	}
 }
 
+// TestNeedsReviewQueueProposalStates covers the queue projection for every
+// proposal state: unresolved without events, assigned, rejected and approved.
+func TestNeedsReviewQueueProposalStates(t *testing.T) {
+	newProduct := func(t *testing.T, m *memStores) *domain.Product {
+		t.Helper()
+		p := &domain.Product{ProductKey: "lime", Name: "Limao", Unit: "KG"}
+		if _, err := m.Products().Create(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	queue := func(t *testing.T, svc *Service) []ReviewItemView {
+		t.Helper()
+		q, err := svc.NeedsReviewQueue(context.Background(), 1, 20)
+		if err != nil {
+			t.Fatalf("queue: %v", err)
+		}
+		return q.Items
+	}
+
+	t.Run("unresolved without event", func(t *testing.T) {
+		m := newMemStores()
+		reviewTestLog(t, m, nil, true)
+		svc := newTestService(m)
+
+		items := queue(t, svc)
+		if len(items) != 1 {
+			t.Fatalf("queue = %+v, want one unresolved row", items)
+		}
+		it := items[0]
+		if it.ProposalStatus != ProposalStatusPending || it.LastReviewAction != nil ||
+			it.ProposedProduct != nil || !it.NeedsReview {
+			t.Errorf("unresolved item = %+v, want pending/no action/no product", it)
+		}
+	})
+
+	t.Run("assigned proposal", func(t *testing.T) {
+		m := newMemStores()
+		p := newProduct(t, m)
+		log := reviewTestLog(t, m, &p.ID, true)
+		svc := newTestService(m)
+
+		if _, err := svc.BatchAssign(context.Background(), 9, BatchAssignRequest{
+			Assignments: []Assignment{{ID: log.ID, Action: "existing", ProductID: p.ID}},
+		}); err != nil {
+			t.Fatalf("assign: %v", err)
+		}
+		items := queue(t, svc)
+		if len(items) != 1 {
+			t.Fatalf("queue = %+v, want one assigned proposal", items)
+		}
+		it := items[0]
+		if it.ProposalStatus != ProposalStatusPending || it.LastReviewAction == nil ||
+			*it.LastReviewAction != ActionAssign {
+			t.Errorf("assigned item = %+v, want pending/assign", it)
+		}
+		if it.ProposedProduct == nil || it.ProposedProduct.ID != p.ID {
+			t.Errorf("proposed_product = %+v, want %d", it.ProposedProduct, p.ID)
+		}
+	})
+
+	t.Run("rejected proposal", func(t *testing.T) {
+		m := newMemStores()
+		p := newProduct(t, m)
+		log := reviewTestLog(t, m, &p.ID, true)
+		svc := newTestService(m)
+
+		if _, err := svc.BatchAssign(context.Background(), 9, BatchAssignRequest{
+			Assignments: []Assignment{{ID: log.ID, Action: "existing", ProductID: p.ID}},
+		}); err != nil {
+			t.Fatalf("assign: %v", err)
+		}
+		if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, ActionReject); err != nil {
+			t.Fatalf("reject: %v", err)
+		}
+		items := queue(t, svc)
+		if len(items) != 1 {
+			t.Fatalf("queue = %+v, want the rejected proposal still visible", items)
+		}
+		it := items[0]
+		if it.ProposalStatus != ProposalStatusRejected || it.LastReviewAction == nil ||
+			*it.LastReviewAction != ActionReject {
+			t.Errorf("rejected item = %+v, want rejected/reject", it)
+		}
+		if it.ProposedProduct == nil || it.ProposedProduct.ID != p.ID || !it.NeedsReview {
+			t.Errorf("rejected item lost its proposal: %+v", it)
+		}
+	})
+
+	t.Run("approved proposal leaves the queue", func(t *testing.T) {
+		m := newMemStores()
+		p := newProduct(t, m)
+		log := reviewTestLog(t, m, &p.ID, true)
+		svc := newTestService(m)
+
+		if _, err := svc.BatchAssign(context.Background(), 9, BatchAssignRequest{
+			Assignments: []Assignment{{ID: log.ID, Action: "existing", ProductID: p.ID}},
+		}); err != nil {
+			t.Fatalf("assign: %v", err)
+		}
+		if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, ActionApprove); err != nil {
+			t.Fatalf("approve: %v", err)
+		}
+		if items := queue(t, svc); len(items) != 0 {
+			t.Errorf("approved row still in queue: %+v", items)
+		}
+		latest, err := m.Events().LatestByPriceLogID(context.Background(), log.ID)
+		if err != nil {
+			t.Fatalf("latest event: %v", err)
+		}
+		if latest.Action != ActionApprove || log.NeedsReview {
+			t.Errorf("approval state = action %q needs_review %v, want approve/false", latest.Action, log.NeedsReview)
+		}
+	})
+}
+
 // TestReviewPriceLogApprovePublishesAndKeepsProvenance checks that approving a
 // valid proposal clears needs_review, appends the approve event and leaves the
 // original assignment's resolved_by/resolution_note untouched.
