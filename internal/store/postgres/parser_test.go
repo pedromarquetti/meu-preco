@@ -524,6 +524,10 @@ func TestPriceLogNeedsReview(t *testing.T) {
 	if !it.TotalPrice.Equal(decimal.NewFromFloat(5.00)) || it.Qty.Equal(decimal.Zero) {
 		t.Errorf("queue item money wrong: %+v", it)
 	}
+	// No review events: the row is legacy/unresolved, so the latest action is nil.
+	if it.LastReviewAction != nil {
+		t.Errorf("last_review_action = %v, want nil without events", *it.LastReviewAction)
+	}
 }
 
 func TestPriceLogSetProduct(t *testing.T) {

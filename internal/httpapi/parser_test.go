@@ -412,6 +412,18 @@ func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
 	if gotAssigned["resolution_note"] != "assign" || gotAssigned["needs_review"] != true {
 		t.Errorf("assigned audit fields = %+v", gotAssigned)
 	}
+	// Both rows have no event history in this fixture: proposal is pending and
+	// the latest review action is absent (omitted by omitempty).
+	if gotAssigned["proposal_status"] != "pending" || gotUnresolved["proposal_status"] != "pending" {
+		t.Errorf("proposal_status = %v/%v, want pending/pending",
+			gotAssigned["proposal_status"], gotUnresolved["proposal_status"])
+	}
+	if _, present := gotAssigned["last_review_action"]; present {
+		t.Errorf("assigned row exposes last_review_action without events: %v", gotAssigned["last_review_action"])
+	}
+	if _, present := gotUnresolved["last_review_action"]; present {
+		t.Errorf("unresolved row exposes last_review_action without events: %v", gotUnresolved["last_review_action"])
+	}
 
 	if _, present := gotUnresolved["proposed_product"]; present {
 		t.Errorf("unresolved row exposes a proposed_product: %+v", gotUnresolved)

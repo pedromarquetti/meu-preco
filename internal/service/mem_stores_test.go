@@ -710,6 +710,17 @@ func (s memPriceLogs) NeedsReview(_ context.Context, limit, offset int) ([]domai
 	})
 	total := int64(len(rows))
 	start, end := pageBounds(offset, limit, len(rows))
+
+	var eventsByLogID = make(map[int64]*domain.PriceLogEvent) // local map for this query only
+	for _, e := range m.priceLogEvents {
+		prev, exists := eventsByLogID[e.PriceLogID]
+		if !exists ||
+			e.Timestamp.After(prev.Timestamp) ||
+			(e.Timestamp.Equal(prev.Timestamp) && e.ID > prev.ID) {
+			eventsByLogID[e.PriceLogID] = e
+		}
+	}
+
 	var page []domain.ReviewItem
 	for _, l := range rows[start:end] {
 		nf := nfceByID(m, l.NfceID)
@@ -728,29 +739,36 @@ func (s memPriceLogs) NeedsReview(_ context.Context, limit, offset int) ([]domai
 				productUnit = &p.Unit
 			}
 		}
+
+		var lastAction *string
+		if latest, exists := eventsByLogID[l.ID]; exists {
+			lastAction = &latest.Action
+		}
+
 		page = append(page, domain.ReviewItem{
-			PriceLogID:     l.ID,
-			NfceID:         l.NfceID,
-			AccessKey:      accessKey,
-			Line:           l.Line,
-			Description:    l.DescriptionSnapshot,
-			StoreCode:      l.StoreCode,
-			CNPJBase:       cnpjBase,
-			StoreName:      storeName,
-			Unit:           l.Unit,
-			Qty:            l.Qty,
-			PricePerUnit:   l.PricePerUnit,
-			UnitPrice:      l.UnitPrice,
-			TotalPrice:     l.TotalPrice,
-			SuggestedStem:  "",
-			CreatedAt:      l.CreatedAt,
-			ProductID:      l.ProductID,
-			ProductKey:     productKey,
-			ProductGTIN:    productGTIN,
-			ProductName:    productName,
-			ProductUnit:    productUnit,
-			ResolvedBy:     l.ResolvedBy,
-			ResolutionNote: l.ResolutionNote,
+			PriceLogID:       l.ID,
+			NfceID:           l.NfceID,
+			AccessKey:        accessKey,
+			Line:             l.Line,
+			Description:      l.DescriptionSnapshot,
+			StoreCode:        l.StoreCode,
+			CNPJBase:         cnpjBase,
+			StoreName:        storeName,
+			Unit:             l.Unit,
+			Qty:              l.Qty,
+			PricePerUnit:     l.PricePerUnit,
+			UnitPrice:        l.UnitPrice,
+			TotalPrice:       l.TotalPrice,
+			SuggestedStem:    "",
+			CreatedAt:        l.CreatedAt,
+			ProductID:        l.ProductID,
+			ProductKey:       productKey,
+			ProductGTIN:      productGTIN,
+			ProductName:      productName,
+			ProductUnit:      productUnit,
+			ResolvedBy:       l.ResolvedBy,
+			ResolutionNote:   l.ResolutionNote,
+			LastReviewAction: lastAction,
 		})
 	}
 	return page, total, nil
@@ -859,7 +877,10 @@ func (s memPriceLogEvents) Create(_ context.Context, e *domain.PriceLogEvent) er
 func (s memPriceLogEvents) LatestByPriceLogID(_ context.Context, priceLogID int64) (*domain.PriceLogEvent, error) {
 	var latest *domain.PriceLogEvent
 	for _, e := range s.m.priceLogEvents {
-		if e.PriceLogID == priceLogID && (latest == nil || e.ID > latest.ID) {
+		if e.PriceLogID == priceLogID &&
+			(latest == nil ||
+				e.Timestamp.After(latest.Timestamp) ||
+				(e.Timestamp.Equal(latest.Timestamp) && e.ID > latest.ID)) {
 			latest = e
 		}
 	}

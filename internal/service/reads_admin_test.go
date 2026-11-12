@@ -389,6 +389,15 @@ func TestNeedsReviewQueueShowsProposedAssignments(t *testing.T) {
 	if err := m.PriceLogs().Create(context.Background(), assigned); err != nil {
 		t.Fatal(err)
 	}
+	assignEvent := &domain.PriceLogEvent{
+		PriceLogID:  assigned.ID,
+		ToProductID: &proposed.ID,
+		UserID:      assigner.ID,
+		Action:      ActionAssign,
+	}
+	if err := m.Events().Create(context.Background(), assignEvent); err != nil {
+		t.Fatal(err)
+	}
 	reviewNote := ActionNeedsReview
 	unresolved := &domain.PriceLog{
 		NfceID: nf.ID, Line: 2, DescriptionSnapshot: "FRUTA AVULSA",
@@ -436,6 +445,11 @@ func TestNeedsReviewQueueShowsProposedAssignments(t *testing.T) {
 	if !got.NeedsReview {
 		t.Error("queue item not marked needs_review")
 	}
+	if got.ProposalStatus != ProposalStatusPending ||
+		got.LastReviewAction == nil || *got.LastReviewAction != ActionAssign {
+		t.Errorf("assigned proposal state = %q/%v, want pending/assign",
+			got.ProposalStatus, got.LastReviewAction)
+	}
 
 	plain, ok := byID[unresolved.ID]
 	if !ok {
@@ -449,6 +463,10 @@ func TestNeedsReviewQueueShowsProposedAssignments(t *testing.T) {
 	}
 	if !plain.NeedsReview {
 		t.Error("unresolved queue item not marked needs_review")
+	}
+	if plain.ProposalStatus != ProposalStatusPending || plain.LastReviewAction != nil {
+		t.Errorf("unresolved proposal state = %q/%v, want pending/nil",
+			plain.ProposalStatus, plain.LastReviewAction)
 	}
 }
 

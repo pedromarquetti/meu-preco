@@ -3911,6 +3911,24 @@
             "type": "boolean",
             "description": "Always true in the queue; approval is what removes a row."
           },
+          "proposal_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "rejected"
+            ],
+            "description": "Current proposal state derived from the latest price-log event. Rejected proposals remain in the queue and can be reassigned."
+          },
+          "last_review_action": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "assign",
+              "reject",
+              "approve"
+            ],
+            "description": "Latest price-log event action, or null when no event exists."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -184,5 +185,62 @@ func TestNeedsReviewProjectsProposal(t *testing.T) {
 	}
 	if plain.ResolutionNote == nil || *plain.ResolutionNote != reviewNote {
 		t.Errorf("unresolved note = %v, want needs_review", plain.ResolutionNote)
+	}
+
+	// Rows without events keep a nil latest action (legacy/unresolved state).
+	if got.LastReviewAction != nil || plain.LastReviewAction != nil {
+		t.Errorf("latest action without events = %v/%v, want nil", got.LastReviewAction, plain.LastReviewAction)
+	}
+
+	// The queue projects the latest event for the row: assign then reject.
+	ts := time.Date(2024, 11, 2, 10, 0, 0, 0, time.UTC)
+	if _, err := s.Pool().Exec(ctx,
+		`INSERT INTO price_log_event (price_log_id, from_product_id, to_product_id, user_id, action, timestamp)
+		 VALUES ($1, $2, $3, $4, 'assign', $5)`,
+		assigned.ID, product.ID, product.ID, u.ID, ts); err != nil {
+		t.Fatalf("insert assign event: %v", err)
+	}
+	if _, err := s.Pool().Exec(ctx,
+		`INSERT INTO price_log_event (price_log_id, from_product_id, to_product_id, user_id, action, timestamp)
+		 VALUES ($1, $2, $3, $4, 'reject', $5)`,
+		assigned.ID, product.ID, product.ID, u.ID, ts.Add(time.Minute)); err != nil {
+		t.Fatalf("insert reject event: %v", err)
+	}
+
+	items, _, err = s.PriceLogs().NeedsReview(ctx, 20, 0)
+	if err != nil {
+		t.Fatalf("needs review after events: %v", err)
+	}
+	for _, it := range items {
+		if it.PriceLogID == assigned.ID {
+			if it.LastReviewAction == nil || *it.LastReviewAction != "reject" {
+				t.Errorf("latest action = %v, want reject", it.LastReviewAction)
+			}
+		}
+	}
+
+	// Equal timestamps resolve by event id: the later insert wins.
+	if _, err := s.Pool().Exec(ctx,
+		`INSERT INTO price_log_event (price_log_id, from_product_id, to_product_id, user_id, action, timestamp)
+		 VALUES ($1, $2, $3, $4, 'reject', $5)`,
+		unresolved.ID, product.ID, product.ID, u.ID, ts); err != nil {
+		t.Fatalf("insert tie reject event: %v", err)
+	}
+	if _, err := s.Pool().Exec(ctx,
+		`INSERT INTO price_log_event (price_log_id, from_product_id, to_product_id, user_id, action, timestamp)
+		 VALUES ($1, $2, $3, $4, 'assign', $5)`,
+		unresolved.ID, product.ID, product.ID, u.ID, ts); err != nil {
+		t.Fatalf("insert tie assign event: %v", err)
+	}
+	items, _, err = s.PriceLogs().NeedsReview(ctx, 20, 0)
+	if err != nil {
+		t.Fatalf("needs review after tie: %v", err)
+	}
+	for _, it := range items {
+		if it.PriceLogID == unresolved.ID {
+			if it.LastReviewAction == nil || *it.LastReviewAction != "assign" {
+				t.Errorf("tie-break latest action = %v, want assign (higher id)", it.LastReviewAction)
+			}
+		}
 	}
 }

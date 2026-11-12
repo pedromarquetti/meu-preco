@@ -237,11 +237,17 @@ func (r priceLogRepo) NeedsReview(ctx context.Context, limit, offset int) ([]dom
 		        l.unit, l.qty::text, l.price_per_unit::text,
 		        l.unit_price::text, l.total_price::text, l.created_at,
 		        l.product_id, p.product_key, p.gtin, p.name, p.unit,
-		        l.resolved_by, l.resolution_note
+		        l.resolved_by, l.resolution_note, e.action as last_review_action
 		 FROM price_logs l
 		 JOIN nfces n        ON n.id = l.nfce_id
 		 JOIN supermarkets s ON s.id = n.supermarket_id
 		 LEFT JOIN products p ON p.id = l.product_id
+		 LEFT JOIN LATERAL (
+			    SELECT action FROM price_log_event
+			    WHERE price_log_id = l.id
+			    ORDER BY timestamp DESC, id DESC
+			    LIMIT 1
+		  ) e ON TRUE
 		 WHERE l.needs_review = true
 		 ORDER BY l.created_at, l.id
 		 LIMIT $1 OFFSET $2`, limit, offset)
@@ -255,15 +261,17 @@ func (r priceLogRepo) NeedsReview(ctx context.Context, limit, offset int) ([]dom
 		it := domain.ReviewItem{}
 		var qty, unitPrice, totalPrice string
 		var ppu *string
+		var lastAction *string
 		if err := rows.Scan(&it.PriceLogID, &it.NfceID, &it.AccessKey, &it.Line, &it.Description,
 			&it.StoreCode, &it.CNPJBase, &it.StoreName,
 			&it.Unit, &qty, &ppu, &unitPrice, &totalPrice, &it.CreatedAt,
 			&it.ProductID, &it.ProductKey, &it.ProductGTIN, &it.ProductName, &it.ProductUnit,
-			&it.ResolvedBy, &it.ResolutionNote); err != nil {
+			&it.ResolvedBy, &it.ResolutionNote, &lastAction); err != nil {
 			return nil, 0, err
 		}
 		it.Qty = decimal.RequireFromString(qty)
 		it.UnitPrice = decimal.RequireFromString(unitPrice)
+		it.LastReviewAction = lastAction
 		it.TotalPrice = decimal.RequireFromString(totalPrice)
 		if ppu != nil {
 			v := decimal.RequireFromString(*ppu)
