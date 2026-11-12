@@ -17,6 +17,7 @@ const maxAdminBody = 1 << 20 // 1 MiB is generous for a batch-assign body
 // adminAPI serves the admin curation endpoints, all behind RequireRole("admin"):
 //
 //	GET    /api/v1/admin/users                       — list users
+//	GET    /api/v1/admin/user/{id}                   — one user's details
 //	PATCH  /api/v1/admin/users/{id}/role             — promote/demote
 //	GET    /api/v1/admin/products/needs-review       — review queue
 //	POST   /api/v1/admin/products/batch-assign       — resolve queue rows
@@ -44,6 +45,19 @@ func (api *adminAPI) listUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.Respond(w, http.StatusOK, res)
+}
+
+func (api *adminAPI) getUser(w http.ResponseWriter, r *http.Request) {
+	userID, ok := pathID(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	usr, err := api.svc.GetUser(r.Context(), userID)
+	if err != nil {
+		respondServiceError(w, r, err)
+		return
+	}
+	httpx.Respond(w, http.StatusOK, usr)
 }
 
 func (api *adminAPI) patchRole(w http.ResponseWriter, r *http.Request) {

@@ -317,6 +317,55 @@ func TestRoleGating(t *testing.T) {
 	}
 }
 
+// TestAdminGetUser covers GET /admin/user/{id}: admins receive the safe user
+// projection, while unknown ids, malformed ids and non-admins are rejected.
+func TestAdminGetUser(t *testing.T) {
+	st := integrationStore(t)
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	ctx := context.Background()
+
+	admin := &domain.User{Name: "Root", Email: "root@example.com", PasswordHash: "h", Role: "admin"}
+	target := &domain.User{Name: "Alice", Email: "alice@example.com", PasswordHash: "h", Role: "user"}
+	if err := st.Users().Create(ctx, admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	if err := st.Users().Create(ctx, target); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	api := roleRouter(t, st, pgResolver{}, admin.ID, "admin")
+	rec, out := do(t, api, http.MethodGet, fmt.Sprintf("/api/v1/admin/user/%d", target.ID), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get user = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if jint(out["id"]) != target.ID || out["email"] != target.Email || out["role"] != "user" {
+		t.Errorf("get user = %+v", out)
+	}
+	if _, leak := out["password_hash"]; leak {
+		t.Errorf("get user leaked password_hash: %+v", out)
+	}
+	if out["created_at"] == nil {
+		t.Errorf("get user missing created_at: %+v", out)
+	}
+
+	rec, out = do(t, api, http.MethodGet, "/api/v1/admin/user/999999", "")
+	if rec.Code != http.StatusNotFound || out["error"].(map[string]any)["code"] != "not_found" {
+		t.Errorf("missing user = %d (%s), want 404 not_found", rec.Code, rec.Body.String())
+	}
+	rec, out = do(t, api, http.MethodGet, "/api/v1/admin/user/0", "")
+	if rec.Code != http.StatusBadRequest || out["error"].(map[string]any)["code"] != "invalid_filter" {
+		t.Errorf("bad id = %d (%s), want 400 invalid_filter", rec.Code, rec.Body.String())
+	}
+
+	unpriv := roleRouter(t, st, pgResolver{}, target.ID, "user")
+	rec, _ = do(t, unpriv, http.MethodGet, fmt.Sprintf("/api/v1/admin/user/%d", target.ID), "")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("get user as non-admin = %d (%s), want 403", rec.Code, rec.Body.String())
+	}
+}
+
 // TestAdminReviewQueueShowsProposedAssignment proves the admin queue carries
 // the product a user proposed (plus who proposed it), while the pending row
 // stays invisible to public product reads and non-admins cannot call the queue.

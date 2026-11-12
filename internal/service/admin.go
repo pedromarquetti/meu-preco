@@ -691,10 +691,32 @@ func (s *Service) ListUsers(ctx context.Context, page, limit int) (*UserPage, er
 		return nil, err
 	}
 	out := make([]UserView, 0, len(items))
-	for _, u := range items {
-		out = append(out, UserView{ID: u.ID, Name: u.Name, Email: u.Email, Role: u.Role, CreatedAt: u.CreatedAt})
+	for i := range items {
+		out = append(out, newUserView(&items[i]))
 	}
 	return &UserPage{Items: out, Page: newPage(page, limit, total)}, nil
+}
+
+// GetUser implements GET /admin/user/{id}: it returns the admin projection of
+// one account, never the password hash.
+func (s *Service) GetUser(ctx context.Context, id int64) (*UserView, error) {
+	if id <= 0 {
+		return nil, ErrUserNotFound
+	}
+	u, err := s.Stores.Users().GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	view := newUserView(u)
+	return &view, nil
+}
+
+// newUserView projects a domain user onto the admin-safe response shape.
+func newUserView(u *domain.User) UserView {
+	return UserView{ID: u.ID, Name: u.Name, Email: u.Email, Role: u.Role, CreatedAt: u.CreatedAt}
 }
 
 // UpdateUserRole implements PATCH /admin/users/{id}/role. An admin may not

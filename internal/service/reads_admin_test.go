@@ -916,6 +916,20 @@ func TestListUsersAndUpdateRole(t *testing.T) {
 		t.Errorf("total = %d, want 2", page.Page.Total)
 	}
 
+	detail, err := svc.GetUser(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if detail.ID != target.ID || detail.Email != target.Email || detail.Role != target.Role {
+		t.Errorf("get user = %+v, want id/email/role of target", detail)
+	}
+	if _, err := svc.GetUser(context.Background(), 404); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("missing user err = %v, want ErrUserNotFound", err)
+	}
+	if _, err := svc.GetUser(context.Background(), 0); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("zero id err = %v, want ErrUserNotFound", err)
+	}
+
 	if err := svc.UpdateUserRole(context.Background(), admin.ID, target.ID, "admin"); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
