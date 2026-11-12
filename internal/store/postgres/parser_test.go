@@ -530,7 +530,7 @@ func TestPriceLogNeedsReview(t *testing.T) {
 	}
 }
 
-func TestPriceLogSetProduct(t *testing.T) {
+func TestPriceLogSetProductProposal(t *testing.T) {
 	s := testStore
 	truncate(t)
 	ctx := context.Background()
@@ -553,21 +553,21 @@ func TestPriceLogSetProduct(t *testing.T) {
 		t.Fatalf("create product: %v", err)
 	}
 
-	if err := s.PriceLogs().SetProduct(ctx, l.ID, p.ID, admin.ID, "match by stem"); err != nil {
-		t.Fatalf("set product: %v", err)
+	if err := s.PriceLogs().SetProductProposal(ctx, l.ID, p.ID, admin.ID, "match by stem"); err != nil {
+		t.Fatalf("set product proposal: %v", err)
 	}
 	got, err := s.PriceLogs().GetByID(ctx, l.ID)
 	if err != nil {
 		t.Fatalf("get log: %v", err)
 	}
 	if got.ProductID == nil || *got.ProductID != p.ID ||
-		got.NeedsReview || got.ResolvedBy == nil || *got.ResolvedBy != admin.ID ||
+		!got.NeedsReview || got.ResolvedBy == nil || *got.ResolvedBy != admin.ID ||
 		got.ResolutionNote == nil || *got.ResolutionNote != "match by stem" {
-		t.Errorf("log after assign = %+v", got)
+		t.Errorf("log after proposal = %+v, want wired and still needs_review", got)
 	}
 
 	// A stale log id is a hard-not-found for the batch tx.
-	if err := s.PriceLogs().SetProduct(ctx, 999999, p.ID, admin.ID, "x"); !errors.Is(err, domain.ErrNotFound) {
+	if err := s.PriceLogs().SetProductProposal(ctx, 999999, p.ID, admin.ID, "x"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("set missing = %v, want ErrNotFound", err)
 	}
 }

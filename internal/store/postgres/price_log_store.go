@@ -295,14 +295,16 @@ func (r priceLogRepo) RePointProduct(ctx context.Context, fromID, toID int64) (i
 	return tag.RowsAffected(), nil
 }
 
-// SetProduct re-points one log to a product and clears its needs_review flag
-// (admin batch-assign).
-func (r priceLogRepo) SetProduct(ctx context.Context, priceLogID, productID int64, resolvedBy int64, note string) error {
+// SetProductProposal updates the product proposed for one log during admin
+// review (batch-assign). needs_review is deliberately left untouched: the row
+// stays in the review queue until an explicit approve decision publishes it, so
+// a rejected proposal can be reassigned.
+func (r priceLogRepo) SetProductProposal(ctx context.Context, priceLogID, productID int64, resolvedBy int64, note string) error {
 	tag, err := r.db.Exec(ctx,
-		`UPDATE price_logs SET product_id = $2, needs_review = false, resolved_by = $3, resolution_note = $4
+		`UPDATE price_logs SET product_id = $2, resolved_by = $3, resolution_note = $4
 		 WHERE id = $1`, priceLogID, productID, resolvedBy, note)
 	if err != nil {
-		return err
+		return translateError(err)
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound

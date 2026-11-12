@@ -862,7 +862,13 @@ paths:
   /api/v1/admin/products/batch-assign:
     post:
       tags: [admin]
-      summary: Resolve needs-review rows (admin)
+      summary: Propose products for needs-review rows (admin)
+      description: |
+        Records the product proposed for each queued receipt line. The update
+        keeps `needs_review` true: batch assignment only changes the pending
+        proposal, so a rejected proposal can be reassigned. Publication happens
+        through a separate approve decision. Every successful proposal update
+        appends an `assign` event; one invalid entry rolls back the whole batch.
       requestBody:
         required: true
         content:
@@ -1964,7 +1970,12 @@ components:
       required: [id, action]
       properties:
         id: { type: integer, description: price_log_id }
-        action: { type: string, enum: [existing, create] }
+        action:
+          type: string
+          enum: [existing, create]
+          description: |
+            `existing` proposes an already-known product (via `product_id`);
+            `create` inserts/reuses a product from `name`/`brand`/`unit`.
         product_id: { type: integer }
         name: { type: string }
         brand: { type: string }
@@ -1979,8 +1990,12 @@ components:
     BatchAssignResult:
       type: object
       properties:
-        assigned: { type: integer }
-        created: { type: integer }
+        assigned:
+          type: integer
+          description: proposals updated (rows stay in the review queue until approved)
+        created:
+          type: integer
+          description: products inserted on the fly during this batch
     SynonymRequest:
       type: object
       required: [synonym, canonical_name]

@@ -522,7 +522,8 @@ func TestAdminCuration(t *testing.T) {
 		t.Errorf("queue item missing suggested_stem: %+v", q)
 	}
 
-	// 2. Batch-assign with a fresh product empties the queue.
+	// 2. Batch-assign records a pending proposal: the queue keeps the row with
+	// the proposed product until an explicit approve publishes it.
 	rec, out = do(t, api, http.MethodPost, "/api/v1/admin/products/batch-assign",
 		fmt.Sprintf(`{"assignments":[{"id":%d,"action":"create","name":"MAÇA FUJI","brand":"IMPORTADA","unit":"kg"}]}`, reviewLog.ID))
 	if rec.Code != http.StatusOK {
@@ -532,8 +533,26 @@ func TestAdminCuration(t *testing.T) {
 		t.Errorf("batch result = %+v", out)
 	}
 	rec, out = do(t, api, http.MethodGet, "/api/v1/admin/products/needs-review?limit=50", "")
+	if rec.Code != http.StatusOK || jint(out["page"].(map[string]any)["total"]) != 1 {
+		t.Errorf("queue after assign = %d (%s), want the pending proposal", rec.Code, rec.Body.String())
+	}
+	pend := out["items"].([]any)[0].(map[string]any)
+	if pend["proposal_status"] != "pending" || pend["last_review_action"] != "assign" || pend["needs_review"] != true {
+		t.Errorf("pending proposal = %+v", pend)
+	}
+	if pp, ok := pend["proposed_product"].(map[string]any); !ok || jint(pp["id"]) == 0 {
+		t.Errorf("pending proposal missing product: %+v", pend)
+	}
+
+	// Approve publishes the proposal and empties the queue.
+	rec, _ = do(t, api, http.MethodPost, fmt.Sprintf("/api/v1/admin/products/price-logs/%d/review", reviewLog.ID),
+		`{"action":"approve"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approve = %d (%s)", rec.Code, rec.Body.String())
+	}
+	rec, out = do(t, api, http.MethodGet, "/api/v1/admin/products/needs-review?limit=50", "")
 	if rec.Code != http.StatusOK || jint(out["page"].(map[string]any)["total"]) != 0 {
-		t.Errorf("queue after assign = %d (%s)", rec.Code, rec.Body.String())
+		t.Errorf("queue after approve = %d (%s)", rec.Code, rec.Body.String())
 	}
 
 	// 3. A malformed batch (missing ids/actions) is a clean 400.

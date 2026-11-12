@@ -138,10 +138,12 @@ type PriceLogStore interface {
 	// RePointProduct re-attaches every log to another product (admin merge);
 	// returns how many logs moved.
 	RePointProduct(ctx context.Context, fromID, toID int64) (int64, error)
-	// SetProduct re-points one log to a product and clears its needs_review
-	// flag (admin batch-assign). heldBy frees the "(user_id, access_key)
-	// pending" slot after the review, so the queue stays clean.
-	SetProduct(ctx context.Context, priceLogID, productID int64, resolvedBy int64, note string) error
+	// SetProductProposal updates the product proposed for one price log during
+	// admin review (batch-assign). It records the resolver and note but keeps
+	// needs_review true: assignment only changes the pending proposal, while
+	// publication is a separate approve decision. Returns ErrNotFound when the
+	// log does not exist.
+	SetProductProposal(ctx context.Context, priceLogID, productID int64, resolvedBy int64, note string) error
 	// SetNeedsReview changes only the materialized review state. It preserves
 	// the original assignment provenance.
 	SetNeedsReview(ctx context.Context, priceLogID int64, needsReview bool) error

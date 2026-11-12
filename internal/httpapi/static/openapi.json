@@ -1674,7 +1674,8 @@
         "tags": [
           "admin"
         ],
-        "summary": "Resolve needs-review rows (admin)",
+        "summary": "Propose products for needs-review rows (admin)",
+        "description": "Records the product proposed for each queued receipt line. The update\nkeeps `needs_review` true: batch assignment only changes the pending\nproposal, so a rejected proposal can be reassigned. Publication happens\nthrough a separate approve decision. Every successful proposal update\nappends an `assign` event; one invalid entry rolls back the whole batch.\n",
         "requestBody": {
           "required": true,
           "content": {
@@ -3917,7 +3918,7 @@
               "pending",
               "rejected"
             ],
-            "description": "Current proposal state derived from the latest price-log event. Rejected proposals remain in the queue and can be reassigned."
+            "description": "Current proposal state derived from the latest price-log event. Rejected proposals remain in the queue and can be reassigned.\n"
           },
           "last_review_action": {
             "type": "string",
@@ -4004,7 +4005,8 @@
             "enum": [
               "existing",
               "create"
-            ]
+            ],
+            "description": "`existing` proposes an already-known product (via `product_id`);\n`create` inserts/reuses a product from `name`/`brand`/`unit`.\n"
           },
           "product_id": {
             "type": "integer"
@@ -4038,10 +4040,12 @@
         "type": "object",
         "properties": {
           "assigned": {
-            "type": "integer"
+            "type": "integer",
+            "description": "proposals updated (rows stay in the review queue until approved)"
           },
           "created": {
-            "type": "integer"
+            "type": "integer",
+            "description": "products inserted on the fly during this batch"
           }
         }
       },

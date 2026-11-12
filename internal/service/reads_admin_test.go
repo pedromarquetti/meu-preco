@@ -500,16 +500,16 @@ func TestBatchAssignExistingAndCreate(t *testing.T) {
 	}
 
 	got0, _ := m.PriceLogs().GetByID(context.Background(), logs[0].ID)
-	if got0.ProductID == nil || *got0.ProductID != existing.ID || got0.NeedsReview {
-		t.Errorf("log 0 = %+v, want wired to existing product and cleared", got0)
+	if got0.ProductID == nil || *got0.ProductID != existing.ID || !got0.NeedsReview {
+		t.Errorf("log 0 = %+v, want wired to existing product and still pending review", got0)
 	}
 	if got0.ResolvedBy == nil || *got0.ResolvedBy != admin.ID || got0.ResolutionNote == nil || *got0.ResolutionNote != "existing" {
 		t.Errorf("log 0 audit = resolved_by %v note %v, want admin/existing", got0.ResolvedBy, got0.ResolutionNote)
 	}
 
 	got1, _ := m.PriceLogs().GetByID(context.Background(), logs[1].ID)
-	if got1.ProductID == nil || got1.NeedsReview {
-		t.Fatalf("log 1 = %+v, want wired and cleared", got1)
+	if got1.ProductID == nil || !got1.NeedsReview {
+		t.Fatalf("log 1 = %+v, want wired and still pending review", got1)
 	}
 	created, err := m.Products().GetByID(context.Background(), *got1.ProductID)
 	if err != nil {
@@ -520,6 +520,18 @@ func TestBatchAssignExistingAndCreate(t *testing.T) {
 	}
 	if created.CreatedBy == nil || *created.CreatedBy != admin.ID {
 		t.Errorf("created_by = %v, want admin", created.CreatedBy)
+	}
+
+	// Every successful proposal update appends an assign event with the new
+	// product as target and no previous product (first proposal).
+	for _, l := range logs {
+		ev, err := m.Events().LatestByPriceLogID(context.Background(), l.ID)
+		if err != nil {
+			t.Fatalf("latest event for log %d: %v", l.ID, err)
+		}
+		if ev.Action != "assign" || ev.FromProductID != nil || ev.ToProductID == nil {
+			t.Errorf("event for log %d = %+v, want assign from nil to product", l.ID, ev)
+		}
 	}
 }
 
@@ -620,6 +632,78 @@ func TestBatchAssignAtomicRollback(t *testing.T) {
 	}
 	if _, err := m.Products().GetByKey(context.Background(), product.CommodityKey("banana prata", "KG", "")); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("created product survived a rolled-back batch: %v", err)
+	}
+}
+
+// TestBatchAssignReassignmentAfterReject: assign A -> reject -> assign B must
+// leave the proposal pending, expose product B and the latest assign action, and
+// record events with the correct from/to products.
+func TestBatchAssignReassignmentAfterReject(t *testing.T) {
+	m := newMemStores()
+	admin := &domain.User{Email: "admin@example.com", Role: "admin"}
+	if err := m.Users().Create(context.Background(), admin); err != nil {
+		t.Fatal(err)
+	}
+	sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO"}
+	log := mustReviewLogs(t, m, sm, 1)[0]
+	svc := newTestService(m)
+
+	a := &domain.Product{ProductKey: "banana-a", Name: "BANANA A", Unit: "KG"}
+	b := &domain.Product{ProductKey: "banana-b", Name: "BANANA B", Unit: "KG"}
+	for _, p := range []*domain.Product{a, b} {
+		if _, err := m.Products().Create(context.Background(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// assign product A
+	if _, err := svc.BatchAssign(context.Background(), admin.ID, BatchAssignRequest{
+		Assignments: []Assignment{{ID: log.ID, Action: "existing", ProductID: a.ID}},
+	}); err != nil {
+		t.Fatalf("assign A: %v", err)
+	}
+
+	// reject product A
+	if _, err := svc.ReviewPriceLog(context.Background(), admin.ID, log.ID, ActionReject); err != nil {
+		t.Fatalf("reject A: %v", err)
+	}
+
+	// reassign product B after the rejection
+	if _, err := svc.BatchAssign(context.Background(), admin.ID, BatchAssignRequest{
+		Assignments: []Assignment{{ID: log.ID, Action: "existing", ProductID: b.ID}},
+	}); err != nil {
+		t.Fatalf("assign B: %v", err)
+	}
+
+	q, err := svc.NeedsReviewQueue(context.Background(), 1, 20)
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	if len(q.Items) != 1 {
+		t.Fatalf("queue = %+v, want one pending proposal", q.Items)
+	}
+	item := q.Items[0]
+	if item.ProposedProduct == nil || item.ProposedProduct.ID != b.ID {
+		t.Errorf("proposed product = %+v, want B (%d)", item.ProposedProduct, b.ID)
+	}
+	if item.ProposalStatus != ProposalStatusPending {
+		t.Errorf("proposal_status = %q, want %q", item.ProposalStatus, ProposalStatusPending)
+	}
+	if item.LastReviewAction == nil || *item.LastReviewAction != "assign" {
+		t.Errorf("last_review_action = %v, want assign", item.LastReviewAction)
+	}
+	if !item.NeedsReview {
+		t.Error("needs_review = false, want true")
+	}
+
+	// The reassignment event must point from A to B.
+	ev, err := m.Events().LatestByPriceLogID(context.Background(), log.ID)
+	if err != nil {
+		t.Fatalf("latest event: %v", err)
+	}
+	if ev.Action != "assign" || ev.FromProductID == nil || *ev.FromProductID != a.ID ||
+		ev.ToProductID == nil || *ev.ToProductID != b.ID {
+		t.Errorf("reassign event = %+v, want assign A->B", ev)
 	}
 }
 

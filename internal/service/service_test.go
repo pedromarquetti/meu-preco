@@ -345,8 +345,8 @@ func TestCommitExplicitSkipWritesNothing(t *testing.T) {
 }
 
 // TestCommittedReviewRowCanBeAssigned: a review row persisted by an unresolved
-// commit is surfaced in the admin queue and can be resolved through the
-// existing batch-assign path, clearing needs_review and recording the resolver.
+// commit is surfaced in the admin queue and can be proposed through the
+// batch-assign path (which keeps needs_review) and then published by approve.
 func TestCommittedReviewRowCanBeAssigned(t *testing.T) {
 	m := newMemStores()
 	m.seedKnownProduct()
@@ -391,19 +391,34 @@ func TestCommittedReviewRowCanBeAssigned(t *testing.T) {
 	if assigned == nil || assigned.ProductID == nil || *assigned.ProductID != target.ID {
 		t.Fatalf("line 2 = %+v, want product %d", assigned, target.ID)
 	}
-	if assigned.NeedsReview {
-		t.Error("assigned review row still flagged needs_review")
+	if !assigned.NeedsReview {
+		t.Error("batch assignment published the row; needs_review should stay true until approve")
 	}
 	if assigned.ResolvedBy == nil || *assigned.ResolvedBy != admin.ID {
 		t.Errorf("resolved_by = %v, want admin %d", assigned.ResolvedBy, admin.ID)
 	}
 
-	after, err := svc.NeedsReviewQueue(context.Background(), 1, 20)
+	pending, err := svc.NeedsReviewQueue(context.Background(), 1, 20)
 	if err != nil {
 		t.Fatalf("queue after assign: %v", err)
 	}
+	if len(pending.Items) != 1 {
+		t.Fatalf("review queue after assign = %+v, want the proposal still pending", pending.Items)
+	}
+	if pending.Items[0].ProposalStatus != ProposalStatusPending || pending.Items[0].LastReviewAction == nil || *pending.Items[0].LastReviewAction != "assign" {
+		t.Errorf("queue item after assign = %+v, want pending proposal with assign action", pending.Items[0])
+	}
+
+	if _, err := svc.ReviewPriceLog(context.Background(), admin.ID, q.Items[0].PriceLogID, ActionApprove); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	after, err := svc.NeedsReviewQueue(context.Background(), 1, 20)
+	if err != nil {
+		t.Fatalf("queue after approve: %v", err)
+	}
 	if len(after.Items) != 0 {
-		t.Errorf("review queue still has %d items after assignment", len(after.Items))
+		t.Errorf("review queue still has %d items after approval", len(after.Items))
 	}
 }
 

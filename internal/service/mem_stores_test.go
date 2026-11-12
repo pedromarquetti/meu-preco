@@ -142,7 +142,7 @@ func copyMap[M ~map[K]V, K comparable, V any](src M) M {
 }
 
 // deepCopyMap snapshots the pointed-to values too, so a failed Tx rollback
-// undoes in-place mutations (Update, SetProduct, RePoint*) and not just row
+// undoes in-place mutations (Update, SetProductProposal, RePoint*) and not just row
 // additions/deletions — mirroring a real database transaction.
 func deepCopyMap[M ~map[K]*V, K comparable, V any](src M) M {
 	dst := make(M, len(src))
@@ -785,11 +785,10 @@ func (s memPriceLogs) RePointProduct(_ context.Context, fromID, toID int64) (int
 	return n, nil
 }
 
-func (s memPriceLogs) SetProduct(_ context.Context, priceLogID, productID int64, resolvedBy int64, note string) error {
+func (s memPriceLogs) SetProductProposal(_ context.Context, priceLogID, productID int64, resolvedBy int64, note string) error {
 	for _, l := range s.m.priceLogs {
 		if l.ID == priceLogID {
 			l.ProductID = &productID
-			l.NeedsReview = false
 			l.ResolvedBy = &resolvedBy
 			l.ResolutionNote = &note
 			return nil

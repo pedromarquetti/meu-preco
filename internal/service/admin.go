@@ -85,7 +85,9 @@ type BatchAssignRequest struct {
 	Assignments []Assignment `json:"assignments"`
 }
 
-// BatchAssignResult reports the atomic outcome of a batch.
+// BatchAssignResult reports the atomic outcome of a batch. Assigned counts
+// proposals updated (the rows stay in the review queue until approved);
+// Created counts products inserted on the fly.
 type BatchAssignResult struct {
 	Assigned int64 `json:"assigned"`
 	Created  int64 `json:"created"`
@@ -325,10 +327,13 @@ func toSynonymView(row *domain.CommoditySynonym) *SynonymView {
 	}
 }
 
-// BatchAssign implements POST /admin/products/batch-assign atomically: every
+// BatchAssign implements POST /admin/products/batch-assign atomically. Every
 // assignment resolves to a product id (existing validated, create inserted via
-// its commodity identity), then re-points the price_log and clears its
-// needs_review flag. One bad entry aborts the whole unit.
+// its commodity identity) and records it as the price_log's proposed product.
+// The update keeps needs_review true: batch assignment no longer publishes a
+// line, it only changes the pending proposal, which an explicit approve later
+// publishes. Each successful update appends an "assign" event in the same
+// transaction, so a failure leaves neither proposals nor events behind.
 func (s *Service) BatchAssign(ctx context.Context, adminID int64, req BatchAssignRequest) (*BatchAssignResult, error) {
 	if len(req.Assignments) == 0 {
 		return nil, ErrInvalidAssignment
@@ -361,22 +366,34 @@ func (s *Service) BatchAssign(ctx context.Context, adminID int64, req BatchAssig
 	res := &BatchAssignResult{}
 	err := s.Stores.Tx(ctx, func(tx domain.Stores) error {
 		for i := range req.Assignments {
-			a := &req.Assignments[i]
+			assignment := &req.Assignments[i]
+
+			// Load the current row before mutating so the assign event records
+			// the previous product (nil on a first proposal) and a missing log
+			// aborts the batch. The row lock serializes competing admin actions.
+			log, err := tx.PriceLogs().GetByIDForUpdate(ctx, assignment.ID)
+			if err != nil {
+				if errors.Is(err, domain.ErrNotFound) {
+					return ErrInvalidAssignment
+				}
+				return err
+			}
+			fromProductID := log.ProductID
 
 			var productID int64
-			switch a.Action {
+			switch assignment.Action {
 			case "existing":
 				// The target product must exist: assigning a dangling id would
 				// silently poison future history reads.
-				if _, err := tx.Products().GetByID(ctx, a.ProductID); err != nil {
+				if _, err := tx.Products().GetByID(ctx, assignment.ProductID); err != nil {
 					if errors.Is(err, domain.ErrNotFound) {
 						return ErrInvalidAssignment
 					}
 					return err
 				}
-				productID = a.ProductID
+				productID = assignment.ProductID
 			case "create":
-				p, created, err := s.createAdminProduct(ctx, tx, adminID, a.Name, a.Brand, a.Unit)
+				p, created, err := s.createAdminProduct(ctx, tx, adminID, assignment.Name, assignment.Brand, assignment.Unit)
 
 				if err != nil {
 					return err
@@ -388,10 +405,21 @@ func (s *Service) BatchAssign(ctx context.Context, adminID int64, req BatchAssig
 				}
 			}
 
-			if err := tx.PriceLogs().SetProduct(ctx, a.ID, productID, adminID, a.Action); err != nil {
+			if err := tx.PriceLogs().SetProductProposal(ctx, assignment.ID, productID, adminID, assignment.Action); err != nil {
 				if errors.Is(err, domain.ErrNotFound) {
 					return ErrInvalidAssignment
 				}
+				return err
+			}
+
+			toProductID := productID
+			if err := tx.Events().Create(ctx, &domain.PriceLogEvent{
+				PriceLogID:    assignment.ID,
+				FromProductID: fromProductID,
+				ToProductID:   &toProductID,
+				UserID:        adminID,
+				Action:        "assign",
+			}); err != nil {
 				return err
 			}
 			res.Assigned++
