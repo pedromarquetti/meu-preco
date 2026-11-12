@@ -75,16 +75,31 @@ func TestReviewPriceLogApproveAndReject(t *testing.T) {
 	}
 }
 
-func TestReviewPriceLogApprovalRequiresProductAndIsAtomic(t *testing.T) {
+func TestReviewPriceLogRequiresProductAndIsAtomic(t *testing.T) {
 	m := newMemStores()
 	log := reviewTestLog(t, m, nil, true)
 	svc := newTestService(m)
 
 	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "approve"); !errors.Is(err, ErrMissingProductForApproval) {
-		t.Fatalf("error = %v, want ErrMissingProductForApproval", err)
+		t.Fatalf("approve error = %v, want ErrMissingProductForApproval", err)
+	}
+	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "reject"); !errors.Is(err, ErrMissingProductForRejection) {
+		t.Fatalf("reject error = %v, want ErrMissingProductForRejection", err)
 	}
 	if !log.NeedsReview || len(m.priceLogEvents) != 0 {
-		t.Fatalf("failed approval changed state: log=%+v events=%d", log, len(m.priceLogEvents))
+		t.Fatalf("failed review changed state: log=%+v events=%d", log, len(m.priceLogEvents))
+	}
+
+	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "bad"); !errors.Is(err, ErrInvalidReviewAction) {
+		t.Fatalf("error = %v, want ErrInvalidReviewAction", err)
+	}
+
+	p := &domain.Product{ProductKey: "lime", Name: "Limao", Unit: "KG"}
+	if _, err := m.Products().Create(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PriceLogs().SetProductProposal(context.Background(), log.ID, p.ID, 9, ActionAssign); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "reject"); err != nil {
@@ -96,7 +111,120 @@ func TestReviewPriceLogApprovalRequiresProductAndIsAtomic(t *testing.T) {
 	if len(m.priceLogEvents) != 1 {
 		t.Fatalf("repeated rejection created an event: %d", len(m.priceLogEvents))
 	}
-	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, "bad"); !errors.Is(err, ErrInvalidReviewAction) {
-		t.Fatalf("error = %v, want ErrInvalidReviewAction", err)
+}
+
+// TestReviewPriceLogApprovePublishesAndKeepsProvenance checks that approving a
+// valid proposal clears needs_review, appends the approve event and leaves the
+// original assignment's resolved_by/resolution_note untouched.
+func TestReviewPriceLogApprovePublishesAndKeepsProvenance(t *testing.T) {
+	m := newMemStores()
+	p := &domain.Product{ProductKey: "lime", Name: "Limao", Unit: "KG"}
+	if _, err := m.Products().Create(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	productID := p.ID
+	log := reviewTestLog(t, m, &productID, true)
+	resolvedBy, note := int64(7), ActionAssign
+	log.ResolvedBy, log.ResolutionNote = &resolvedBy, &note
+	svc := newTestService(m)
+
+	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, ActionApprove); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if log.NeedsReview {
+		t.Error("approval did not clear needs_review")
+	}
+	if log.ResolvedBy == nil || *log.ResolvedBy != resolvedBy ||
+		log.ResolutionNote == nil || *log.ResolutionNote != note {
+		t.Errorf("approval changed assignment provenance: resolved_by=%v note=%v", log.ResolvedBy, log.ResolutionNote)
+	}
+	if len(m.priceLogEvents) != 1 {
+		t.Fatalf("events = %d, want one approve event", len(m.priceLogEvents))
+	}
+	ev := m.priceLogEvents[0]
+	if ev.Action != ActionApprove || ev.UserID != 9 ||
+		ev.FromProductID == nil || *ev.FromProductID != p.ID ||
+		ev.ToProductID == nil || *ev.ToProductID != p.ID {
+		t.Errorf("approve event = %+v, want approve %d->%d by user 9", ev, p.ID, p.ID)
+	}
+
+	if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, ActionApprove); !errors.Is(err, ErrPriceLogAlreadyProcessed) {
+		t.Fatalf("second approval error = %v, want ErrPriceLogAlreadyProcessed", err)
+	}
+}
+
+// TestReviewPriceLogReassignmentResetsDecisionState verifies that a new assign
+// event after a rejection lets the admin decide again: reject -> assign ->
+// reject and reject -> assign -> approve must both be accepted.
+func TestReviewPriceLogReassignmentResetsDecisionState(t *testing.T) {
+	tests := []struct {
+		name  string
+		final string
+	}{
+		{name: "reassign then reject", final: ActionReject},
+		{name: "reassign then approve", final: ActionApprove},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newMemStores()
+			a := &domain.Product{ProductKey: "banana-a", Name: "BANANA A", Unit: "KG"}
+			b := &domain.Product{ProductKey: "banana-b", Name: "BANANA B", Unit: "KG"}
+			for _, p := range []*domain.Product{a, b} {
+				if _, err := m.Products().Create(context.Background(), p); err != nil {
+					t.Fatal(err)
+				}
+			}
+			productID := a.ID
+			log := reviewTestLog(t, m, &productID, true)
+			svc := newTestService(m)
+
+			assign := func(productID int64) {
+				t.Helper()
+				if _, err := svc.BatchAssign(context.Background(), 9, BatchAssignRequest{
+					Assignments: []Assignment{{ID: log.ID, Action: "existing", ProductID: productID}},
+				}); err != nil {
+					t.Fatalf("assign %d: %v", productID, err)
+				}
+			}
+
+			assign(a.ID)
+			if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, ActionReject); err != nil {
+				t.Fatalf("reject A: %v", err)
+			}
+			assign(b.ID)
+
+			if _, err := svc.ReviewPriceLog(context.Background(), 9, log.ID, tt.final); err != nil {
+				t.Fatalf("%s after reassignment: %v", tt.final, err)
+			}
+			latest, err := m.Events().LatestByPriceLogID(context.Background(), log.ID)
+			if err != nil {
+				t.Fatalf("latest event: %v", err)
+			}
+			if latest.Action != tt.final {
+				t.Errorf("latest action = %q, want %q", latest.Action, tt.final)
+			}
+			if tt.final == ActionApprove {
+				if log.NeedsReview {
+					t.Error("approval after reassignment did not publish the row")
+				}
+			} else {
+				if !log.NeedsReview {
+					t.Error("rejection after reassignment removed the row from review")
+				}
+			}
+			q, err := svc.NeedsReviewQueue(context.Background(), 1, 20)
+			if err != nil {
+				t.Fatalf("queue: %v", err)
+			}
+			if tt.final == ActionApprove {
+				if len(q.Items) != 0 {
+					t.Errorf("approved row still in queue: %+v", q.Items)
+				}
+			} else {
+				if len(q.Items) != 1 || q.Items[0].ProposalStatus != ProposalStatusRejected {
+					t.Errorf("rejected proposal queue = %+v, want one rejected item", q.Items)
+				}
+			}
+		})
 	}
 }

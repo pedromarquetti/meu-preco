@@ -64,6 +64,8 @@ var (
 	ErrPriceLogAlreadyProcessed = errors.New("price log is already processed")
 	// Cannot approve price log without an assigned product
 	ErrMissingProductForApproval = errors.New("cannot approve price log without an assigned product")
+	// Cannot reject a price log without a concrete product proposal
+	ErrMissingProductForRejection = errors.New("cannot reject price log without a proposed product")
 )
 
 // Resolver is the fetch+parse slice every draft path needs: given a chave

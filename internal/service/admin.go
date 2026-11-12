@@ -741,9 +741,11 @@ func stableKey(parts ...string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// ReviewPriceLog handles admin decisions on manual assignments. An "approve" action
-// makes a price log public (needs_review = false) if it has an assigned product;
-// a "reject" action keeps the proposal pending but records the decision in history.
+// ReviewPriceLog handles admin decisions on manual assignments. An "approve"
+// action publishes the current proposal (needs_review = false); a "reject"
+// action keeps the proposal pending but records the decision in history. Both
+// actions require a concrete proposed product, and an identical consecutive
+// decision is refused until a new assign event resets the proposal state.
 func (s *Service) ReviewPriceLog(ctx context.Context, adminID, priceLogID int64, action string) (*ReviewProductView, error) {
 	if action != ActionApprove && action != ActionReject {
 		return nil, ErrInvalidReviewAction
@@ -766,10 +768,14 @@ func (s *Service) ReviewPriceLog(ctx context.Context, adminID, priceLogID int64,
 			return err
 		}
 
-		if action == ActionApprove {
-			if log.ProductID == nil || *log.ProductID <= 0 {
+		if log.ProductID == nil || *log.ProductID <= 0 {
+			if action == ActionApprove {
 				return ErrMissingProductForApproval
 			}
+			return ErrMissingProductForRejection
+		}
+
+		if action == ActionApprove {
 			if err := tx.PriceLogs().SetNeedsReview(ctx, log.ID, false); err != nil {
 				return err
 			}

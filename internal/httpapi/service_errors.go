@@ -40,6 +40,8 @@ func respondServiceError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.Error(w, r, http.StatusConflict, "already_processed", "price log is already processed")
 	case errors.Is(err, service.ErrMissingProductForApproval):
 		httpx.Error(w, r, http.StatusBadRequest, "bad_request", "cannot approve price log without an assigned product")
+	case errors.Is(err, service.ErrMissingProductForRejection):
+		httpx.Error(w, r, http.StatusBadRequest, "bad_request", "cannot reject price log without a proposed product")
 	case errors.Is(err, domain.ErrConflict):
 		httpx.Error(w, r, http.StatusConflict, "conflict", err.Error())
 	default:
