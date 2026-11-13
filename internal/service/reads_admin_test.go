@@ -37,12 +37,6 @@ func seedOpenProduct(t *testing.T, m *memStores, name, unit string, gtin *string
 	return p
 }
 
-// hideProduct marks a product as unpublished for the public read path, while
-// GetByIDForWrite keeps resolving it.
-func (m *memStores) hideProduct(id int64) {
-	m.hidden[id] = true
-}
-
 // seedStoreAndLog installs a supermarket and a receipt with one logged line for
 // product p. The price_per_unit is derived as total/qty so assertions can rely
 // on the fold math.

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 	"unicode/utf8"
 
@@ -216,6 +217,53 @@ func (m *memStores) seedKnownProduct() *domain.Product {
 		panic(err)
 	}
 	return p
+}
+
+// hideProduct marks a product as unpublished for the public read path, while
+// GetByIDForWrite keeps resolving it.
+func (m *memStores) hideProduct(id int64) {
+	m.hidden[id] = true
+}
+
+// TestMemProductsVisibility proves the fake models the EXISTS predicate of the
+// production public read: a product without an approved price log is invisible
+// to GetByID but remains a valid target for GetByIDForWrite.
+func TestMemProductsVisibility(t *testing.T) {
+	ctx := context.Background()
+	m := newMemStores()
+	p := &domain.Product{ProductKey: "apresuntado", Name: "APRESUNTADO", Unit: "KG"}
+	if _, err := m.Products().Create(ctx, p); err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+
+	// A product without the hidden flag models a published product.
+	if _, err := m.Products().GetByID(ctx, p.ID); err != nil {
+		t.Fatalf("public GetByID for a published product: %v", err)
+	}
+
+	// A rolled-back transaction restores the visibility map along with the rows.
+	rollback := errors.New("rollback")
+	if err := m.Tx(ctx, func(domain.Stores) error {
+		m.hideProduct(p.ID)
+		return rollback
+	}); !errors.Is(err, rollback) {
+		t.Fatalf("Tx err = %v, want rollback", err)
+	}
+	if _, err := m.Products().GetByID(ctx, p.ID); err != nil {
+		t.Errorf("visibility after rollback = %v, want the restored snapshot", err)
+	}
+
+	m.hideProduct(p.ID)
+	if _, err := m.Products().GetByID(ctx, p.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("public GetByID for a hidden product = %v, want ErrNotFound", err)
+	}
+	got, err := m.Products().GetByIDForWrite(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("write GetByID for a hidden product: %v", err)
+	}
+	if got.ID != p.ID || got.Name != p.Name {
+		t.Errorf("write GetByID = %+v, want product %d", got, p.ID)
+	}
 }
 
 // memProducts implements domain.ProductStore.
