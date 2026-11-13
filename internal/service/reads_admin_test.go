@@ -37,6 +37,12 @@ func seedOpenProduct(t *testing.T, m *memStores, name, unit string, gtin *string
 	return p
 }
 
+// hideProduct marks a product as unpublished for the public read path, while
+// GetByIDForWrite keeps resolving it.
+func (m *memStores) hideProduct(id int64) {
+	m.hidden[id] = true
+}
+
 // seedStoreAndLog installs a supermarket and a receipt with one logged line for
 // product p. The price_per_unit is derived as total/qty so assertions can rely
 // on the fold math.
@@ -827,6 +833,44 @@ func TestUpdateProduct(t *testing.T) {
 	}
 	if _, err := svc.UpdateProduct(context.Background(), 404, domain.ProductPatch{Name: strPtr("X")}); !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("missing product err = %v", err)
+	}
+}
+
+func TestUpdateProductPendingOnlyProduct(t *testing.T) {
+	m := newMemStores()
+	p := seedOpenProduct(t, m, "APRESUNTADO", "KG", nil)
+	m.hideProduct(p.ID)
+	svc := newTestService(m)
+
+	// The public read models a product with no approved price log: invisible.
+	if _, err := m.Products().GetByID(context.Background(), p.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("public GetByID err = %v, want ErrNotFound", err)
+	}
+
+	name := "APRESUNTADO DE PERU"
+	brand := "SEARA"
+	v, err := svc.UpdateProduct(context.Background(), p.ID, domain.ProductPatch{
+		Name:  &name,
+		Brand: &brand,
+	})
+	if err != nil {
+		t.Fatalf("update pending-only product: %v", err)
+	}
+	if v.ID != p.ID || v.Name != name || v.Brand == nil || *v.Brand != brand || v.Unit != "KG" {
+		t.Errorf("updated view = %+v", v)
+	}
+
+	got, err := m.Products().GetByIDForWrite(context.Background(), p.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.Name != name || got.Brand == nil || *got.Brand != brand {
+		t.Errorf("read-back = %+v, want the patched fields", got)
+	}
+
+	// Curation does not publish the product: it still has no approved log.
+	if _, err := m.Products().GetByID(context.Background(), p.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("public GetByID after update = %v, want ErrNotFound", err)
 	}
 }
 

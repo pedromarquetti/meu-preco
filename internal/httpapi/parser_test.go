@@ -659,6 +659,52 @@ func TestAdminReviewLifecycleReassignment(t *testing.T) {
 	}
 }
 
+// TestAdminPatchUnpublishedProduct proves PATCH /admin/products/{id} uses the
+// write lookup: a product without any approved price log is invisible to the
+// public read but remains a valid curation target, and the change persists.
+func TestAdminPatchUnpublishedProduct(t *testing.T) {
+	st := integrationStore(t)
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	ctx := context.Background()
+
+	admin := &domain.User{Name: "Root", Email: "root@example.com", PasswordHash: "h", Role: "admin"}
+	if err := st.Users().Create(ctx, admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	api := roleRouter(t, st, pgResolver{}, admin.ID, "admin")
+
+	pending := &domain.Product{ProductKey: "pending-apresuntado", Name: "APRESUNTADO", Unit: "KG"}
+	if _, err := st.Products().Create(ctx, pending); err != nil {
+		t.Fatalf("create pending product: %v", err)
+	}
+
+	rec, out := do(t, api, http.MethodPatch, fmt.Sprintf("/api/v1/admin/products/%d", pending.ID),
+		`{"name":"APRESUNTADO DE PERU","brand":"SEARA"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch pending product = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if out["name"] != "APRESUNTADO DE PERU" || out["brand"] != "SEARA" || out["unit"] != "KG" {
+		t.Errorf("patched product = %+v", out)
+	}
+
+	got, err := st.Products().GetByIDForWrite(ctx, pending.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.Name != "APRESUNTADO DE PERU" || got.Brand == nil || *got.Brand != "SEARA" {
+		t.Errorf("stored product = %+v, want the patched fields", got)
+	}
+
+	// The product is still unpublished: public reads continue to hide it.
+	userAPI := roleRouter(t, st, pgResolver{}, admin.ID, "user")
+	rec, _ = do(t, userAPI, http.MethodGet, fmt.Sprintf("/api/v1/products/%d", pending.ID), "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("public product read = %d, want 404 for a pending-only product", rec.Code)
+	}
+}
+
 func TestAdminCuration(t *testing.T) {
 	st := integrationStore(t)
 	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {

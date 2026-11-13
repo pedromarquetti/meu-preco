@@ -581,7 +581,8 @@ func (s *Service) MergeSupermarkets(ctx context.Context, fromCNPJ, toCNPJ string
 }
 
 // UpdateProduct implements PATCH /admin/products/{id}: curate name/brand/unit.
-// The unit must normalize to the canonical vocabulary (else 400).
+// The unit must normalize to the canonical vocabulary (else 400). Unpublished
+// products are valid targets: curation is an admin write, not a public read.
 func (s *Service) UpdateProduct(ctx context.Context, id int64, patch domain.ProductPatch) (*ProductView, error) {
 	if id <= 0 {
 		return nil, ErrProductNotFound
@@ -593,18 +594,39 @@ func (s *Service) UpdateProduct(ctx context.Context, id int64, patch domain.Prod
 		}
 		patch.Unit = &u
 	}
-	if err := s.Stores.Products().Update(ctx, id, patch); err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, ErrProductNotFound
+
+	var view ProductView
+	// The public GetByID requires an approved price log, so it cannot be used
+	// as an existence check for admin curation: it would report a product that
+	// was just updated as missing. Resolve and re-read through the write lookup,
+	// inside one transaction so a failed projection rolls the update back.
+	err := s.Stores.Tx(ctx, func(tx domain.Stores) error {
+		if _, err := tx.Products().GetByIDForWrite(ctx, id); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				return ErrProductNotFound
+			}
+			return err
 		}
-		return nil, err
-	}
-	p, err := s.Stores.Products().GetByID(ctx, id)
+		if err := tx.Products().Update(ctx, id, patch); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				return ErrProductNotFound
+			}
+			return err
+		}
+		p, err := tx.Products().GetByIDForWrite(ctx, id)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				return ErrProductNotFound
+			}
+			return err
+		}
+		view = toProductView(*p)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	v := toProductView(*p)
-	return &v, nil
+	return &view, nil
 }
 
 // DeleteProduct implements DELETE /admin/products/{id} (?purge=true): refuses

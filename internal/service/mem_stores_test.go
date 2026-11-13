@@ -24,7 +24,11 @@ type memStores struct {
 	products    map[string]*domain.Product // by product_key
 	byGtin      map[string]*domain.Product // by normalized gtin
 	byProductID map[int64]*domain.Product
-	nextProdID  int64
+	// hidden marks products that the public GetByID must not resolve (no
+	// approved price log in production); GetByIDForWrite intentionally bypasses
+	// it. Opt-in so existing fixtures keep their published-by-default behavior.
+	hidden     map[int64]bool
+	nextProdID int64
 
 	previews   map[int64]*domain.Preview
 	previewKey map[string]int64 // "userID:accessKey" -> id while pending
@@ -58,6 +62,7 @@ func newMemStores() *memStores {
 		products:     map[string]*domain.Product{},
 		byGtin:       map[string]*domain.Product{},
 		byProductID:  map[int64]*domain.Product{},
+		hidden:       map[int64]bool{},
 		previews:     map[int64]*domain.Preview{},
 		previewKey:   map[string]int64{},
 		supermarkets: map[string]*domain.Supermarket{},
@@ -85,6 +90,7 @@ type memSnapshot struct {
 	products       map[string]*domain.Product
 	byGtin         map[string]*domain.Product
 	byProductID    map[int64]*domain.Product
+	hidden         map[int64]bool
 	nextProdID     int64
 	previews       map[int64]*domain.Preview
 	previewKey     map[string]int64
@@ -111,6 +117,7 @@ func (m *memStores) snapshot() memSnapshot {
 		products:       deepCopyMap(m.products),
 		byGtin:         deepCopyMap(m.byGtin),
 		byProductID:    deepCopyMap(m.byProductID),
+		hidden:         copyMap(m.hidden),
 		nextProdID:     m.nextProdID,
 		previews:       deepCopyMap(m.previews),
 		previewKey:     copyMap(m.previewKey),
@@ -175,6 +182,7 @@ func (m *memStores) restore(s memSnapshot) {
 	m.products = s.products
 	m.byGtin = s.byGtin
 	m.byProductID = s.byProductID
+	m.hidden = s.hidden
 	m.nextProdID = s.nextProdID
 	m.previews = s.previews
 	m.previewKey = s.previewKey
@@ -242,14 +250,23 @@ func (s memProducts) Create(_ context.Context, p *domain.Product) (bool, error) 
 }
 
 func (s memProducts) GetByID(_ context.Context, id int64) (*domain.Product, error) {
+	// Models the EXISTS(approved price_log) predicate of productRepo.getByID:
+	// a hidden product has no published price yet.
+	if s.m.hidden[id] {
+		return nil, domain.ErrNotFound
+	}
 	if p, ok := s.m.byProductID[id]; ok {
 		return p, nil
 	}
 	return nil, domain.ErrNotFound
 }
 
-func (s memProducts) GetByIDForWrite(ctx context.Context, id int64) (*domain.Product, error) {
-	return s.GetByID(ctx, id)
+func (s memProducts) GetByIDForWrite(_ context.Context, id int64) (*domain.Product, error) {
+	// Internal/admin mutations bypass the public visibility filter.
+	if p, ok := s.m.byProductID[id]; ok {
+		return p, nil
+	}
+	return nil, domain.ErrNotFound
 }
 
 func (s memProducts) GetByKey(_ context.Context, key string) (*domain.Product, error) {
