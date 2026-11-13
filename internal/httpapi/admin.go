@@ -20,6 +20,7 @@ const maxAdminBody = 1 << 20 // 1 MiB is generous for a batch-assign body
 //	GET    /api/v1/admin/user/{id}                   — one user's details
 //	PATCH  /api/v1/admin/users/{id}/role             — promote/demote
 //	GET    /api/v1/admin/products/needs-review       — review queue
+//	GET    /api/v1/admin/products                   — search full product catalog
 //	POST   /api/v1/admin/products/batch-assign       — resolve queue rows
 //	POST   /api/v1/admin/products/merge              — fold two products
 //	PATCH  /api/v1/admin/products/{id}               — curate name/brand/unit
@@ -90,6 +91,26 @@ func (api *adminAPI) needsReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := api.svc.NeedsReviewQueue(r.Context(), page, limit)
+	if err != nil {
+		respondServiceError(w, r, err)
+		return
+	}
+	httpx.Respond(w, http.StatusOK, res)
+}
+
+// searchProducts implements the admin-only full-catalog product search.
+func (api *adminAPI) searchProducts(w http.ResponseWriter, r *http.Request) {
+	page, limit, ok := readPager(w, r)
+	if !ok {
+		return
+	}
+
+	res, err := api.svc.SearchAdminProducts(r.Context(), domain.ProductFilter{
+		Query: r.URL.Query().Get("q"),
+		GTIN:  r.URL.Query().Get("gtin"),
+		Unit:  r.URL.Query().Get("unit"),
+		Brand: r.URL.Query().Get("brand"),
+	}, page, limit)
 	if err != nil {
 		respondServiceError(w, r, err)
 		return

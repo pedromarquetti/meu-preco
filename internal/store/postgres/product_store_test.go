@@ -279,9 +279,10 @@ func TestProductVisibility(t *testing.T) {
 
 	// Scenario B: Pending Only -> Hidden from public view.
 	pB := &domain.Product{
-		ProductKey: "test-pending-only",
-		Name:       "Pending Product",
-		Unit:       "UN",
+		ProductKey:  "test-pending-only",
+		Name:        "Pending Product",
+		Unit:        "UN",
+		NeedsReview: true,
 	}
 	if _, err := store.Products().Create(ctx, pB); err != nil {
 		t.Fatalf("create pB: %v", err)
@@ -292,6 +293,20 @@ func TestProductVisibility(t *testing.T) {
 	hits, _, _ = store.Products().SearchFiltered(ctx, domain.ProductFilter{Query: "pending-product"}, 10, 0)
 	if len(hits) > 0 {
 		t.Errorf("Scenario B failed: product with only pending logs found in search")
+	}
+	adminHits, adminTotal, err := store.Products().SearchAdminFiltered(ctx, domain.ProductFilter{Query: "pending-product"}, 10, 0)
+	if err != nil {
+		t.Fatalf("admin search pending product: %v", err)
+	}
+	if adminTotal != 2 || len(adminHits) != 2 {
+		t.Errorf("admin search = %+v (total %d), want pending and no-log products", adminHits, adminTotal)
+	}
+	var foundPending bool
+	for _, hit := range adminHits {
+		foundPending = foundPending || hit.ID == pB.ID
+	}
+	if !foundPending {
+		t.Errorf("admin search = %+v, missing pending-only product %d", adminHits, pB.ID)
 	}
 
 	_, err = store.Products().GetByID(ctx, pB.ID)

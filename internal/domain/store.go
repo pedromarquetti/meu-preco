@@ -86,6 +86,10 @@ type ProductStore interface {
 	// always excludes needs_review rows. It returns the page plus the total
 	// number of matches (for stable pagination).
 	SearchFiltered(ctx context.Context, f ProductFilter, limit, offset int) ([]Product, int64, error)
+	// SearchAdminFiltered applies the same filters and ranking as SearchFiltered
+	// but skips the public visibility predicates: admins must be able to find
+	// products with no approved price log or still marked needs_review.
+	SearchAdminFiltered(ctx context.Context, f ProductFilter, limit, offset int) ([]Product, int64, error)
 	// Update applies the non-nil fields of patch to a product (admin curation).
 	Update(ctx context.Context, id int64, patch ProductPatch) error
 	// Delete removes a product row (the caller must have re-pointed or

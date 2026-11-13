@@ -84,6 +84,18 @@ func (r productRepo) scanProduct(row pgx.Row, sim *float64) (*domain.Product, er
 // queries share the same WHERE so the count always matches what a follow-up
 // page would yield.
 func (r productRepo) SearchFiltered(ctx context.Context, f domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
+	return r.searchFiltered(ctx, f, limit, offset, false)
+}
+
+// SearchAdminFiltered is the admin catalog search: identical filters and
+// ranking, but without the public visibility predicates. Admins must be able to
+// target products that have no approved price log yet, including products still
+// flagged needs_review.
+func (r productRepo) SearchAdminFiltered(ctx context.Context, f domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
+	return r.searchFiltered(ctx, f, limit, offset, true)
+}
+
+func (r productRepo) searchFiltered(ctx context.Context, f domain.ProductFilter, limit, offset int, includeUnpublished bool) ([]domain.Product, int64, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
@@ -91,7 +103,13 @@ func (r productRepo) SearchFiltered(ctx context.Context, f domain.ProductFilter,
 		offset = 0
 	}
 
-	wheres := []string{"products.needs_review = false", "EXISTS (SELECT 1 FROM price_logs pl WHERE pl.product_id = products.id AND pl.needs_review = false)"}
+	var wheres []string
+	if !includeUnpublished {
+		wheres = append(wheres,
+			"products.needs_review = false",
+			"EXISTS (SELECT 1 FROM price_logs pl WHERE pl.product_id = products.id AND pl.needs_review = false)",
+		)
+	}
 	args := []any{}
 
 	if q := strings.TrimSpace(f.Query); q != "" {
@@ -124,6 +142,9 @@ func (r productRepo) SearchFiltered(ctx context.Context, f domain.ProductFilter,
 	}
 
 	where := strings.Join(wheres, " AND ")
+	if where == "" {
+		where = "TRUE"
+	}
 	order := "products.name"
 	selectExtra := ""
 	withSim := false

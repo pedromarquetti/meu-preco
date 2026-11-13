@@ -344,10 +344,18 @@ func (s memProducts) NearestMatch(context.Context, string, float64) (*domain.Pro
 }
 
 func (s memProducts) SearchFiltered(_ context.Context, f domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
+	return s.searchFiltered(f, limit, offset, false)
+}
+
+func (s memProducts) SearchAdminFiltered(_ context.Context, f domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
+	return s.searchFiltered(f, limit, offset, true)
+}
+
+func (s memProducts) searchFiltered(f domain.ProductFilter, limit, offset int, includeUnpublished bool) ([]domain.Product, int64, error) {
 	m := s.m
 	var out []*domain.Product
 	for _, p := range m.products {
-		if p.NeedsReview {
+		if !includeUnpublished && (p.NeedsReview || m.hidden[p.ID]) {
 			continue
 		}
 		if f.Query != "" && !containsFold(p.Name, f.Query) &&

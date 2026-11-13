@@ -145,6 +145,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 			ar.Patch("/users/{id}/role", adminAPI.patchRole)
 			// ar.Delete("/users/{id}", // TODO: implement a user deletion endpoint)
 			ar.Get("/products/needs-review", adminAPI.needsReview)
+			ar.Get("/products", adminAPI.searchProducts)
 			ar.Post("/products/batch-assign", adminAPI.batchAssign)
 			ar.Post("/products/merge", adminAPI.mergeProducts)
 			ar.Post("/products/price-logs/{id}/review", adminAPI.reviewProduct)

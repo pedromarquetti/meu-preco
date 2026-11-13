@@ -822,6 +822,29 @@ func TestAdminCuration(t *testing.T) {
 		t.Fatalf("create other: %v", err)
 	}
 	api := roleRouter(t, st, pgResolver{}, admin.ID, "admin")
+	publicAPI := roleRouter(t, st, pgResolver{}, admin.ID, "user")
+	pending := &domain.Product{ProductKey: "pending-admin-search", Name: "PENDING ADMIN SEARCH", Unit: "KG"}
+	if _, err := st.Products().Create(ctx, pending); err != nil {
+		t.Fatalf("create pending search product: %v", err)
+	}
+	rec, out := do(t, api, http.MethodGet, "/api/v1/admin/products?q=pending+admin&limit=20", "")
+	if rec.Code != http.StatusOK || jint(out["page"].(map[string]any)["total"]) != 1 {
+		t.Fatalf("admin product search = %d (%s), want pending product", rec.Code, rec.Body.String())
+	}
+	if got := out["items"].([]any)[0].(map[string]any); jint(got["id"]) != pending.ID {
+		t.Errorf("admin search item = %+v, want %d", got, pending.ID)
+	}
+	rec, publicOut := do(t, publicAPI, http.MethodGet, "/api/v1/products?q=pending+admin&limit=20", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public product search = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if total := jint(publicOut["page"].(map[string]any)["total"]); total != 0 {
+		t.Errorf("public search total = %d, want 0", total)
+	}
+	rec, _ = do(t, publicAPI, http.MethodGet, "/api/v1/admin/products?q=pending+admin&limit=20", "")
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("non-admin product search = %d, want 403", rec.Code)
+	}
 
 	sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO BOM PRECO LTDA"}
 	if err := st.Supermarkets().Upsert(ctx, sm); err != nil {
@@ -853,7 +876,7 @@ func TestAdminCuration(t *testing.T) {
 	}
 
 	// 1. The review queue carries the store context annotations.
-	rec, out := do(t, api, http.MethodGet, "/api/v1/admin/products/needs-review?limit=50", "")
+	rec, out = do(t, api, http.MethodGet, "/api/v1/admin/products/needs-review?limit=50", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("needs-review = %d (%s)", rec.Code, rec.Body.String())
 	}

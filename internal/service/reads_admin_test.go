@@ -129,6 +129,40 @@ func TestSearchProductsFiltersAndExcludesReview(t *testing.T) {
 	}
 }
 
+func TestSearchAdminProductsIncludesUnpublishedProducts(t *testing.T) {
+	m := newMemStores()
+	published := seedOpenProduct(t, m, "ARROZ BRANCO", "KG", nil)
+	pending := &domain.Product{ProductKey: "ARROZ INTEGRAL", Name: "ARROZ INTEGRAL", Unit: "KG", NeedsReview: true}
+	if _, err := m.Products().Create(context.Background(), pending); err != nil {
+		t.Fatalf("seed pending product: %v", err)
+	}
+	hidden := seedOpenProduct(t, m, "ARROZ PARBOILIZADO", "KG", nil)
+	m.hideProduct(hidden.ID)
+	svc := newTestService(m)
+
+	public, err := svc.SearchProducts(context.Background(), domain.ProductFilter{Query: "arroz"}, 1, 20)
+	if err != nil {
+		t.Fatalf("public search: %v", err)
+	}
+	if public.Page.Total != 1 || len(public.Items) != 1 || public.Items[0].ID != published.ID {
+		t.Errorf("public search = %+v, want only published product", public)
+	}
+
+	admin, err := svc.SearchAdminProducts(context.Background(), domain.ProductFilter{Query: "arroz"}, 1, 20)
+	if err != nil {
+		t.Fatalf("admin search: %v", err)
+	}
+	if admin.Page.Total != 3 || len(admin.Items) != 3 {
+		t.Errorf("admin search = %+v, want all three products", admin)
+	}
+	if _, err := svc.SearchAdminProducts(context.Background(), domain.ProductFilter{Unit: "not-a-unit"}, 1, 20); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("invalid unit err = %v, want ErrInvalidFilter", err)
+	}
+	if _, err := svc.SearchAdminProducts(context.Background(), domain.ProductFilter{GTIN: "abc"}, 1, 20); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("invalid gtin err = %v, want ErrInvalidFilter", err)
+	}
+}
+
 func TestSearchProductsPaginates(t *testing.T) {
 	m := newMemStores()
 	for i := 0; i < 5; i++ {

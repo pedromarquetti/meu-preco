@@ -177,37 +177,72 @@ func toSupermarketView(s domain.Supermarket) SupermarketView {
 	}
 }
 
+// normalizeProductFilter trims the product search fields and validates the
+// barcode shape and canonical unit vocabulary. Public and admin search share
+// it so both accept exactly the same filters.
+func normalizeProductFilter(f domain.ProductFilter) (domain.ProductFilter, error) {
+	f.Query = strings.TrimSpace(f.Query)
+	f.Brand = strings.TrimSpace(f.Brand)
+
+	if f.GTIN = strings.TrimSpace(f.GTIN); f.GTIN != "" {
+		if len(f.GTIN) > 14 || !allDigits(f.GTIN) {
+			return f, ErrInvalidFilter
+		}
+	}
+	if f.Unit = strings.TrimSpace(f.Unit); f.Unit != "" {
+		u, ok := product.NormalizeUnit(f.Unit)
+		if !ok {
+			return f, ErrInvalidFilter
+		}
+		f.Unit = u
+	}
+	return f, nil
+}
+
+func productPageFrom(items []domain.Product, page, limit int, total int64) *ProductPage {
+	out := make([]ProductView, 0, len(items))
+	for _, p := range items {
+		out = append(out, toProductView(p))
+	}
+	return &ProductPage{Items: out, Page: newPage(page, limit, total)}
+}
+
 // SearchProducts implements GET /api/v1/products: pg_trgm search constrained
 // by the non-empty filter fields, paginated, needs_review always excluded.
 func (s *Service) SearchProducts(ctx context.Context, f domain.ProductFilter, page, limit int) (*ProductPage, error) {
 	if err := validatePage(page, limit); err != nil {
 		return nil, err
 	}
-	f.Query = strings.TrimSpace(f.Query)
-	f.Brand = strings.TrimSpace(f.Brand)
-
-	if f.GTIN = strings.TrimSpace(f.GTIN); f.GTIN != "" {
-		if len(f.GTIN) > 14 || !allDigits(f.GTIN) {
-			return nil, ErrInvalidFilter
-		}
-	}
-	if f.Unit = strings.TrimSpace(f.Unit); f.Unit != "" {
-		u, ok := product.NormalizeUnit(f.Unit)
-		if !ok {
-			return nil, ErrInvalidFilter
-		}
-		f.Unit = u
+	f, err := normalizeProductFilter(f)
+	if err != nil {
+		return nil, err
 	}
 
 	items, total, err := s.Stores.Products().SearchFiltered(ctx, f, limit, (page-1)*limit)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]ProductView, 0, len(items))
-	for _, p := range items {
-		out = append(out, toProductView(p))
+	return productPageFrom(items, page, limit, total), nil
+}
+
+// SearchAdminProducts implements GET /api/v1/admin/products: the same filters
+// and pagination as the public search, but over the full catalog. Unpublished
+// products (no approved price log) and needs_review rows are included so an
+// admin can reassign a receipt line to any existing product.
+func (s *Service) SearchAdminProducts(ctx context.Context, f domain.ProductFilter, page, limit int) (*ProductPage, error) {
+	if err := validatePage(page, limit); err != nil {
+		return nil, err
 	}
-	return &ProductPage{Items: out, Page: newPage(page, limit, total)}, nil
+	f, err := normalizeProductFilter(f)
+	if err != nil {
+		return nil, err
+	}
+
+	items, total, err := s.Stores.Products().SearchAdminFiltered(ctx, f, limit, (page-1)*limit)
+	if err != nil {
+		return nil, err
+	}
+	return productPageFrom(items, page, limit, total), nil
 }
 
 // GetProduct implements GET /api/v1/products/{id}.

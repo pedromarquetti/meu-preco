@@ -165,6 +165,10 @@ func (*nilProductStore) NearestMatch(context.Context, string, float64) (*domain.
 func (*nilProductStore) SearchFiltered(context.Context, domain.ProductFilter, int, int) ([]domain.Product, int64, error) {
 	return nil, 0, nil
 }
+
+func (*nilProductStore) SearchAdminFiltered(context.Context, domain.ProductFilter, int, int) ([]domain.Product, int64, error) {
+	return nil, 0, nil
+}
 func (*nilProductStore) Update(context.Context, int64, domain.ProductPatch) error {
 	return domain.ErrNotFound
 }
