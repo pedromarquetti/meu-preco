@@ -493,7 +493,9 @@ func (s *Service) createAdminProduct(ctx context.Context, tx domain.Stores, admi
 
 // MergeProducts implements POST /admin/products/merge: one transaction
 // re-points every price_log of the duplicate product onto the canonical one
-// and removes the duplicate row (FK keeps it whole).
+// and removes the duplicate row (FK keeps it whole). Unpublished products are
+// valid endpoints on either side: the write lookup bypasses the public
+// visibility guard, which only considers products with an approved price log.
 func (s *Service) MergeProducts(ctx context.Context, fromID, toID int64) (*MergeResult, error) {
 	if err := validateMerge(fromID, toID); err != nil {
 		return nil, err
@@ -501,13 +503,13 @@ func (s *Service) MergeProducts(ctx context.Context, fromID, toID int64) (*Merge
 
 	res := &MergeResult{FromID: fromID, ToID: toID}
 	err := s.Stores.Tx(ctx, func(tx domain.Stores) error {
-		if _, err := tx.Products().GetByID(ctx, toID); err != nil {
+		if _, err := tx.Products().GetByIDForWrite(ctx, toID); err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
 				return ErrProductNotFound
 			}
 			return err
 		}
-		if _, err := tx.Products().GetByID(ctx, fromID); err != nil {
+		if _, err := tx.Products().GetByIDForWrite(ctx, fromID); err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
 				return ErrProductNotFound
 			}
@@ -631,7 +633,9 @@ func (s *Service) UpdateProduct(ctx context.Context, id int64, patch domain.Prod
 
 // DeleteProduct implements DELETE /admin/products/{id} (?purge=true): refuses
 // explicitly while price_logs still reference the product, unless purge was
-// asked — then logs and product fall together in one transaction.
+// asked — then logs and product fall together in one transaction. Unpublished
+// products are valid targets: the write lookup bypasses the public visibility
+// guard, which only considers products with an approved price log.
 func (s *Service) DeleteProduct(ctx context.Context, id int64, purge bool) (*DeleteProductResult, error) {
 	if id <= 0 {
 		return nil, ErrProductNotFound
@@ -646,7 +650,7 @@ func (s *Service) DeleteProduct(ctx context.Context, id int64, purge bool) (*Del
 	if count > 0 && !purge {
 		return nil, ErrInUse
 	}
-	if _, err := s.Stores.Products().GetByID(ctx, id); err != nil {
+	if _, err := s.Stores.Products().GetByIDForWrite(ctx, id); err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil, ErrProductNotFound
 		}

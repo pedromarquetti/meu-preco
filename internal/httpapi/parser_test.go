@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -702,6 +703,104 @@ func TestAdminPatchUnpublishedProduct(t *testing.T) {
 	rec, _ = do(t, userAPI, http.MethodGet, fmt.Sprintf("/api/v1/products/%d", pending.ID), "")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("public product read = %d, want 404 for a pending-only product", rec.Code)
+	}
+}
+
+// TestAdminMergeAndDeleteUnpublishedProducts proves the admin merge and delete
+// endpoints resolve unpublished products through the write lookup.
+func TestAdminMergeAndDeleteUnpublishedProducts(t *testing.T) {
+	st := integrationStore(t)
+	if err := testdb.Truncate(context.Background(), st.Pool()); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	ctx := context.Background()
+
+	admin := &domain.User{Name: "Root", Email: "root@example.com", PasswordHash: "h", Role: "admin"}
+	if err := st.Users().Create(ctx, admin); err != nil {
+		t.Fatalf("create admin: %v", err)
+	}
+	api := roleRouter(t, st, pgResolver{}, admin.ID, "admin")
+	publicAPI := roleRouter(t, st, pgResolver{}, admin.ID, "user")
+
+	sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO BOM PRECO LTDA"}
+	if err := st.Supermarkets().Upsert(ctx, sm); err != nil {
+		t.Fatalf("upsert sm: %v", err)
+	}
+	base := time.Date(2024, 11, 1, 8, 0, 0, 0, time.UTC)
+
+	// Merge: both sides are pending-only (no approved price log), so the public
+	// read hides them; the admin merge must still resolve them.
+	from := &domain.Product{ProductKey: "pending-manteiga", Name: "MANTEIGA", Unit: "KG"}
+	to := &domain.Product{ProductKey: "pending-manteiga-sal", Name: "MANTEIGA COM SAL", Unit: "KG"}
+	for _, p := range []*domain.Product{from, to} {
+		if _, err := st.Products().Create(ctx, p); err != nil {
+			t.Fatalf("create product %q: %v", p.Name, err)
+		}
+	}
+	fromLog := seedHTTPLog(t, st, sm, "KG", from, base, "9.00", true, admin.ID)
+	if err := st.PriceLogs().SetProductProposal(ctx, fromLog.ID, from.ID, admin.ID, "assign"); err != nil {
+		t.Fatalf("propose product: %v", err)
+	}
+
+	for _, p := range []*domain.Product{from, to} {
+		rec, _ := do(t, publicAPI, http.MethodGet, fmt.Sprintf("/api/v1/products/%d", p.ID), "")
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("public read %q = %d, want 404 for a pending-only product", p.Name, rec.Code)
+		}
+	}
+
+	rec, out := do(t, api, http.MethodPost, "/api/v1/admin/products/merge",
+		fmt.Sprintf(`{"from_id":%d,"to_id":%d}`, from.ID, to.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("merge pending-only products = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if jint(out["logs_moved"]) != 1 || out["dup_removed"] != true {
+		t.Errorf("merge result = %+v", out)
+	}
+	if _, err := st.Products().GetByIDForWrite(ctx, from.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("merged-away product still present: %v", err)
+	}
+	rec, _ = do(t, publicAPI, http.MethodGet, fmt.Sprintf("/api/v1/products/%d", to.ID), "")
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("public read after merge = %d, want 404 (still unpublished)", rec.Code)
+	}
+
+	// Delete a pending-only product with no logs.
+	empty := &domain.Product{ProductKey: "pending-apresuntado", Name: "APRESUNTADO", Unit: "KG"}
+	if _, err := st.Products().Create(ctx, empty); err != nil {
+		t.Fatalf("create empty product: %v", err)
+	}
+	rec, out = do(t, api, http.MethodDelete, fmt.Sprintf("/api/v1/admin/products/%d", empty.ID), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete pending-only product = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if jint(out["logs_deleted"]) != 0 {
+		t.Errorf("logs_deleted = %v, want 0", out["logs_deleted"])
+	}
+	if _, err := st.Products().GetByIDForWrite(ctx, empty.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("deleted product still present: %v", err)
+	}
+
+	// Delete a pending-only product that owns a log: guarded without purge,
+	// then dropped together with its logs.
+	purge := &domain.Product{ProductKey: "pending-purge", Name: "MORTADELA", Unit: "KG"}
+	if _, err := st.Products().Create(ctx, purge); err != nil {
+		t.Fatalf("create purge product: %v", err)
+	}
+	purgeLog := seedHTTPLog(t, st, sm, "KG", purge, base.Add(time.Hour), "15.00", true, admin.ID)
+	if err := st.PriceLogs().SetProductProposal(ctx, purgeLog.ID, purge.ID, admin.ID, "assign"); err != nil {
+		t.Fatalf("propose purge product: %v", err)
+	}
+	rec, out = do(t, api, http.MethodDelete, fmt.Sprintf("/api/v1/admin/products/%d", purge.ID), "")
+	if rec.Code != http.StatusConflict || out["error"].(map[string]any)["code"] != "in_use" {
+		t.Errorf("guarded delete = %d (%s)", rec.Code, rec.Body.String())
+	}
+	rec, out = do(t, api, http.MethodDelete, fmt.Sprintf("/api/v1/admin/products/%d?purge=true", purge.ID), "")
+	if rec.Code != http.StatusOK || jint(out["logs_deleted"]) != 1 {
+		t.Errorf("purge = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if _, err := st.Products().GetByIDForWrite(ctx, purge.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("purged product still present: %v", err)
 	}
 }
 

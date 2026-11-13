@@ -745,6 +745,46 @@ func TestMergeProducts(t *testing.T) {
 	if _, err := svc.MergeProducts(context.Background(), 1, 999); !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("missing target err = %v", err)
 	}
+
+	// Unpublished products are valid endpoints: the public read hides them, but
+	// the write lookup must still resolve both sides of the merge.
+	t.Run("pending-only products", func(t *testing.T) {
+		m := newMemStores()
+		from := seedOpenProduct(t, m, "MANTEIGA", "KG", nil)
+		to := seedOpenProduct(t, m, "MANTEIGA COM SAL", "KG", nil)
+		sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO"}
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		log := seedStoreAndLog(t, m, sm, from, "KG", mustDecimal("1"), mustDecimal("9.00"), base)
+		log.NeedsReview = true
+		m.hideProduct(from.ID)
+		m.hideProduct(to.ID)
+
+		svc := newTestService(m)
+		if _, err := m.Products().GetByID(context.Background(), from.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("public from GetByID err = %v, want ErrNotFound", err)
+		}
+		if _, err := m.Products().GetByID(context.Background(), to.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("public to GetByID err = %v, want ErrNotFound", err)
+		}
+
+		res, err := svc.MergeProducts(context.Background(), from.ID, to.ID)
+		if err != nil {
+			t.Fatalf("merge pending-only products: %v", err)
+		}
+		if res.LogsMoved != 1 || !res.DupRemoved {
+			t.Errorf("result = %+v", res)
+		}
+		if n := mustCountLogs(m, to.ID); n != 1 {
+			t.Errorf("logs on canonical = %d, want 1", n)
+		}
+		if _, err := m.Products().GetByIDForWrite(context.Background(), from.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("dup still present after merge")
+		}
+		// The merge re-points logs but does not publish the canonical product.
+		if _, err := m.Products().GetByID(context.Background(), to.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("public to GetByID after merge = %v, want ErrNotFound", err)
+		}
+	})
 }
 
 func mustCountLogs(m *memStores, productID int64) int {
@@ -905,6 +945,78 @@ func TestDeleteProductGuardAndPurge(t *testing.T) {
 	if _, err := svc.DeleteProduct(context.Background(), 404, false); !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("missing product err = %v", err)
 	}
+}
+
+func TestDeleteProductPendingOnlyProduct(t *testing.T) {
+	// A product without any approved price log is invisible to the public read
+	// but must remain deletable: delete is an admin write, not a public read.
+	t.Run("no logs", func(t *testing.T) {
+		m := newMemStores()
+		p := seedOpenProduct(t, m, "APRESUNTADO", "KG", nil)
+		m.hideProduct(p.ID)
+		svc := newTestService(m)
+
+		if _, err := m.Products().GetByID(context.Background(), p.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("public GetByID err = %v, want ErrNotFound", err)
+		}
+
+		res, err := svc.DeleteProduct(context.Background(), p.ID, false)
+		if err != nil {
+			t.Fatalf("delete pending-only product: %v", err)
+		}
+		if res.ID != p.ID || res.LogsDeleted != 0 {
+			t.Errorf("result = %+v", res)
+		}
+		if _, err := m.Products().GetByIDForWrite(context.Background(), p.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("product still present after delete")
+		}
+	})
+
+	t.Run("logs without purge", func(t *testing.T) {
+		m := newMemStores()
+		p := seedOpenProduct(t, m, "APRESUNTADO", "KG", nil)
+		sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO"}
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		log := seedStoreAndLog(t, m, sm, p, "KG", mustDecimal("1"), mustDecimal("12.00"), base)
+		log.NeedsReview = true
+		m.hideProduct(p.ID)
+		svc := newTestService(m)
+
+		if _, err := svc.DeleteProduct(context.Background(), p.ID, false); !errors.Is(err, ErrInUse) {
+			t.Errorf("delete with logs err = %v, want ErrInUse", err)
+		}
+		if _, err := m.Products().GetByIDForWrite(context.Background(), p.ID); err != nil {
+			t.Errorf("guard deleted the pending-only product: %v", err)
+		}
+		if n := mustCountLogs(m, p.ID); n != 1 {
+			t.Errorf("logs after guard = %d, want 1", n)
+		}
+	})
+
+	t.Run("purge", func(t *testing.T) {
+		m := newMemStores()
+		p := seedOpenProduct(t, m, "APRESUNTADO", "KG", nil)
+		sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO"}
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		log := seedStoreAndLog(t, m, sm, p, "KG", mustDecimal("1"), mustDecimal("12.00"), base)
+		log.NeedsReview = true
+		m.hideProduct(p.ID)
+		svc := newTestService(m)
+
+		res, err := svc.DeleteProduct(context.Background(), p.ID, true)
+		if err != nil {
+			t.Fatalf("purge pending-only product: %v", err)
+		}
+		if res.LogsDeleted != 1 {
+			t.Errorf("logs_deleted = %d, want 1", res.LogsDeleted)
+		}
+		if _, err := m.Products().GetByIDForWrite(context.Background(), p.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("product still present after purge")
+		}
+		if n := mustCountLogs(m, p.ID); n != 0 {
+			t.Errorf("logs after purge = %d, want 0", n)
+		}
+	})
 }
 
 func TestDeleteSupermarketGuard(t *testing.T) {
