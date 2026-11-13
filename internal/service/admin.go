@@ -21,12 +21,13 @@ import (
 // ReviewProductView is the product a user proposed for an unresolved receipt
 // line. It is only exposed through the admin queue.
 type ReviewProductView struct {
-	ID         int64   `json:"id"`
-	ProductKey string  `json:"product_key,omitempty"`
-	GTIN       *string `json:"gtin,omitempty"`
-	Name       string  `json:"name"`
-	Brand      *string `json:"brand"`
-	Unit       string  `json:"unit"`
+	ID            int64   `json:"id"`
+	ProductKey    string  `json:"product_key,omitempty"`
+	GTIN          *string `json:"gtin,omitempty"`
+	Name          string  `json:"name"`
+	Brand         *string `json:"brand"`
+	Unit          string  `json:"unit"`
+	CanonicalStem *string `json:"canonical_stem,omitempty"`
 }
 
 // Proposal status describes the current proposal decision, while NeedsReview
@@ -178,12 +179,13 @@ func (s *Service) NeedsReviewQueue(ctx context.Context, page, limit int) (*Revie
 		}
 		if it.ProductID != nil {
 			v.ProposedProduct = &ReviewProductView{
-				ID:         *it.ProductID,
-				ProductKey: derefString(it.ProductKey),
-				GTIN:       it.ProductGTIN,
-				Name:       derefString(it.ProductName),
-				Brand:      it.ProductBrand,
-				Unit:       derefString(it.ProductUnit),
+				ID:            *it.ProductID,
+				ProductKey:    derefString(it.ProductKey),
+				GTIN:          it.ProductGTIN,
+				Name:          derefString(it.ProductName),
+				Brand:         it.ProductBrand,
+				Unit:          derefString(it.ProductUnit),
+				CanonicalStem: it.ProductCanonicalStem,
 			}
 		}
 		out = append(out, v)

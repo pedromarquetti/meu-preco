@@ -795,7 +795,7 @@ func (s memPriceLogs) NeedsReview(_ context.Context, limit, offset int) ([]domai
 			storeName = nf.Supermarket.LegalName
 			accessKey = nf.AccessKey
 		}
-		var productKey, productGTIN, productName, productBrand, productUnit *string
+		var productKey, productGTIN, productName, productBrand, productUnit, productCanonicalStem *string
 		if l.ProductID != nil {
 			if p, ok := m.byProductID[*l.ProductID]; ok {
 				productKey = &p.ProductKey
@@ -803,6 +803,7 @@ func (s memPriceLogs) NeedsReview(_ context.Context, limit, offset int) ([]domai
 				productName = &p.Name
 				productBrand = p.Brand
 				productUnit = &p.Unit
+				productCanonicalStem = p.CanonicalStem
 			}
 		}
 
@@ -812,30 +813,31 @@ func (s memPriceLogs) NeedsReview(_ context.Context, limit, offset int) ([]domai
 		}
 
 		page = append(page, domain.ReviewItem{
-			PriceLogID:       l.ID,
-			NfceID:           l.NfceID,
-			AccessKey:        accessKey,
-			Line:             l.Line,
-			Description:      l.DescriptionSnapshot,
-			StoreCode:        l.StoreCode,
-			CNPJBase:         cnpjBase,
-			StoreName:        storeName,
-			Unit:             l.Unit,
-			Qty:              l.Qty,
-			PricePerUnit:     l.PricePerUnit,
-			UnitPrice:        l.UnitPrice,
-			TotalPrice:       l.TotalPrice,
-			SuggestedStem:    "",
-			CreatedAt:        l.CreatedAt,
-			ProductID:        l.ProductID,
-			ProductKey:       productKey,
-			ProductGTIN:      productGTIN,
-			ProductName:      productName,
-			ProductBrand:     productBrand,
-			ProductUnit:      productUnit,
-			ResolvedBy:       l.ResolvedBy,
-			ResolutionNote:   l.ResolutionNote,
-			LastReviewAction: lastAction,
+			PriceLogID:           l.ID,
+			NfceID:               l.NfceID,
+			AccessKey:            accessKey,
+			Line:                 l.Line,
+			Description:          l.DescriptionSnapshot,
+			StoreCode:            l.StoreCode,
+			CNPJBase:             cnpjBase,
+			StoreName:            storeName,
+			Unit:                 l.Unit,
+			Qty:                  l.Qty,
+			PricePerUnit:         l.PricePerUnit,
+			UnitPrice:            l.UnitPrice,
+			TotalPrice:           l.TotalPrice,
+			SuggestedStem:        "",
+			CreatedAt:            l.CreatedAt,
+			ProductID:            l.ProductID,
+			ProductKey:           productKey,
+			ProductGTIN:          productGTIN,
+			ProductName:          productName,
+			ProductBrand:         productBrand,
+			ProductUnit:          productUnit,
+			ProductCanonicalStem: productCanonicalStem,
+			ResolvedBy:           l.ResolvedBy,
+			ResolutionNote:       l.ResolutionNote,
+			LastReviewAction:     lastAction,
 		})
 	}
 	return page, total, nil

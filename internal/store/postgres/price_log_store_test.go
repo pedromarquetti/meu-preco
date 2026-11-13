@@ -115,10 +115,11 @@ func TestNeedsReviewProjectsProposal(t *testing.T) {
 	sm := seedSupermarket(t, s)
 	n := seedNfce(t, s, sm)
 	product := &domain.Product{
-		ProductKey: "07891000412855",
-		GTIN:       stringPtr("07891000412855"),
-		Name:       "LIMAO TAHTI",
-		Unit:       "KG",
+		ProductKey:    "07891000412855",
+		GTIN:          stringPtr("07891000412855"),
+		Name:          "LIMAO TAHTI",
+		Unit:          "KG",
+		CanonicalStem: stringPtr("tijolo"),
 	}
 	if _, err := s.Products().Create(ctx, product); err != nil {
 		t.Fatalf("create product: %v", err)
@@ -169,7 +170,8 @@ func TestNeedsReviewProjectsProposal(t *testing.T) {
 	if got.ProductKey == nil || *got.ProductKey != product.ProductKey ||
 		got.ProductGTIN == nil || *got.ProductGTIN != *product.GTIN ||
 		got.ProductName == nil || *got.ProductName != product.Name ||
-		got.ProductUnit == nil || *got.ProductUnit != product.Unit {
+		got.ProductUnit == nil || *got.ProductUnit != product.Unit ||
+		got.ProductCanonicalStem == nil || *got.ProductCanonicalStem != *product.CanonicalStem {
 		t.Errorf("proposed product projection = %+v", got)
 	}
 	if got.ResolvedBy == nil || *got.ResolvedBy != u.ID {

@@ -361,11 +361,12 @@ func TestNeedsReviewQueueShowsProposedAssignments(t *testing.T) {
 		t.Fatal(err)
 	}
 	proposed := &domain.Product{
-		ProductKey: "07891000412855",
-		GTIN:       strPtr("07891000412855"),
-		Name:       "LIMAO TAHTI",
-		Brand:      strPtr("VIGOR"),
-		Unit:       "KG",
+		ProductKey:    "07891000412855",
+		GTIN:          strPtr("07891000412855"),
+		Name:          "LIMAO TAHTI",
+		Brand:         strPtr("VIGOR"),
+		Unit:          "KG",
+		CanonicalStem: strPtr("tijolo"),
 	}
 	if _, err := m.Products().Create(context.Background(), proposed); err != nil {
 		t.Fatal(err)
@@ -435,7 +436,8 @@ func TestNeedsReviewQueueShowsProposedAssignments(t *testing.T) {
 		got.ProposedProduct.Unit != proposed.Unit ||
 		got.ProposedProduct.ProductKey != proposed.ProductKey ||
 		got.ProposedProduct.Brand == nil || *got.ProposedProduct.Brand != *proposed.Brand ||
-		got.ProposedProduct.GTIN == nil || *got.ProposedProduct.GTIN != *proposed.GTIN {
+		got.ProposedProduct.GTIN == nil || *got.ProposedProduct.GTIN != *proposed.GTIN ||
+		got.ProposedProduct.CanonicalStem == nil || *got.ProposedProduct.CanonicalStem != *proposed.CanonicalStem {
 		t.Errorf("proposed product = %+v", got.ProposedProduct)
 	}
 	if got.ResolvedBy == nil || *got.ResolvedBy != assigner.ID {

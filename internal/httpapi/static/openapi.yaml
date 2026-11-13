@@ -1926,6 +1926,12 @@ components:
         name: { type: string }
         brand: { type: string, nullable: true }
         unit: { type: string }
+        canonical_stem:
+          type: string
+          nullable: true
+          description: >
+            Stored identity stem of the proposed product. May disagree with the
+            display name; omitted when the product has no canonical stem.
     ReviewItemView:
       type: object
       properties:

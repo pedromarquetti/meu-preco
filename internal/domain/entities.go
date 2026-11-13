@@ -178,29 +178,32 @@ type SupermarketProduct struct {
 // Product* fields describe the product a user proposed when the row was
 // manually assigned; they stay nil for an unresolved line.
 type ReviewItem struct {
-	PriceLogID     int64
-	NfceID         int64
-	AccessKey      string
-	Line           int
-	Description    string // raw xProd
-	StoreCode      string // cProd as printed on the receipt
-	CNPJBase       string // first 8 CNPJ digits
-	StoreName      string
-	Unit           string
-	Qty            decimal.Decimal
-	PricePerUnit   *decimal.Decimal
-	UnitPrice      decimal.Decimal
-	TotalPrice     decimal.Decimal
-	SuggestedStem  string // best-guess canonical stem for batch-assign
-	CreatedAt      time.Time
-	ProductID      *int64  // current proposed product, nil when unresolved
-	ProductKey     *string // proposed product_key
-	ProductGTIN    *string // proposed GTIN, when the product has one
-	ProductName    *string // proposed product name
-	ProductUnit    *string // proposed canonical unit
-	ProductBrand   *string // product brand
-	ResolvedBy     *int64  // user who proposed the assignment
-	ResolutionNote *string // "assign" for a proposal, "needs_review" otherwise
+	PriceLogID    int64
+	NfceID        int64
+	AccessKey     string
+	Line          int
+	Description   string // raw xProd
+	StoreCode     string // cProd as printed on the receipt
+	CNPJBase      string // first 8 CNPJ digits
+	StoreName     string
+	Unit          string
+	Qty           decimal.Decimal
+	PricePerUnit  *decimal.Decimal
+	UnitPrice     decimal.Decimal
+	TotalPrice    decimal.Decimal
+	SuggestedStem string // best-guess canonical stem for batch-assign
+	CreatedAt     time.Time
+	ProductID     *int64  // current proposed product, nil when unresolved
+	ProductKey    *string // proposed product_key
+	ProductGTIN   *string // proposed GTIN, when the product has one
+	ProductName   *string // proposed product name
+	ProductUnit   *string // proposed canonical unit
+	ProductBrand  *string // product brand
+	// ProductCanonicalStem is the proposed product's stored identity stem; it
+	// can disagree with the display name and is nil when the product has none.
+	ProductCanonicalStem *string
+	ResolvedBy           *int64  // user who proposed the assignment
+	ResolutionNote       *string // "assign" for a proposal, "needs_review" otherwise
 	// LastReviewAction is the latest proposal event action, or nil when the
 	// price log has no review-event history.
 	LastReviewAction *string

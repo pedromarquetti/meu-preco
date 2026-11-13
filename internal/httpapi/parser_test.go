@@ -392,11 +392,12 @@ func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
 	}
 
 	proposed := &domain.Product{
-		ProductKey: "07891000412855",
-		GTIN:       strptr("07891000412855"),
-		Name:       "LIMAO TAHTI",
-		Brand:      strptr("VIGOR"),
-		Unit:       "KG",
+		ProductKey:    "07891000412855",
+		GTIN:          strptr("07891000412855"),
+		Name:          "LIMAO TAHTI",
+		Brand:         strptr("VIGOR"),
+		Unit:          "KG",
+		CanonicalStem: strptr("tijolo"),
 	}
 	if _, err := st.Products().Create(ctx, proposed); err != nil {
 		t.Fatalf("create proposed product: %v", err)
@@ -454,7 +455,8 @@ func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
 	}
 	if jint(proposal["id"]) != proposed.ID || proposal["name"] != proposed.Name ||
 		proposal["unit"] != proposed.Unit || proposal["product_key"] != proposed.ProductKey ||
-		proposal["gtin"] != *proposed.GTIN || proposal["brand"] != *proposed.Brand {
+		proposal["gtin"] != *proposed.GTIN || proposal["brand"] != *proposed.Brand ||
+		proposal["canonical_stem"] != *proposed.CanonicalStem {
 		t.Errorf("proposed_product = %+v", proposal)
 	}
 	if jint(gotAssigned["resolved_by"]) != assigner.ID {
