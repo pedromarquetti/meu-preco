@@ -8,6 +8,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/jackc/pgx/v5 v5.12.0
+	github.com/lmittmann/tint v1.2.1
 	github.com/shopspring/decimal v1.6.0
 	golang.org/x/crypto v0.58.0
 	golang.org/x/text v0.43.0

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,9 +18,10 @@ import (
 	"meupreco/internal/config"
 	"meupreco/internal/domain"
 	"meupreco/internal/httpapi"
-	"meupreco/internal/logger"
 	"meupreco/internal/service"
 	pstore "meupreco/internal/store/postgres"
+
+	"github.com/lmittmann/tint"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -38,7 +40,7 @@ func run() error {
 		return err
 	}
 
-	log := newLogger(cfg.LogLevel, cfg.LogFormat)
+	log := newLogger(os.Stdout, cfg.LogLevel, cfg.LogFormat)
 
 	// Open the database pool. It is lazy (no round-trip yet), so boot succeeds
 	// even while PostgreSQL is down; readyz reports 503 until Ping succeeds.
@@ -156,7 +158,11 @@ func adminSeedName(configured, email string) string {
 	return "admin"
 }
 
-func newLogger(level, format string) *slog.Logger {
+// newLogger builds the process logger. LOG_FORMAT=json keeps the structured
+// handler (for collectors); pretty uses tint, which keeps the human-readable
+// key=value layout and colors it when w is a terminal. Redirected output stays
+// plain so persisted logs contain no ANSI escapes.
+func newLogger(w io.Writer, level, format string) *slog.Logger {
 	var lvl slog.Level
 
 	switch level {
@@ -170,10 +176,24 @@ func newLogger(level, format string) *slog.Logger {
 		lvl = slog.LevelInfo
 	}
 
-	opts := &slog.HandlerOptions{Level: lvl}
-
 	if format == "json" {
-		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+		return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lvl}))
 	}
-	return slog.New(logger.NewPrettyHandler(os.Stdout, opts))
+
+	return slog.New(tint.NewTextHandler(w, &tint.Options{
+		Level:      lvl,
+		TimeFormat: "02-01-2006 15:04:05.000",
+		NoColor:    !isTerminal(w),
+	}))
+}
+
+// isTerminal reports whether w is an interactive terminal. Anything else
+// (regular files, pipes, CI capture) is treated as persisted output.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
