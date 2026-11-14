@@ -351,6 +351,15 @@ func (s memProducts) SearchAdminFiltered(_ context.Context, f domain.ProductFilt
 	return s.searchFiltered(f, limit, offset, true)
 }
 
+func (s memProducts) ListAll(context.Context) ([]domain.Product, error) {
+	out := make([]domain.Product, 0, len(s.m.byProductID))
+	for _, p := range s.m.byProductID {
+		out = append(out, *p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 func (s memProducts) searchFiltered(f domain.ProductFilter, limit, offset int, includeUnpublished bool) ([]domain.Product, int64, error) {
 	m := s.m
 	var out []*domain.Product
@@ -400,6 +409,21 @@ func (s memProducts) Update(_ context.Context, id int64, patch domain.ProductPat
 	if patch.Unit != nil {
 		p.Unit = *patch.Unit
 	}
+	return nil
+}
+
+func (s memProducts) UpdateIdentity(_ context.Context, id int64, stem, key string) error {
+	p, ok := s.m.byProductID[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	if other, exists := s.m.products[key]; exists && other.ID != id {
+		return domain.ErrConflict
+	}
+	delete(s.m.products, p.ProductKey)
+	p.CanonicalStem = &stem
+	p.ProductKey = key
+	s.m.products[key] = p
 	return nil
 }
 

@@ -19,6 +19,7 @@ import (
 	"meupreco/internal/auth"
 	"meupreco/internal/config"
 	"meupreco/internal/domain"
+	"meupreco/internal/product"
 	pstore "meupreco/internal/store/postgres"
 	"meupreco/internal/testdb"
 )
@@ -948,10 +949,43 @@ func TestAdminCuration(t *testing.T) {
 	if _, set := out["brand"]; set {
 		t.Errorf("brand should be cleared, got %v", out["brand"])
 	}
+	wantStem, wantKey := product.CanonicalIdentity("ARROZ BRANCO 5KG RENOMEADO", "", "KG", nil)
+	if out["product_key"] != wantKey || out["canonical_stem"] != wantStem {
+		t.Errorf("patched identity = key %v stem %v, want key %q stem %q",
+			out["product_key"], out["canonical_stem"], wantKey, wantStem)
+	}
 	rec, out = do(t, api, http.MethodPatch, fmt.Sprintf("/api/v1/admin/products/%d", pcur.ID),
 		`{"unit":"dúzia"}`)
 	if rec.Code != http.StatusBadRequest || out["error"].(map[string]any)["code"] != "invalid_filter" {
 		t.Errorf("bad unit = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	// A rename onto another product's computed identity is a typed 409 and
+	// leaves the target row untouched.
+	ownerStem, ownerKey := product.CanonicalIdentity("FEIJAO CARIOCA", "", "UN", nil)
+	owner := &domain.Product{ProductKey: ownerKey, Name: "FEIJAO CARIOCA", Unit: "UN", CanonicalStem: &ownerStem}
+	if _, err := st.Products().Create(ctx, owner); err != nil {
+		t.Fatalf("create identity owner: %v", err)
+	}
+	victimStem, victimKey := product.CanonicalIdentity("ARROZ INTEGRAL", "", "UN", nil)
+	victim := &domain.Product{ProductKey: victimKey, Name: "ARROZ INTEGRAL", Unit: "UN", CanonicalStem: &victimStem}
+	if _, err := st.Products().Create(ctx, victim); err != nil {
+		t.Fatalf("create identity victim: %v", err)
+	}
+	rec, out = do(t, api, http.MethodPatch, fmt.Sprintf("/api/v1/admin/products/%d", victim.ID),
+		`{"name":"FEIJAO CARIOCA"}`)
+	if rec.Code != http.StatusConflict || out["error"].(map[string]any)["code"] != "product_identity_conflict" {
+		t.Fatalf("identity conflict = %d (%s), want 409 product_identity_conflict", rec.Code, rec.Body.String())
+	}
+	if msg := out["error"].(map[string]any)["message"].(string); !strings.Contains(msg, fmt.Sprint(owner.ID)) {
+		t.Errorf("conflict message = %q, want existing product id %d", msg, owner.ID)
+	}
+	unchanged, err := st.Products().GetByIDForWrite(ctx, victim.ID)
+	if err != nil {
+		t.Fatalf("read victim: %v", err)
+	}
+	if unchanged.Name != "ARROZ INTEGRAL" || unchanged.ProductKey != victimKey {
+		t.Errorf("victim changed after conflict: %+v", unchanged)
 	}
 
 	// 5. Merge the duplicate into the curated product: logs move, dup vanishes.

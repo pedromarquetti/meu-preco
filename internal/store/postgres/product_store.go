@@ -95,6 +95,24 @@ func (r productRepo) SearchAdminFiltered(ctx context.Context, f domain.ProductFi
 	return r.searchFiltered(ctx, f, limit, offset, true)
 }
 
+func (r productRepo) ListAll(ctx context.Context) ([]domain.Product, error) {
+	rows, err := r.db.Query(ctx, `SELECT `+productColumns+` FROM products ORDER BY products.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]domain.Product, 0)
+	for rows.Next() {
+		p, err := r.scanProduct(rows, nil)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
 func (r productRepo) searchFiltered(ctx context.Context, f domain.ProductFilter, limit, offset int, includeUnpublished bool) ([]domain.Product, int64, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -214,6 +232,22 @@ func (r productRepo) Update(ctx context.Context, id int64, patch domain.ProductP
 	tag, err := r.db.Exec(ctx,
 		`UPDATE products SET `+strings.Join(sets, ", ")+` WHERE id = $1`, args...)
 	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (r productRepo) UpdateIdentity(ctx context.Context, id int64, canonicalStem, productKey string) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE products SET canonical_stem = $2, product_key = $3 WHERE id = $1`,
+		id, canonicalStem, productKey)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return domain.ErrConflict
+		}
 		return err
 	}
 	if tag.RowsAffected() == 0 {

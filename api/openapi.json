@@ -1962,6 +1962,7 @@
           "admin"
         ],
         "summary": "Curate a product's name/brand/unit (admin)",
+        "description": "Curate the display fields. A rename recomputes `canonical_stem` and `product_key` atomically; editing only brand or unit recomputes the key while keeping the stem. A rename that collides with another product's identity returns `409 product_identity_conflict` and must be resolved by merging the duplicate or assigning the price log to the existing product.\n",
         "parameters": [
           {
             "name": "id",
@@ -2023,6 +2024,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The rename would collide with another product's identity (`product_identity_conflict`). Resolve it by merging the duplicate or by assigning the price log to the existing product.\n",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductIdentityConflictError"
                 }
               }
             }
@@ -2568,6 +2579,29 @@
             "properties": {
               "code": {
                 "const": "in_use"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ProductIdentityConflictError": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "const": "product_identity_conflict"
               },
               "message": {
                 "type": "string"

@@ -90,8 +90,13 @@ type ProductStore interface {
 	// but skips the public visibility predicates: admins must be able to find
 	// products with no approved price log or still marked needs_review.
 	SearchAdminFiltered(ctx context.Context, f ProductFilter, limit, offset int) ([]Product, int64, error)
+	// ListAll returns every product, including unpublished rows. It is intended
+	// for operational tools, not public catalog reads.
+	ListAll(ctx context.Context) ([]Product, error)
 	// Update applies the non-nil fields of patch to a product (admin curation).
 	Update(ctx context.Context, id int64, patch ProductPatch) error
+	// UpdateIdentity replaces the stored commodity identity atomically.
+	UpdateIdentity(ctx context.Context, id int64, canonicalStem, productKey string) error
 	// Delete removes a product row (the caller must have re-pointed or
 	// cleared its price_logs first so the FK stays whole).
 	Delete(ctx context.Context, id int64) error

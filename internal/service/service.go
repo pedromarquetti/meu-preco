@@ -50,6 +50,9 @@ var (
 	// the target (a product still carried by price_logs, a supermarket still
 	// owning receipts) when no purge was requested. 409.
 	ErrInUse = errors.New("resource in use")
+	// ErrProductIdentityConflict reports a rename that would collide with
+	// another product's identity (product_key). 409.
+	ErrProductIdentityConflict = errors.New("product identity conflict")
 	// ErrInvalidFilter reports an unparseable read query (bad page/limit or an
 	// unknown unit/gtin token). 400.
 	ErrInvalidFilter = errors.New("invalid filter")

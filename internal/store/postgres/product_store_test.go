@@ -8,6 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"meupreco/internal/domain"
+	"meupreco/internal/product"
 )
 
 func TestProductStoreLifecycle(t *testing.T) {
@@ -64,6 +65,47 @@ func TestProductStoreLifecycle(t *testing.T) {
 	}
 	if byGTIN.ID != p.ID {
 		t.Errorf("get by gtin id = %d, want %d", byGTIN.ID, p.ID)
+	}
+}
+
+// TestProductUpdateIdentity proves the postgres identity writer applies both
+// columns atomically and maps a unique-key collision to domain.ErrConflict.
+func TestProductUpdateIdentity(t *testing.T) {
+	s := testStore
+	truncate(t)
+	ctx := context.Background()
+
+	p := &domain.Product{ProductKey: "identity-old", Name: "TIJOLO", Unit: "KG"}
+	if _, err := s.Products().Create(ctx, p); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	stem, key := product.CanonicalIdentity("APRESUNTADO", "", "KG", nil)
+	if err := s.Products().UpdateIdentity(ctx, p.ID, stem, key); err != nil {
+		t.Fatalf("update identity: %v", err)
+	}
+	got, err := s.Products().GetByIDForWrite(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.ProductKey != key || got.CanonicalStem == nil || *got.CanonicalStem != stem {
+		t.Errorf("identity = key %q stem %v, want key %q stem %q", got.ProductKey, got.CanonicalStem, key, stem)
+	}
+
+	// Recomputing the same identity is idempotent.
+	if err := s.Products().UpdateIdentity(ctx, p.ID, stem, key); err != nil {
+		t.Errorf("idempotent update: %v", err)
+	}
+
+	other := &domain.Product{ProductKey: "identity-other", Name: "OUTRO", Unit: "KG"}
+	if _, err := s.Products().Create(ctx, other); err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	if err := s.Products().UpdateIdentity(ctx, other.ID, stem, key); !errors.Is(err, domain.ErrConflict) {
+		t.Errorf("collision err = %v, want ErrConflict", err)
+	}
+	if err := s.Products().UpdateIdentity(ctx, 999999, stem, "fresh-key"); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("missing err = %v, want ErrNotFound", err)
 	}
 }
 

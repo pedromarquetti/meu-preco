@@ -26,6 +26,8 @@ func respondServiceError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, service.ErrInUse):
 		httpx.Error(w, r, http.StatusConflict, "in_use",
 			"resource still referenced; purge explicitly or remove references first")
+	case errors.Is(err, service.ErrProductIdentityConflict):
+		httpx.Error(w, r, http.StatusConflict, "product_identity_conflict", err.Error())
 	case errors.Is(err, service.ErrInvalidFilter):
 		httpx.Error(w, r, http.StatusBadRequest, "invalid_filter", err.Error())
 	case errors.Is(err, service.ErrInvalidAssignment):

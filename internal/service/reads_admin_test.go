@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -887,6 +888,10 @@ func TestUpdateProduct(t *testing.T) {
 	if v.Name != "LEITE INTEGRAL 1L" || v.Brand == nil || *v.Brand != "CAMPANESA" || v.Unit != "DZ" {
 		t.Errorf("updated view = %+v, want normalized DZ unit", v)
 	}
+	wantStem, wantKey := product.CanonicalIdentity("LEITE INTEGRAL 1L", "CAMPANESA", "DZ", nil)
+	if v.ProductKey != wantKey || v.CanonicalStem == nil || *v.CanonicalStem != wantStem {
+		t.Errorf("identity = key %q stem %v, want key %q stem %q", v.ProductKey, v.CanonicalStem, wantKey, wantStem)
+	}
 
 	// Brand may be cleared with an empty string.
 	empty := ""
@@ -897,9 +902,20 @@ func TestUpdateProduct(t *testing.T) {
 	if got.Brand != nil {
 		t.Errorf("brand = %+v, want nil after clear", got.Brand)
 	}
+	if got.CanonicalStem == nil || *got.CanonicalStem != wantStem {
+		t.Errorf("stem after brand clear = %v, want %q", got.CanonicalStem, wantStem)
+	}
+	wantKey = product.CommodityKey(wantStem, "DZ", "")
+	if got.ProductKey != wantKey {
+		t.Errorf("key after brand clear = %q, want %q", got.ProductKey, wantKey)
+	}
 
 	if _, err := svc.UpdateProduct(context.Background(), p.ID, domain.ProductPatch{Unit: strPtr("LITERS")}); !errors.Is(err, ErrInvalidFilter) {
 		t.Errorf("bad unit err = %v", err)
+	}
+	unchanged, _ := m.Products().GetByID(context.Background(), p.ID)
+	if unchanged.ProductKey != wantKey || unchanged.CanonicalStem == nil || *unchanged.CanonicalStem != wantStem {
+		t.Errorf("failed patch changed identity: key %q stem %v", unchanged.ProductKey, unchanged.CanonicalStem)
 	}
 	if _, err := svc.UpdateProduct(context.Background(), 404, domain.ProductPatch{Name: strPtr("X")}); !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("missing product err = %v", err)
@@ -942,6 +958,166 @@ func TestUpdateProductPendingOnlyProduct(t *testing.T) {
 	if _, err := m.Products().GetByID(context.Background(), p.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("public GetByID after update = %v, want ErrNotFound", err)
 	}
+}
+
+// seedIdentityProduct installs a commodity product whose key and stem were
+// derived by the shared identity helper, so rename tests start coherent.
+func seedIdentityProduct(t *testing.T, m *memStores, name, brand, unit string) *domain.Product {
+	t.Helper()
+	stem, key := product.CanonicalIdentity(name, brand, unit, nil)
+	var brandPtr *string
+	if brand != "" {
+		brandPtr = &brand
+	}
+	stemCopy := stem
+	p := &domain.Product{ProductKey: key, Name: name, Brand: brandPtr, Unit: unit, CanonicalStem: &stemCopy}
+	if _, err := m.Products().Create(context.Background(), p); err != nil {
+		t.Fatalf("seed identity product %q: %v", name, err)
+	}
+	return p
+}
+
+func TestUpdateProductIdentity(t *testing.T) {
+	t.Run("rename updates stem and key", func(t *testing.T) {
+		m := newMemStores()
+		p := seedIdentityProduct(t, m, "TIJOLO", "", "KG")
+		svc := newTestService(m)
+
+		v, err := svc.UpdateProduct(context.Background(), p.ID, domain.ProductPatch{Name: strPtr("APRESUNTADO")})
+		if err != nil {
+			t.Fatalf("rename: %v", err)
+		}
+		wantStem, wantKey := product.CanonicalIdentity("APRESUNTADO", "", "KG", nil)
+		if v.ProductKey != wantKey || v.CanonicalStem == nil || *v.CanonicalStem != wantStem {
+			t.Errorf("identity = key %q stem %v, want key %q stem %q", v.ProductKey, v.CanonicalStem, wantKey, wantStem)
+		}
+	})
+
+	t.Run("same identity is idempotent", func(t *testing.T) {
+		m := newMemStores()
+		p := seedIdentityProduct(t, m, "ARROZ", "", "KG")
+		svc := newTestService(m)
+		patch := domain.ProductPatch{Name: strPtr("ARROZ"), Unit: strPtr("KG")}
+
+		first, err := svc.UpdateProduct(context.Background(), p.ID, patch)
+		if err != nil {
+			t.Fatalf("first update: %v", err)
+		}
+		second, err := svc.UpdateProduct(context.Background(), p.ID, patch)
+		if err != nil {
+			t.Fatalf("second update: %v", err)
+		}
+		if first.ProductKey != second.ProductKey || derefTest(second.CanonicalStem) != derefTest(first.CanonicalStem) {
+			t.Errorf("identity changed on repeat: %+v then %+v", first, second)
+		}
+	})
+
+	t.Run("brand and unit only keep the stem", func(t *testing.T) {
+		m := newMemStores()
+		p := seedIdentityProduct(t, m, "ARROZ", "", "KG")
+		svc := newTestService(m)
+
+		withBrand, err := svc.UpdateProduct(context.Background(), p.ID, domain.ProductPatch{Brand: strPtr("TIO JOAO")})
+		if err != nil {
+			t.Fatalf("brand update: %v", err)
+		}
+		wantKey := product.CommodityKey("arroz", "KG", "TIO JOAO")
+		if withBrand.ProductKey != wantKey || derefTest(withBrand.CanonicalStem) != "arroz" {
+			t.Errorf("brand identity = key %q stem %v, want key %q stem arroz", withBrand.ProductKey, withBrand.CanonicalStem, wantKey)
+		}
+
+		withUnit, err := svc.UpdateProduct(context.Background(), p.ID, domain.ProductPatch{Unit: strPtr("UN")})
+		if err != nil {
+			t.Fatalf("unit update: %v", err)
+		}
+		wantKey = product.CommodityKey("arroz", "UN", "TIO JOAO")
+		if withUnit.ProductKey != wantKey || derefTest(withUnit.CanonicalStem) != "arroz" {
+			t.Errorf("unit identity = key %q stem %v, want key %q stem arroz", withUnit.ProductKey, withUnit.CanonicalStem, wantKey)
+		}
+	})
+
+	t.Run("collision rolls back the field update", func(t *testing.T) {
+		m := newMemStores()
+		owner := seedIdentityProduct(t, m, "ARROZ", "", "KG")
+		other := seedIdentityProduct(t, m, "FEIJAO", "", "KG")
+		svc := newTestService(m)
+
+		_, err := svc.UpdateProduct(context.Background(), other.ID, domain.ProductPatch{Name: strPtr("ARROZ")})
+		if !errors.Is(err, ErrProductIdentityConflict) {
+			t.Fatalf("conflict err = %v, want ErrProductIdentityConflict", err)
+		}
+		if !strings.Contains(err.Error(), fmt.Sprintf("product %d", owner.ID)) {
+			t.Errorf("conflict message = %q, want owner id %d", err, owner.ID)
+		}
+		got, _ := m.Products().GetByIDForWrite(context.Background(), other.ID)
+		if got.Name != "FEIJAO" || got.ProductKey != other.ProductKey || derefTest(got.CanonicalStem) != "feijao" {
+			t.Errorf("row changed after conflict: %+v", got)
+		}
+	})
+
+	t.Run("barcode identity survives a rename", func(t *testing.T) {
+		m := newMemStores()
+		gtin := "07896008038717"
+		p := seedOpenProduct(t, m, "ARROZ TIO JOAO", "UN", &gtin)
+		svc := newTestService(m)
+
+		// The display fields are curated, but the key must stay the GTIN: a
+		// commodity hash here would let the next barcode receipt insert a
+		// duplicate row (products.gtin is not unique).
+		v, err := svc.UpdateProduct(context.Background(), p.ID, domain.ProductPatch{
+			Name: strPtr("ARROZ BRANCO TIO JOAO 5KG"),
+			Unit: strPtr("KG"),
+		})
+		if err != nil {
+			t.Fatalf("rename barcode product: %v", err)
+		}
+		if v.Name != "ARROZ BRANCO TIO JOAO 5KG" || v.Unit != "KG" {
+			t.Errorf("display = %q/%q, want the curated name and unit", v.Name, v.Unit)
+		}
+		if v.ProductKey != gtin {
+			t.Errorf("barcode key = %q, want unchanged %q", v.ProductKey, gtin)
+		}
+		got, err := m.Products().GetByIDForWrite(context.Background(), p.ID)
+		if err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		if got.ProductKey != gtin || got.GTIN == nil || *got.GTIN != gtin {
+			t.Errorf("stored identity = key %q gtin %v, want %q", got.ProductKey, got.GTIN, gtin)
+		}
+		if got.CanonicalStem != nil {
+			t.Errorf("barcode row gained a fabricated stem %q", *got.CanonicalStem)
+		}
+	})
+
+	t.Run("conflicts with a batch-created identity", func(t *testing.T) {
+		m := newMemStores()
+		admin := &domain.User{Email: "admin@example.com", Role: "admin"}
+		if err := m.Users().Create(context.Background(), admin); err != nil {
+			t.Fatal(err)
+		}
+		sm := &domain.Supermarket{CNPJ: "12345678000199", LegalName: "MERCADO"}
+		mustReviewLogs(t, m, sm, 1)
+		svc := newTestService(m)
+
+		if _, err := svc.BatchAssign(context.Background(), admin.ID, BatchAssignRequest{
+			Assignments: []Assignment{{ID: m.reviewLogs()[0].ID, Action: "create", Name: "MACA FUJI", Unit: "KG"}},
+		}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		other := seedIdentityProduct(t, m, "BANANA", "", "KG")
+
+		_, err := svc.UpdateProduct(context.Background(), other.ID, domain.ProductPatch{Name: strPtr("MACA FUJI")})
+		if !errors.Is(err, ErrProductIdentityConflict) {
+			t.Fatalf("rename onto created identity = %v, want ErrProductIdentityConflict", err)
+		}
+	})
+}
+
+func derefTest(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func TestDeleteProductGuardAndPurge(t *testing.T) {

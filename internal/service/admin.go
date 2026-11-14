@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -443,25 +441,24 @@ func (s *Service) BatchAssign(ctx context.Context, adminID int64, req BatchAssig
 // commodity hash of the normalized stem + canonical unit; two admins creating
 // the same commodity converge on one row (idempotent, deduped).
 func (s *Service) createAdminProduct(ctx context.Context, tx domain.Stores, adminID int64, name, brand, unit string) (*domain.Product, bool, error) {
-	canonical, _ := product.NormalizeUnit(unit)
-	name = strings.TrimSpace(name)
-
-	stem := product.NormalizeStem(name, unit, nil)
-	if stem == "" {
-		// Nothing identifiable remains (all-numeric/packaging-only names): fall
-		// back to a stable hash of the exact triple so the creation is still
-		// deterministic and idempotent.
-		stem = stableKey(name, strings.TrimSpace(brand), canonical)
+	brands, err := brandDictionary(ctx, tx)
+	if err != nil {
+		return nil, false, err
 	}
+	name = strings.TrimSpace(name)
+	brandName := strings.TrimSpace(brand)
+	canonical, ok := product.NormalizeUnit(unit)
+	if !ok {
+		canonical = strings.TrimSpace(unit)
+	}
+	stem, key := product.CanonicalIdentity(name, brandName, canonical, brands)
 
 	var brandPtr *string
 
-	brandName := strings.TrimSpace(brand)
 	if brandName != "" {
 		brandPtr = &brandName
 	}
 
-	key := product.CommodityKey(stem, canonical, brandName)
 	if existing, err := tx.Products().GetByKey(ctx, key); err == nil {
 		return existing, false, nil
 	} else if !errors.Is(err, domain.ErrNotFound) {
@@ -587,6 +584,11 @@ func (s *Service) MergeSupermarkets(ctx context.Context, fromCNPJ, toCNPJ string
 // UpdateProduct implements PATCH /admin/products/{id}: curate name/brand/unit.
 // The unit must normalize to the canonical vocabulary (else 400). Unpublished
 // products are valid targets: curation is an admin write, not a public read.
+//
+// The patch and the derived identity commit together. A rename recomputes the
+// canonical stem and product key; a brand/unit edit recomputes the key while
+// keeping the stored stem. If the resulting key belongs to another product the
+// request fails with ErrProductIdentityConflict and nothing is written.
 func (s *Service) UpdateProduct(ctx context.Context, id int64, patch domain.ProductPatch) (*ProductView, error) {
 	if id <= 0 {
 		return nil, ErrProductNotFound
@@ -605,18 +607,93 @@ func (s *Service) UpdateProduct(ctx context.Context, id int64, patch domain.Prod
 	// was just updated as missing. Resolve and re-read through the write lookup,
 	// inside one transaction so a failed projection rolls the update back.
 	err := s.Stores.Tx(ctx, func(tx domain.Stores) error {
-		if _, err := tx.Products().GetByIDForWrite(ctx, id); err != nil {
+		current, err := tx.Products().GetByIDForWrite(ctx, id)
+		if err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
 				return ErrProductNotFound
 			}
 			return err
 		}
+
+		// Creation and curation must derive identity the same way, including
+		// the curated brand vocabulary and the empty-stem fallback.
+		brands, err := brandDictionary(ctx, tx)
+		if err != nil {
+			return err
+		}
+
+		effectiveName := current.Name
+		if patch.Name != nil {
+			effectiveName = *patch.Name
+		}
+		effectiveBrand := ""
+		if current.Brand != nil {
+			effectiveBrand = *current.Brand
+		}
+		if patch.Brand != nil {
+			effectiveBrand = *patch.Brand
+		}
+		effectiveUnit := current.Unit
+		if patch.Unit != nil {
+			effectiveUnit = *patch.Unit
+		}
+		if u, ok := product.NormalizeUnit(effectiveUnit); ok {
+			effectiveUnit = u
+		}
+
+		storedStem := ""
+		if current.CanonicalStem != nil {
+			storedStem = *current.CanonicalStem
+		}
+		nameChanged := effectiveName != current.Name
+		// A barcode row is identified by its GTIN; its display fields may be
+		// curated without touching product_key. Recomputing it as a commodity
+		// hash would let the next barcode receipt create a duplicate row.
+		barcodeIdentity := product.IsBarcodeIdentity(current.ProductKey, current.GTIN)
+		// The stem follows the name; the key follows name, brand and unit.
+		// Recompute when any of them changes, and backfill a missing stem.
+		identityChanged := !barcodeIdentity &&
+			(nameChanged || patch.Brand != nil || patch.Unit != nil || storedStem == "")
+		expectedStem := storedStem
+		expectedKey := current.ProductKey
+		if identityChanged {
+			if nameChanged || storedStem == "" {
+				expectedStem, expectedKey = product.CanonicalIdentity(effectiveName, effectiveBrand, effectiveUnit, brands)
+			} else {
+				expectedKey = product.CommodityKey(storedStem, effectiveUnit, effectiveBrand)
+			}
+		}
+
+		// Resolve an existing owner before writing so the conflict message can
+		// name the product and the field update never runs needlessly.
+		if identityChanged && expectedKey != current.ProductKey {
+			existing, err := tx.Products().GetByKey(ctx, expectedKey)
+			switch {
+			case err == nil && existing.ID != id:
+				return fmt.Errorf("%w: key already belongs to product %d", ErrProductIdentityConflict, existing.ID)
+			case err != nil && !errors.Is(err, domain.ErrNotFound):
+				return err
+			}
+		}
+
 		if err := tx.Products().Update(ctx, id, patch); err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
 				return ErrProductNotFound
 			}
 			return err
 		}
+		if identityChanged && (expectedStem != storedStem || expectedKey != current.ProductKey) {
+			if err := tx.Products().UpdateIdentity(ctx, id, expectedStem, expectedKey); err != nil {
+				if errors.Is(err, domain.ErrConflict) {
+					return ErrProductIdentityConflict
+				}
+				if errors.Is(err, domain.ErrNotFound) {
+					return ErrProductNotFound
+				}
+				return err
+			}
+		}
+
 		p, err := tx.Products().GetByIDForWrite(ctx, id)
 		if err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
@@ -790,11 +867,6 @@ func derefString(s *string) string {
 	return *s
 }
 
-func stableKey(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
-	return hex.EncodeToString(sum[:])
-}
-
 // ReviewPriceLog handles admin decisions on manual assignments. An "approve"
 // action publishes the current proposal (needs_review = false); a "reject"
 // action keeps the proposal pending but records the decision in history. Both
@@ -839,12 +911,13 @@ func (s *Service) ReviewPriceLog(ctx context.Context, adminID, priceLogID int64,
 			return err
 		}
 		result = ReviewProductView{
-			ID:         product.ID,
-			ProductKey: product.ProductKey,
-			GTIN:       product.GTIN,
-			Name:       product.Name,
-			Brand:      product.Brand,
-			Unit:       product.Unit,
+			ID:            product.ID,
+			ProductKey:    product.ProductKey,
+			GTIN:          product.GTIN,
+			Name:          product.Name,
+			Brand:         product.Brand,
+			Unit:          product.Unit,
+			CanonicalStem: product.CanonicalStem,
 		}
 
 		if action == ActionApprove {

@@ -169,7 +169,11 @@ func (*nilProductStore) SearchFiltered(context.Context, domain.ProductFilter, in
 func (*nilProductStore) SearchAdminFiltered(context.Context, domain.ProductFilter, int, int) ([]domain.Product, int64, error) {
 	return nil, 0, nil
 }
+func (*nilProductStore) ListAll(context.Context) ([]domain.Product, error) { return nil, nil }
 func (*nilProductStore) Update(context.Context, int64, domain.ProductPatch) error {
+	return domain.ErrNotFound
+}
+func (*nilProductStore) UpdateIdentity(context.Context, int64, string, string) error {
 	return domain.ErrNotFound
 }
 func (*nilProductStore) Delete(context.Context, int64) error { return domain.ErrNotFound }
