@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
@@ -13,16 +15,25 @@ import (
 type nfceRepo struct{ db queryer }
 
 func (r nfceRepo) Create(ctx context.Context, n *domain.Nfce) error {
-	err := r.db.QueryRow(ctx,
+	items := n.Items
+	if items == nil {
+		items = []domain.NfceItem{}
+	}
+	itemsJSON, err := json.Marshal(items)
+	if err != nil {
+		return fmt.Errorf("store: encode nfce items: %w", err)
+	}
+
+	err = r.db.QueryRow(ctx,
 		`INSERT INTO nfces (access_key, supermarket_id, number, series, issued_at, protocol,
 		                   environment, total, discount, paid_value, payment_method, coo,
-		                   payload_raw, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12, $13, $14)
+		                   payload_raw, created_by, items)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12, $13, $14, $15::jsonb)
 		 ON CONFLICT (access_key) DO NOTHING
 		 RETURNING id, created_at`,
 		n.AccessKey, n.Supermarket.ID, n.Number, n.Series, n.IssuedAt, n.Protocol,
 		n.Environment, n.Total.String(), n.Discount.String(), n.PaidValue.String(),
-		n.PaymentMethod, n.COO, n.PayloadRaw, n.CreatedBy,
+		n.PaymentMethod, n.COO, n.PayloadRaw, n.CreatedBy, itemsJSON,
 	).Scan(&n.ID, &n.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -74,21 +85,28 @@ func (r nfceRepo) Delete(ctx context.Context, id int64) error {
 // row and decodes numbers as text→decimal.
 func (r nfceRepo) scanOne(ctx context.Context, where string, arg any, n *domain.Nfce) error {
 	var total, discount, paid string
+	var itemsJSON []byte
 
 	err := r.db.QueryRow(ctx,
 		`SELECT n.id, n.access_key, n.number, n.series, n.issued_at, n.protocol,
 		        n.environment, n.total::text, n.discount::text, n.paid_value::text,
 		        n.payment_method, n.coo, n.payload_raw, n.created_by, n.created_at,
-		        s.id, s.cnpj, s.legal_name, s.address
+		        n.items, s.id, s.cnpj, s.legal_name, s.address
 		 FROM nfces n JOIN supermarkets s ON s.id = n.supermarket_id
 		 `+where, arg,
 	).Scan(&n.ID, &n.AccessKey, &n.Number, &n.Series, &n.IssuedAt, &n.Protocol,
 		&n.Environment, &total, &discount, &paid, &n.PaymentMethod,
-		&n.COO, &n.PayloadRaw, &n.CreatedBy, &n.CreatedAt,
+		&n.COO, &n.PayloadRaw, &n.CreatedBy, &n.CreatedAt, &itemsJSON,
 		&n.Supermarket.ID, &n.Supermarket.CNPJ, &n.Supermarket.LegalName, &n.Supermarket.Address,
 	)
 	if err != nil {
 		return translateError(err)
+	}
+
+	if len(itemsJSON) > 0 {
+		if err := json.Unmarshal(itemsJSON, &n.Items); err != nil {
+			return fmt.Errorf("store: decode nfce items: %w", err)
+		}
 	}
 
 	dec := func(s string) decimal.Decimal {

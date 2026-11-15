@@ -20,9 +20,9 @@ import (
 // Idempotency is the receipt's own access key: at most one live "pending"
 // draft may exist per (user, access_key) — replaying POST /nfce/new for the
 // same receipt returns the pending plan unchanged (replay-safe, no SEFAZ
-// refetch); an expired one is purged and re-planned. A committed receipt is
-// invisible here: it simply gets a fresh draft and the subsequent submit is a
-// silent no-op.
+// refetch); an expired one is purged and re-planned. A receipt already present
+// in the shared nfces table is re-planned from its stored lines without
+// contacting SEFAZ either; the subsequent submit is a silent no-op.
 func (s *Service) ReportPreview(ctx context.Context, req PreviewRequest) (*PreviewResult, error) {
 	key, payload, err := parseReceiptRequest(req.AccessKey, req.QRPayload)
 	if err != nil {
@@ -44,6 +44,18 @@ func (s *Service) ReportPreview(ctx context.Context, req PreviewRequest) (*Previ
 		return nil, err
 	}
 
+	// The receipt may already have been ingested (by this user or another).
+	// Re-plan from the stored, normalized receipt instead of asking SEFAZ
+	// again; the commit that follows is the usual silent no-op.
+	if existing, err := s.Stores.Nfces().GetByAccessKey(ctx, key.String()); err == nil {
+		s.Log.Debug("service: receipt already stored, rebuilding draft without SEFAZ",
+			"access_key", key.String())
+		return s.persistDraft(ctx, req.UserID, key, payload, existing)
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return nil, err
+	}
+
+	s.Log.Debug("Fetching SEFAZ for draft")
 	receipt, err := s.resolveReceipt(ctx, req.AccessKey, req.QRPayload)
 	if err != nil {
 		return nil, err

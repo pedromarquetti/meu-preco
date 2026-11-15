@@ -20,6 +20,7 @@ type stubStores struct {
 	products domain.ProductStore
 	synonyms domain.CommoditySynonymStore
 	brands   domain.CommodityBrandStore
+	nfces    domain.NfceStore
 }
 
 func newStubStores() *stubStores {
@@ -28,6 +29,7 @@ func newStubStores() *stubStores {
 		products: &nilProductStore{},
 		synonyms: &nilSynonymStore{},
 		brands:   &nilBrandStore{},
+		nfces:    stubNfceStore{},
 	}
 }
 
@@ -45,6 +47,10 @@ func (s *stubStores) CommoditySynonyms() domain.CommoditySynonymStore {
 
 func (s *stubStores) Brands() domain.CommodityBrandStore {
 	return s.brands
+}
+
+func (s *stubStores) Nfces() domain.NfceStore {
+	return s.nfces
 }
 
 // Users/RefreshTokens/Ping are overridden so the embedded nil Stores interface
@@ -193,3 +199,16 @@ func (*nilSynonymStore) MatchPrefix(context.Context, string) (*domain.CommodityS
 type nilBrandStore struct{}
 
 func (*nilBrandStore) List(context.Context) ([]domain.CommodityBrand, error) { return nil, nil }
+
+// stubNfceStore is an empty receipts table: the draft paths in these unit
+// tests always fall through to the resolver because no receipt is stored yet.
+type stubNfceStore struct{}
+
+func (stubNfceStore) Create(context.Context, *domain.Nfce) error { return domain.ErrNotFound }
+func (stubNfceStore) GetByID(context.Context, int64) (*domain.Nfce, error) {
+	return nil, domain.ErrNotFound
+}
+func (stubNfceStore) GetByAccessKey(context.Context, string) (*domain.Nfce, error) {
+	return nil, domain.ErrNotFound
+}
+func (stubNfceStore) Delete(context.Context, int64) error { return domain.ErrNotFound }

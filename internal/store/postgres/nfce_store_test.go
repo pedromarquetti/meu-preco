@@ -52,6 +52,13 @@ func seedNfce(t *testing.T, s *Store, sm *domain.Supermarket) *domain.Nfce {
 		PaidValue:     decimal.NewFromFloat(56.56),
 		COO:           "123456",
 		PayloadRaw:    "<dummy danfe>",
+		Items: []domain.NfceItem{
+			{
+				Line: 1, Code: "7891000412855", Description: "ACHOCOLATADO EM PO NESCAU 350G",
+				Qty: decimal.NewFromInt(1), Unit: "UN",
+				UnitPrice: decimal.NewFromFloat(22.99), TotalPrice: decimal.NewFromFloat(22.99),
+			},
+		},
 	}
 	if err := s.Nfces().Create(context.Background(), n); err != nil {
 		t.Fatalf("seed nfce: %v", err)
@@ -79,6 +86,13 @@ func TestNfceStoreLifecycle(t *testing.T) {
 	}
 	if !byID.Total.Equal(n.Total) || !byID.PaidValue.Equal(n.PaidValue) {
 		t.Errorf("totals = %v/%v", byID.Total, byID.PaidValue)
+	}
+	if len(byID.Items) != len(n.Items) {
+		t.Fatalf("items = %d, want %d", len(byID.Items), len(n.Items))
+	}
+	if byID.Items[0].Code != n.Items[0].Code ||
+		!byID.Items[0].UnitPrice.Equal(n.Items[0].UnitPrice) {
+		t.Errorf("item = %+v, want %+v", byID.Items[0], n.Items[0])
 	}
 
 	byKey, err := s.Nfces().GetByAccessKey(ctx, n.AccessKey)

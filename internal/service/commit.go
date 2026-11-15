@@ -136,6 +136,9 @@ func (s *Service) CommitPreview(ctx context.Context, req CommitRequest) (*Commit
 			COO:           receipt.COO,
 			PayloadRaw:    receipt.PayloadRaw,
 			CreatedBy:     &req.UserID,
+			// Persist the normalized lines with the receipt so a later
+			// /nfce/new can re-plan it without contacting SEFAZ.
+			Items: receipt.Items,
 		}
 		if err := tx.Nfces().Create(ctx, nf); err != nil {
 			if errors.Is(err, domain.ErrConflict) {

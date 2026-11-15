@@ -1,0 +1,1 @@
+ALTER TABLE nfces DROP COLUMN items;

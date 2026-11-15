@@ -222,3 +222,42 @@ func TestDraftPersistsCompleteReceiptSnapshot(t *testing.T) {
 		}
 	}
 }
+
+// TestReportPreviewReusesStoredReceiptWithoutSEFAZ proves /nfce/new never
+// contacts the portal once the receipt is already in the shared nfces table:
+// it rebuilds the plan from the lines persisted at commit time instead.
+func TestReportPreviewReusesStoredReceiptWithoutSEFAZ(t *testing.T) {
+	m := newMemStores()
+	m.seedKnownProduct()
+	resolver := &countingResolver{receipt: testReceipt()}
+	svc := New(m, resolver, nil, nil)
+	ctx := context.Background()
+
+	draft, err := svc.ReportPreview(ctx, PreviewRequest{UserID: 1, AccessKey: testAccessKey})
+	if err != nil {
+		t.Fatalf("draft: %v", err)
+	}
+	if _, err := svc.CommitPreview(ctx, CommitRequest{
+		UserID: 1, PreviewID: draft.PreviewID, Confirm: true,
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	callsAfterCommit := resolver.calls
+
+	// Any portal call on the re-draft is a regression: fail loudly.
+	resolver.err = errors.New("portal must not be reached for an ingested receipt")
+
+	again, err := svc.ReportPreview(ctx, PreviewRequest{UserID: 1, AccessKey: testAccessKey})
+	if err != nil {
+		t.Fatalf("re-draft: %v", err)
+	}
+	if resolver.calls != callsAfterCommit {
+		t.Fatalf("resolver calls = %d, want %d (no SEFAZ refetch)", resolver.calls, callsAfterCommit)
+	}
+	if again.PreviewID == draft.PreviewID {
+		t.Errorf("re-draft reused the committed preview id %d", again.PreviewID)
+	}
+	if len(again.Plan) != len(testReceipt().Items) {
+		t.Errorf("re-draft plan items = %d, want %d", len(again.Plan), len(testReceipt().Items))
+	}
+}
