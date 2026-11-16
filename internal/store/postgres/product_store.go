@@ -83,16 +83,16 @@ func (r productRepo) scanProduct(row pgx.Row, sim *float64) (*domain.Product, er
 // rows, and returns the page plus its total for stable pagination. The two
 // queries share the same WHERE so the count always matches what a follow-up
 // page would yield.
-func (r productRepo) SearchFiltered(ctx context.Context, f domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
-	return r.searchFiltered(ctx, f, limit, offset, false)
+func (r productRepo) SearchFiltered(ctx context.Context, filter domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
+	return r.searchFiltered(ctx, filter, limit, offset, false)
 }
 
 // SearchAdminFiltered is the admin catalog search: identical filters and
 // ranking, but without the public visibility predicates. Admins must be able to
 // target products that have no approved price log yet, including products still
 // flagged needs_review.
-func (r productRepo) SearchAdminFiltered(ctx context.Context, f domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
-	return r.searchFiltered(ctx, f, limit, offset, true)
+func (r productRepo) SearchAdminFiltered(ctx context.Context, filter domain.ProductFilter, limit, offset int) ([]domain.Product, int64, error) {
+	return r.searchFiltered(ctx, filter, limit, offset, true)
 }
 
 func (r productRepo) ListAll(ctx context.Context) ([]domain.Product, error) {
@@ -113,7 +113,7 @@ func (r productRepo) ListAll(ctx context.Context) ([]domain.Product, error) {
 	return out, rows.Err()
 }
 
-func (r productRepo) searchFiltered(ctx context.Context, f domain.ProductFilter, limit, offset int, includeUnpublished bool) ([]domain.Product, int64, error) {
+func (r productRepo) searchFiltered(ctx context.Context, filter domain.ProductFilter, limit, offset int, includeUnpublished bool) ([]domain.Product, int64, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
@@ -130,15 +130,25 @@ func (r productRepo) searchFiltered(ctx context.Context, f domain.ProductFilter,
 	}
 	args := []any{}
 
-	if q := strings.TrimSpace(f.Query); q != "" {
-		args = append(args, q)
+	if query := strings.TrimSpace(filter.Query); query != "" {
+		args = append(args, query)
 		n := len(args)
+		qLen := len(query)
+		if qLen == 0 {
+			qLen = 1
+		}
+
+		// Shorter queries → lower (more permissive) similarity requirement.
+		// Longer queries → higher (stricter) to avoid false positives from single-letter matches.
+		threshold := max(0.01, float64(qLen)/100)
 		sim := fmt.Sprintf(
 			"greatest(similarity(products.name, $%d), similarity(COALESCE(products.brand, ''), $%d), similarity(COALESCE(products.canonical_stem, ''), $%d))",
 			n, n, n)
-		wheres = append(wheres, sim+" > 0.1")
+		args = append(args, threshold)
+		wheres = append(wheres, sim+fmt.Sprintf("> $%d", len(args)))
 	}
-	if gtin := strings.TrimSpace(f.GTIN); gtin != "" {
+
+	if gtin := strings.TrimSpace(filter.GTIN); gtin != "" {
 		args = append(args, gtin)
 		n := len(args)
 
@@ -147,13 +157,13 @@ func (r productRepo) searchFiltered(ctx context.Context, f domain.ProductFilter,
 		wheres = append(wheres, fmt.Sprintf(`ltrim(COALESCE(products.gtin, ''), '0') LIKE $%d || '%%'`, n))
 	}
 
-	if unit := strings.TrimSpace(f.Unit); unit != "" {
+	if unit := strings.TrimSpace(filter.Unit); unit != "" {
 		args = append(args, unit)
 		n := len(args)
 		wheres = append(wheres, fmt.Sprintf("products.unit = $%d", n))
 	}
 
-	if brand := strings.TrimSpace(f.Brand); brand != "" {
+	if brand := strings.TrimSpace(filter.Brand); brand != "" {
 		args = append(args, brand, brand)
 		n := len(args)
 		wheres = append(wheres, fmt.Sprintf("(products.brand ILIKE '%%' || $%d || '%%' OR products.name ILIKE '%%' || $%d || '%%')", n-1, n))
@@ -163,9 +173,11 @@ func (r productRepo) searchFiltered(ctx context.Context, f domain.ProductFilter,
 	if where == "" {
 		where = "TRUE"
 	}
+
 	order := "products.name"
 	selectExtra := ""
 	withSim := false
+
 	if strings.Contains(where, "similarity") {
 		order = "sim DESC, products.name"
 		withSim = true
