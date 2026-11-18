@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptrace"
 	"net/url"
 	"regexp"
 	"sort"
@@ -19,8 +20,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"golang.org/x/text/number"
 )
 
 const (
@@ -193,14 +192,16 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 // HTMLParser).
 func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) ([]byte, error) {
 	builder := QRBuilder{BaseURL: s.baseURL}
-	url := builder.FromKey(key, envProduction)
+	requestURL := builder.FromKey(key, envProduction)
 	if payload != "" {
-		url = builder.FromPayload(payload)
+		requestURL = builder.FromPayload(payload)
 	}
+	host, path := requestTarget(requestURL)
 
 	s.log.Debug("nfce: portal fetch start",
 		"access_key", key.String(),
-		"url", url,
+		"host", host,
+		"path", path,
 		"user_agent", s.user_agent,
 		"max_retries", s.retries,
 	)
@@ -228,11 +229,12 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 		s.log.Debug("nfce: portal request attempt",
 			"access_key", key.String(),
 			"attempt", attempt,
-			"url", url,
+			"host", host,
+			"path", path,
 			"user_agent", s.user_agent,
 		)
 
-		status, header, body, err := s.doRequest(ctx, url)
+		status, header, body, err := s.doRequest(ctx, requestURL, key)
 		duration := time.Since(attemptStarted)
 
 		// A response may arrive together with a body-read error (a transfer
@@ -377,7 +379,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 			)
 			capErr, asErr := errors.AsType[*CaptchaError](err)
 			if asErr {
-				ch := s.captureChallenge(url, payload, key, capErr.ImageURL, body)
+				ch := s.captureChallenge(requestURL, payload, key, capErr.ImageURL, body)
 				capErr.ChallengeID = ch.ID
 				return nil, capErr
 			}
@@ -511,11 +513,205 @@ func (s *HTTPSource) classifyPortalBlock(key AccessKey, status int, header http.
 	return nil
 }
 
-func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.Header, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return 0, nil, nil, err
+// portalTrace captures safe transport facts for one portal request. It never
+// records a URL with its query string, response bodies, or cookie values.
+type portalTrace struct {
+	mu         sync.Mutex
+	connected  bool
+	reused     bool
+	remoteAddr string
+	tlsVersion uint16
+	tlsALPN    string
+	firstByte  time.Time
+}
+
+// withPortalTrace attaches a trace collector to req and returns it alongside
+// the request that carries it in its context.
+func withPortalTrace(req *http.Request) (*http.Request, *portalTrace) {
+	trace := &portalTrace{}
+	ctx := httptrace.WithClientTrace(req.Context(), trace.clientTrace())
+	return req.WithContext(ctx), trace
+}
+
+func (t *portalTrace) clientTrace() *httptrace.ClientTrace {
+	return &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			t.connected = true
+			t.reused = info.Reused
+			if info.Conn != nil {
+				t.remoteAddr = info.Conn.RemoteAddr().String()
+			}
+		},
+		TLSHandshakeDone: func(state tls.ConnectionState, err error) {
+			if err != nil {
+				return
+			}
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			t.tlsVersion = state.Version
+			t.tlsALPN = state.NegotiatedProtocol
+		},
+		GotFirstResponseByte: func() {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			t.firstByte = time.Now()
+		},
 	}
+}
+
+// attrs returns the safe transport fields for a debug log. first_byte_ms is -1
+// when the request never produced a response byte.
+func (t *portalTrace) attrs(start time.Time) []any {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	firstByteMS := int64(-1)
+	if !t.firstByte.IsZero() {
+		firstByteMS = t.firstByte.Sub(start).Milliseconds()
+	}
+	return []any{
+		"connection_established", t.connected,
+		"connection_reused", t.reused,
+		"remote_addr", t.remoteAddr,
+		"tls_version", tlsVersionName(t.tlsVersion),
+		"tls_alpn", t.tlsALPN,
+		"first_byte_ms", firstByteMS,
+	}
+}
+
+func tlsVersionName(version uint16) string {
+	switch version {
+	case 0:
+		return ""
+	case tls.VersionTLS10:
+		return "1.0"
+	case tls.VersionTLS11:
+		return "1.1"
+	case tls.VersionTLS12:
+		return "1.2"
+	case tls.VersionTLS13:
+		return "1.3"
+	default:
+		return fmt.Sprintf("0x%04x", version)
+	}
+}
+
+// requestTarget extracts the host and path from rawURL, deliberately dropping
+// the query and fragment: a v2 QR payload lives in the query and can contain a
+// digest/signature.
+func requestTarget(rawURL string) (host, path string) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", ""
+	}
+	path = u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	return u.Host, path
+}
+
+// safeHeaderAttrs returns only the response headers that are safe to log. It
+// never includes Set-Cookie, Authorization, or any header that can carry a
+// credential.
+func safeHeaderAttrs(header http.Header) []any {
+	return []any{
+		"server", clipHeaderValue(header.Get("Server")),
+		"content_type", clipHeaderValue(header.Get("Content-Type")),
+		"via", clipHeaderValue(header.Get("Via")),
+		"x_cache", clipHeaderValue(header.Get("X-Cache")),
+		"retry_after", clipHeaderValue(header.Get("Retry-After")),
+		"connection", clipHeaderValue(header.Get("Connection")),
+	}
+}
+
+func clipHeaderValue(v string) string {
+	const max = 200
+	if len(v) <= max {
+		return v
+	}
+	return v[:max] + "..."
+}
+
+// cookieNamesFrom returns only cookie names, sorted for stable logs.
+func cookieNamesFrom(cookies []*http.Cookie) []string {
+	names := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if c != nil {
+			names = append(names, c.Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// cookieAttrs returns cookie metadata (never values) for safe diagnostics.
+func cookieAttrs(cookies []*http.Cookie) []string {
+	attrs := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		if c == nil {
+			continue
+		}
+		expires := "session"
+		if !c.Expires.IsZero() {
+			expires = "set"
+		}
+		attrs = append(attrs, fmt.Sprintf(
+			"%s domain=%q path=%q expires=%s max_age=%d secure=%t http_only=%t",
+			c.Name, c.Domain, c.Path, expires, c.MaxAge, c.Secure, c.HttpOnly,
+		))
+	}
+	sort.Strings(attrs)
+	return attrs
+}
+
+// hasChallengeCookie reports whether an F5 challenge cookie name appeared.
+func hasChallengeCookie(names []string) bool {
+	for _, name := range names {
+		upper := strings.ToUpper(name)
+		if strings.HasPrefix(upper, "TSPD") || strings.HasPrefix(upper, "BIGIPSERVER") {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeTransportError strips query strings, fragments, and credentials from
+// the URL that net/http embeds in *url.Error, recursing into nested url errors
+// (http.Client wraps a transport error without removing its URL). The full QR
+// payload must never reach logs or returned error strings.
+func sanitizeTransportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || urlErr == nil {
+		return err
+	}
+	urlErrCopy := *urlErr
+	if u, parseErr := url.Parse(urlErr.URL); parseErr == nil {
+		u.RawQuery = ""
+		u.Fragment = ""
+		u.User = nil
+		urlErrCopy.URL = u.String()
+	}
+	if urlErr.Err != nil && urlErr.Err != err {
+		urlErrCopy.Err = sanitizeTransportError(urlErr.Err)
+	}
+	return &urlErrCopy
+}
+
+func (source *HTTPSource) doRequest(ctx context.Context, rawURL string, key AccessKey) (int, http.Header, []byte, error) {
+	start := time.Now()
+	host, path := requestTarget(rawURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return 0, nil, nil, sanitizeTransportError(err)
+	}
+	req, trace := withPortalTrace(req)
 	req.Header.Set("User-Agent", source.user_agent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("Accept-Language", "pt-BR,pt;q=0.9")
@@ -543,10 +739,32 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.
 	var sentNames []string
 	if logCookies {
 		sentNames = source.cookieNames(req.URL)
+		source.log.Debug("nfce: portal request diagnostics",
+			"access_key", key.String(),
+			"host", host,
+			"path", path,
+			"cookie_count_sent", len(sentNames),
+			"cookie_names_sent", sentNames,
+			"challenge_cookie", hasChallengeCookie(sentNames),
+		)
 	}
 
 	resp, err := source.client.Do(req)
 	if err != nil {
+		err = sanitizeTransportError(err)
+		if logCookies {
+			attrs := []any{
+				"access_key", key.String(),
+				"host", host,
+				"path", path,
+			}
+			attrs = append(attrs, trace.attrs(start)...)
+			attrs = append(attrs,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"err", err,
+			)
+			source.log.Debug("nfce: portal transport failed", attrs...)
+		}
 		return 0, nil, nil, err
 	}
 
@@ -556,13 +774,25 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.
 	}()
 
 	if logCookies {
-		source.log.Debug("nfce: portal cookie state",
-			"host", req.URL.Host,
-			"cookie_names_sent", sentNames,
+		setNames := cookieNamesFrom(resp.Cookies())
+		allNames := append(append([]string{}, sentNames...), setNames...)
+		attrs := []any{
+			"access_key", key.String(),
+			"host", host,
+			"path", path,
+			"status", resp.StatusCode,
+		}
+		attrs = append(attrs, trace.attrs(start)...)
+		attrs = append(attrs, safeHeaderAttrs(resp.Header)...)
+		attrs = append(attrs,
 			"cookie_count_sent", len(sentNames),
-			"cookie_names_set", setCookieNames(resp),
-			"cookie_count_set", len(resp.Cookies()),
+			"cookie_names_sent", sentNames,
+			"cookie_count_set", len(setNames),
+			"cookie_names_set", setNames,
+			"cookie_attrs_set", cookieAttrs(resp.Cookies()),
+			"challenge_cookie", hasChallengeCookie(allNames),
 		)
+		source.log.Debug("nfce: portal response diagnostics", attrs...)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
@@ -595,25 +825,7 @@ func (source *HTTPSource) cookieNames(u *url.URL) []string {
 	if source.client.Jar == nil {
 		return nil
 	}
-	cookies := source.client.Jar.Cookies(u)
-	names := make([]string, 0, len(cookies))
-	for _, c := range cookies {
-		names = append(names, c.Name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// setCookieNames returns the names (never the values) of the cookies the
-// portal attempted to set on a response.
-func setCookieNames(resp *http.Response) []string {
-	cookies := resp.Cookies()
-	names := make([]string, 0, len(cookies))
-	for _, c := range cookies {
-		names = append(names, c.Name)
-	}
-	sort.Strings(names)
-	return names
+	return cookieNamesFrom(source.client.Jar.Cookies(u))
 }
 
 // captureChallenge registers the session context of a captcha-challenged fetch

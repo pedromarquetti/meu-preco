@@ -140,7 +140,11 @@ func (r productRepo) searchFiltered(ctx context.Context, filter domain.ProductFi
 
 		// Shorter queries → lower (more permissive) similarity requirement.
 		// Longer queries → higher (stricter) to avoid false positives from single-letter matches.
-		threshold := max(0.01, float64(qLen)/100)
+		// The floor is deliberately 0.1 rather than ~0: pg_trgm similarity
+		// treats short strings harshly, and a brand token that merely shares a
+		// couple of trigrams (e.g. "TIO JOAO" vs "limao" = 0.071) must not
+		// produce an unrelated product hit.
+		threshold := max(0.1, float64(qLen)/100)
 		sim := fmt.Sprintf(
 			"greatest(similarity(products.name, $%d), similarity(COALESCE(products.brand, ''), $%d), similarity(COALESCE(products.canonical_stem, ''), $%d))",
 			n, n, n)

@@ -114,6 +114,9 @@ func (s *HTTPChallengeSolver) Solve(ctx context.Context, ch *Challenge, solution
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
+	host, path := requestTarget(ch.FormAction)
+	req, trace := withPortalTrace(req)
 	req.Header.Set("User-Agent", s.userAgent)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
@@ -121,17 +124,51 @@ func (s *HTTPChallengeSolver) Solve(ctx context.Context, ch *Challenge, solution
 		req.AddCookie(c)
 	}
 
+	sentNames := cookieNamesFrom(req.Cookies())
+	s.log.Debug("nfce: portal captcha solve request",
+		"host", host,
+		"path", path,
+		"access_key", ch.AccessKey,
+		"cookie_count_sent", len(sentNames),
+		"cookie_names_sent", sentNames,
+		"challenge_cookie", hasChallengeCookie(sentNames),
+	)
+
 	resp, err := s.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		err = sanitizeTransportError(err)
+		attrs := []any{"host", host, "path", path, "access_key", ch.AccessKey}
+		attrs = append(attrs, trace.attrs(start)...)
+		attrs = append(attrs,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"err", err,
+		)
+		s.log.Debug("nfce: portal captcha solve transport failed", attrs...)
 		return nil, fmt.Errorf("%w: %v", ErrUpstream, err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
 	}()
+
+	setNames := cookieNamesFrom(resp.Cookies())
+	attrs := []any{
+		"host", host,
+		"path", path,
+		"access_key", ch.AccessKey,
+		"status", resp.StatusCode,
+	}
+	attrs = append(attrs, trace.attrs(start)...)
+	attrs = append(attrs, safeHeaderAttrs(resp.Header)...)
+	attrs = append(attrs,
+		"cookie_count_set", len(setNames),
+		"cookie_names_set", setNames,
+		"challenge_cookie", hasChallengeCookie(setNames),
+	)
+	s.log.Debug("nfce: portal captcha solve response", attrs...)
 
 	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
 		return nil, fmt.Errorf("%w: portal answered HTTP %d on captcha solve", ErrUpstream, resp.StatusCode)
@@ -145,10 +182,31 @@ func (s *HTTPChallengeSolver) Solve(ctx context.Context, ch *Challenge, solution
 		return nil, err
 	}
 
+	// A challenge page answered with another F5/BIG-IP script challenge is not
+	// a wrong captcha answer: it is a block. Log it as such without logging the
+	// solution or the form fields.
+	if marker, challenged := antiBotChallenge(body); challenged {
+		s.log.Warn("nfce: portal captcha solve answered with a JavaScript challenge",
+			"host", host,
+			"path", path,
+			"access_key", ch.AccessKey,
+			"status", resp.StatusCode,
+			"bytes", len(body),
+			"marker", marker,
+		)
+	}
+
 	switch failure := pageFailure(body).(type) {
 	case nil:
 		return body, nil // the DANFE page: solved
 	case *CaptchaError:
+		s.log.Debug("nfce: portal captcha answer rejected",
+			"host", host,
+			"path", path,
+			"access_key", ch.AccessKey,
+			"status", resp.StatusCode,
+			"bytes", len(body),
+		)
 		return body, ErrWrongSolution
 	default:
 		if errors.Is(failure, ErrKeyNotFound) {
@@ -174,16 +232,37 @@ func (s *HTTPChallengeSolver) Image(ctx context.Context, ch *Challenge) ([]byte,
 	if err != nil {
 		return nil, "", err
 	}
+	start := time.Now()
+	host, path := requestTarget(ch.ImageURL)
+	req, trace := withPortalTrace(req)
 	req.Header.Set("User-Agent", s.userAgent)
 	for _, c := range ch.Cookies {
 		req.AddCookie(c)
 	}
+
+	sentNames := cookieNamesFrom(req.Cookies())
+	s.log.Debug("nfce: portal captcha image request",
+		"host", host,
+		"path", path,
+		"access_key", ch.AccessKey,
+		"cookie_count_sent", len(sentNames),
+		"cookie_names_sent", sentNames,
+		"challenge_cookie", hasChallengeCookie(sentNames),
+	)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, "", ctx.Err()
 		}
+		err = sanitizeTransportError(err)
+		attrs := []any{"host", host, "path", path, "access_key", ch.AccessKey}
+		attrs = append(attrs, trace.attrs(start)...)
+		attrs = append(attrs,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"err", err,
+		)
+		s.log.Debug("nfce: portal captcha image transport failed", attrs...)
 		return nil, "", fmt.Errorf("%w: %v", ErrUpstream, err)
 	}
 	defer func() {
@@ -192,6 +271,15 @@ func (s *HTTPChallengeSolver) Image(ctx context.Context, ch *Challenge) ([]byte,
 	}()
 
 	if resp.StatusCode >= 400 {
+		attrs := []any{
+			"host", host,
+			"path", path,
+			"access_key", ch.AccessKey,
+			"status", resp.StatusCode,
+			"content_type", clipHeaderValue(resp.Header.Get("Content-Type")),
+		}
+		attrs = append(attrs, trace.attrs(start)...)
+		s.log.Debug("nfce: portal captcha image rejected", attrs...)
 		return nil, "", fmt.Errorf("%w: image answered HTTP %d", ErrUpstream, resp.StatusCode)
 	}
 
@@ -203,5 +291,17 @@ func (s *HTTPChallengeSolver) Image(ctx context.Context, ch *Challenge) ([]byte,
 	if ctype == "" {
 		ctype = http.DetectContentType(body)
 	}
+
+	attrs := []any{
+		"host", host,
+		"path", path,
+		"access_key", ch.AccessKey,
+		"status", resp.StatusCode,
+		"content_type", clipHeaderValue(ctype),
+		"bytes", len(body),
+	}
+	attrs = append(attrs, trace.attrs(start)...)
+	s.log.Debug("nfce: portal captcha image response", attrs...)
+
 	return body, ctype, nil
 }

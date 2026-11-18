@@ -1153,6 +1153,228 @@ func TestHTTPSourceLogsCookieNamesNotValues(t *testing.T) {
 	}
 }
 
+func TestHTTPSourceLogsSafeTransportDiagnostics(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secret = "cookie-value-must-not-leak"
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Server", "test-edge")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Via", "1.1 test-proxy")
+		w.Header().Set("X-Cache", "HIT")
+		http.SetCookie(w, &http.Cookie{Name: "TSPD_101", Value: secret, Path: "/"})
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 1,
+		Logger:     logger,
+		HTTPClient: srv.Client(),
+		Cookie:     "ASP.NET_SessionId=" + secret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	for i := 0; i < 2; i++ {
+		if _, err := src.Fetch(context.Background(), key, ""); err != nil {
+			t.Fatalf("fetch %d: %v", i+1, err)
+		}
+	}
+
+	out := logs.String()
+	for _, want := range []string{
+		"portal request diagnostics",
+		"portal response diagnostics",
+		"connection_established=true",
+		"connection_reused=",
+		"remote_addr=",
+		"tls_version=1.",
+		"first_byte_ms=",
+		"server=test-edge",
+		`content_type="text/html; charset=utf-8"`,
+		`via="1.1 test-proxy"`,
+		"x_cache=HIT",
+		"cookie_count_sent=",
+		"cookie_names_sent=",
+		"cookie_count_set=1",
+		"cookie_names_set=[TSPD_101]",
+		"cookie_attrs_set=",
+		"challenge_cookie=true",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("logs missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, secret) {
+		t.Errorf("cookie value leaked into logs:\n%s", out)
+	}
+}
+
+func TestHTTPSourceNeverLogsFullQRPayload(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 1,
+		Logger:     logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+	const payloadSecret = "qr-payload-must-not-leak"
+	payload := key.String() + "|3|1|" + payloadSecret
+
+	if _, err := src.Fetch(context.Background(), key, payload); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	out := logs.String()
+	if strings.Contains(out, payloadSecret) {
+		t.Errorf("full QR payload leaked into logs:\n%s", out)
+	}
+	if strings.Contains(out, "p=") {
+		t.Errorf("query string leaked into logs:\n%s", out)
+	}
+	for _, want := range []string{
+		"host=127.0.0.1:",
+		"path=/",
+		"access_key=" + key.String(),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("logs missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestHTTPSourceTransportErrorRedactsQRPayload(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	const payloadSecret = "qr-payload-must-not-leak"
+	payload := senateKey + "|3|1|" + payloadSecret
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    "https://portal.example",
+		RPS:        1000,
+		MaxRetries: 1,
+		Logger:     logger,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("transport boom")
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, payload)
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("fetch error = %v, want ErrUpstream", err)
+	}
+	if strings.Contains(err.Error(), payloadSecret) {
+		t.Errorf("QR payload leaked into error: %v", err)
+	}
+	if strings.Contains(err.Error(), "p=") {
+		t.Errorf("query string leaked into error: %v", err)
+	}
+	out := logs.String()
+	if strings.Contains(out, payloadSecret) || strings.Contains(out, "p=") {
+		t.Errorf("QR payload leaked into logs:\n%s", out)
+	}
+	if !strings.Contains(out, "portal transport failed") {
+		t.Errorf("transport failure was not logged safely:\n%s", out)
+	}
+}
+
+func TestSolverLogsSafeDiagnostics(t *testing.T) {
+	const (
+		cookieSecret   = "solver-cookie-value-must-not-leak"
+		querySecret    = "solver-query-must-not-leak"
+		solutionSecret = "solver-answer-must-not-leak"
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/image") {
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("not-really-a-png"))
+			return
+		}
+		raw, err := os.ReadFile("../../testdata/captcha.html")
+		if err != nil {
+			t.Errorf("read captcha fixture: %v", err)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "ASP.NET_SessionId", Value: cookieSecret, Path: "/"})
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	solver := NewHTTPChallengeSolver(HTTPChallengeSolverOptions{
+		HTTPClient: srv.Client(),
+		Logger:     logger,
+		RPS:        1000,
+	})
+	ch := &Challenge{
+		AccessKey:  senateKey,
+		FormAction: srv.URL + "/solve?token=" + querySecret,
+		ImageURL:   srv.URL + "/image?token=" + querySecret,
+		Fields:     map[string]string{"__VIEWSTATE": querySecret},
+		Cookies:    []*http.Cookie{{Name: "ASP.NET_SessionId", Value: cookieSecret}},
+	}
+
+	if _, err := solver.Solve(context.Background(), ch, solutionSecret); !errors.Is(err, ErrWrongSolution) {
+		t.Fatalf("Solve = %v, want ErrWrongSolution", err)
+	}
+	if _, ctype, err := solver.Image(context.Background(), ch); err != nil || ctype != "image/png" {
+		t.Fatalf("Image = %q, %v; want image/png and no error", ctype, err)
+	}
+
+	out := logs.String()
+	for _, want := range []string{
+		"portal captcha solve request",
+		"portal captcha solve response",
+		"portal captcha answer rejected",
+		"portal captcha image request",
+		"portal captcha image response",
+		"path=/solve",
+		"path=/image",
+		"access_key=" + senateKey,
+		"cookie_names_sent=[ASP.NET_SessionId]",
+		"cookie_names_set=[ASP.NET_SessionId]",
+		"content_type=image/png",
+		"status=200",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("logs missing %q:\n%s", want, out)
+		}
+	}
+	for _, secret := range []string{cookieSecret, querySecret, solutionSecret} {
+		if strings.Contains(out, secret) {
+			t.Errorf("solver secret %q leaked into logs:\n%s", secret, out)
+		}
+	}
+}
+
 func TestHTTPSourceCaptchaWithoutCookieJarDoesNotPanic(t *testing.T) {
 	raw, err := os.ReadFile("../../testdata/captcha.html")
 	if err != nil {
