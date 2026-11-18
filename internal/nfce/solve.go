@@ -65,7 +65,7 @@ type HTTPChallengeSolverOptions struct {
 func NewHTTPChallengeSolver(opts HTTPChallengeSolverOptions) *HTTPChallengeSolver {
 
 	if opts.UserAgent == "" {
-		opts.UserAgent = defaultUserAgent
+		opts.UserAgent = DefaultUserAgent
 	}
 
 	if opts.HTTPClient == nil {

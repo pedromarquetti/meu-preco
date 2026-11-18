@@ -23,8 +23,11 @@ import (
 )
 
 const (
-	defaultUserAgent = "MeuPreco/0.1"
-	maxBodyBytes     = 2 << 20 // 2 MiB, DANFE pages are tens of KiB
+	// DefaultUserAgent is the neutral user agent sent to the portal when the
+	// caller does not configure one.
+	DefaultUserAgent = "MeuPreco/0.1"
+
+	maxBodyBytes = 2 << 20 // 2 MiB, DANFE pages are tens of KiB
 
 	// maxPortalCooldown bounds both a configured cooldown and a hostile or
 	// broken Retry-After header. A bad header must never park every request
@@ -111,7 +114,7 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 	}
 
 	if opts.UserAgent == "" {
-		opts.UserAgent = defaultUserAgent
+		opts.UserAgent = DefaultUserAgent
 	}
 
 	if opts.MaxRetries < 1 {

@@ -670,23 +670,38 @@ be causing connection resets from the fiscal portal. It uses the same internal
 fetcher as the main application and prints per-attempt telemetry.
 
 ```sh
-# Basic usage:
-go run ./cmd/fetch-nfce <access_key>
+# Public test receipt (Senate CEAPS key used by the test suite):
+KEY=35241152323688000144650020000002571115675901
+
+# Basic usage: access key only.
+go run ./cmd/fetch-nfce "$KEY"
+
+# Replay an exact QR payload; its embedded key must match the first argument.
+go run ./cmd/fetch-nfce "$KEY" "$KEY|3|1"
+
+# A QR payload (or full portal URL) can also be the only argument.
+go run ./cmd/fetch-nfce "$KEY|3|1"
 
 # Test a specific printable-ASCII user agent, one attempt, 30s apart:
-go run ./cmd/fetch-nfce -a "MeuPreco/diagnostic" -r 1 -i 30s <access_key>
+go run ./cmd/fetch-nfce -a "MeuPreco/diagnostic" -r 1 -i 30s "$KEY"
 
 # Test against a different base URL:
-go run ./cmd/fetch-nfce -u https://test.portal.gov.br <access_key>
+go run ./cmd/fetch-nfce -u https://test.portal.gov.br "$KEY"
 
-# Replay an exact QR payload:
-go run ./cmd/fetch-nfce <access_key> "p=abc|3|1"
+# Diagnostic cookie replay. Prefer the environment variable: its value never
+# appears in argv or logs.
+SEFAZ_DIAG_COOKIE='ASP.NET_SessionId=...' go run ./cmd/fetch-nfce "$KEY"
+
+# Or a file readable only by the owner (chmod 600); -c accepts @path only, so
+# a literal cookie never lands in shell history.
+go run ./cmd/fetch-nfce -c @/tmp/sefaz-cookie "$KEY"
 ```
 
 **Warning:** This command contacts a live fiscal portal and should be run at low
 frequency with public test receipts only. Every failed request may extend an
 IP-level block for the whole deployment, so keep the default single attempt and
-the `-i` spacing.
+the `-i` spacing. The start log includes the access key, host/path, effective
+user agent and cookie *source* — never the cookie value or the full QR payload.
 
 ### Fetch test command
 
@@ -697,11 +712,11 @@ rejection/debug tests:
 Usage: fetch-nfce [flags] <access_key> [payload]
 
 Flags:
-  -a string   User agent for the request
-  -c string   Raw Cookie header for diagnostic replay (never logged)
+  -a string   User agent for the request (default "MeuPreco/0.1")
+  -c string   Cookie source: @path to a 0600 file (or set SEFAZ_DIAG_COOKIE)
   -f string   Set the logger's Log format (json or pretty print)
   -h          Print this help menu
-  -i string   Minimum spacing between attempts (default "0s")
+  -i string   Minimum spacing between attempts (default "10s")
   -l string   Set the logger's Log level (default "info")
   -r int      Maximum number of attempts/retries (default 1)
   -t string   Timeout per attempt (default "30s")
