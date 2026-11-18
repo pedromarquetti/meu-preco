@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -16,12 +17,20 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"golang.org/x/text/number"
 )
 
 const (
 	defaultUserAgent = "Meu Preço/0.1"
 	maxBodyBytes     = 2 << 20 // 2 MiB, DANFE pages are tens of KiB
+
+	// maxPortalCooldown bounds both a configured cooldown and a hostile or
+	// broken Retry-After header. A bad header must never park every request
+	// for an arbitrary amount of time.
+	maxPortalCooldown = 15 * time.Minute
 )
 
 // HTTPSourceOptions configures a fiscal-portal fetcher. Zero values fall back
@@ -130,6 +139,7 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 	if opts.Cooldown <= 0 {
 		opts.Cooldown = time.Minute
 	}
+	opts.Cooldown = capCooldown(opts.Cooldown)
 
 	if opts.ChallengeStore == nil {
 		opts.ChallengeStore = NewChallengeStore()
@@ -224,7 +234,85 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 
 		status, header, body, err := s.doRequest(ctx, url)
 		duration := time.Since(attemptStarted)
-		if err != nil {
+
+		// A response may arrive together with a body-read error (a transfer
+		// truncated mid-body). Classify the response first, then the transfer
+		// failure: an incomplete body with a known HTTP status is not a
+		// connection-layer edge drop.
+		if status != 0 {
+			s.log.Debug("nfce: portal response received",
+				"access_key", key.String(),
+				"attempt", attempt,
+				"status", status,
+				"bytes", len(body),
+				"duration_ms", duration.Milliseconds(),
+			)
+			if err != nil {
+				s.log.Debug("nfce: portal response body failed",
+					"access_key", key.String(),
+					"attempt", attempt,
+					"status", status,
+					"bytes", len(body),
+					"err", err,
+				)
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+			}
+
+			// Order matters: an explicit block page or JS challenge wins over
+			// the status code, then HTTP status wins over body truncation.
+			if blockErr := s.classifyPortalBlock(key, status, header, body, attempt, err == nil); blockErr != nil {
+				return nil, blockErr
+			}
+
+			switch {
+			case status == http.StatusTooManyRequests:
+				// The portal explicitly asked us to wait. Record the shared
+				// cooldown and fail fast instead of retrying into it: sleeping
+				// through Retry-After in the handler would exceed the server's
+				// write timeout and the caller would see a reset, not a 429.
+				cooldown := s.cooldown
+				if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
+					cooldown = retryAfter
+				}
+				s.applyCooldown("http_429", cooldown, attempt, status, len(body), "")
+				if err := s.limit.cooldownError(); err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("%w: portal answered HTTP %d", ErrUpstream, status)
+			case status >= 500:
+				lastErr = fmt.Errorf("nfce: portal answered HTTP %d", status)
+				if err != nil {
+					lastErr = fmt.Errorf("nfce: portal answered HTTP %d with an incomplete body: %v", status, err)
+				}
+				if attempt < s.retries {
+					delay := s.backoff(attempt)
+					s.log.Debug("nfce: portal HTTP retry scheduled",
+						"access_key", key.String(),
+						"attempt", attempt,
+						"next_attempt", attempt+1,
+						"status", status,
+						"backoff_ms", delay.Milliseconds(),
+					)
+					if !sleepCtx(ctx, delay) {
+						return nil, ctx.Err()
+					}
+					continue
+				}
+				return nil, fmt.Errorf("%w: %v", ErrUpstream, lastErr)
+			case status >= 400:
+				return nil, fmt.Errorf("%w: portal answered HTTP %d", ErrUpstream, status)
+			}
+
+			if err != nil {
+				// A 2xx/3xx response whose body ended early is a truncated
+				// upstream response, not an edge drop. Keep the status and the
+				// partial byte count for diagnostics.
+				return nil, fmt.Errorf("%w: portal response truncated after %d bytes (status %d): %v",
+					ErrUpstream, len(body), status, err)
+			}
+		} else if err != nil {
 			lastErr = err
 			s.log.Debug("nfce: portal request failed",
 				"access_key", key.String(),
@@ -252,6 +340,17 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 					RetryAfter: s.cooldown,
 				}
 			}
+			if isConnectionDrain(err) {
+				// A GOAWAY or closed connection is a transport condition, not
+				// an anti-bot block. Drop idle connections so a permitted retry
+				// opens a fresh one instead of reusing the drained socket.
+				s.client.CloseIdleConnections()
+				s.log.Debug("nfce: portal connection drained; retrying on a fresh connection",
+					"access_key", key.String(),
+					"attempt", attempt,
+					"err", err,
+				)
+			}
 			if attempt < s.retries {
 				delay := s.backoff(attempt)
 				s.log.Debug("nfce: portal retry scheduled",
@@ -266,95 +365,6 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 				continue
 			}
 			return nil, fmt.Errorf("%w: %v", ErrUpstream, lastErr)
-		}
-
-		s.log.Debug("nfce: portal response received",
-			"access_key", key.String(),
-			"attempt", attempt,
-			"status", status,
-			"bytes", len(body),
-			"duration_ms", duration.Milliseconds(),
-		)
-
-		// Anti-bot/rate-limit rejection pages take precedence over generic
-		// status handling: the observed SEFAZ block is served with HTTP 200,
-		// and retrying it immediately would only amplify the block.
-		if !pageHasDANFE(body) {
-			if supportID, rejected := antiBotRejection(body); rejected {
-				cooldown := s.cooldown
-				reason := "anti_bot_rejection"
-				if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
-					s.log.Debug("Retry After", "retry", retryAfter)
-					cooldown = retryAfter
-					reason = "anti_bot_rejection_retry_after"
-				}
-				s.applyCooldown(reason, cooldown, attempt, status, len(body), supportID)
-				return nil, &AntiBotError{
-					StatusCode: status,
-					SupportID:  supportID,
-					BodyBytes:  len(body),
-					RetryAfter: cooldown,
-				}
-			}
-
-			// F5/BIG-IP JavaScript challenges are a distinct block: unlike the
-			// explicit rejection page, the portal expects the client to run a
-			// script. This server does not, and never will. Classify it, apply
-			// the shared cooldown, and stop: retrying or "solving" it only
-			// deepens the block.
-			if marker, challenged := antiBotChallenge(body); challenged {
-				s.log.Warn("nfce: portal JavaScript challenge classified as anti-bot block",
-					"access_key", key.String(),
-					"attempt", attempt,
-					"status", status,
-					"bytes", len(body),
-					"duration_ms", duration.Milliseconds(),
-					"marker", marker,
-				)
-				s.applyCooldown("js_challenge", s.cooldown, attempt, status, len(body), "")
-				return nil, &AntiBotChallengeError{
-					StatusCode: status,
-					BodyBytes:  len(body),
-					Reason:     "F5/BIG-IP JavaScript challenge",
-					RetryAfter: s.cooldown,
-				}
-			}
-		}
-
-		switch {
-		case status == http.StatusTooManyRequests:
-			// The portal explicitly asked us to wait. Record the shared
-			// cooldown and fail fast instead of retrying into it: sleeping
-			// through Retry-After in the handler would exceed the server's
-			// write timeout and the caller would see a reset, not a 429.
-			cooldown := s.cooldown
-			if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
-				cooldown = retryAfter
-			}
-			s.applyCooldown("http_429", cooldown, attempt, status, len(body), "")
-			if err := s.limit.cooldownError(); err != nil {
-				return nil, err
-			}
-			return nil, fmt.Errorf("%w: portal answered HTTP %d", ErrUpstream, status)
-		case status >= 500:
-			lastErr = fmt.Errorf("nfce: portal answered HTTP %d", status)
-			if attempt < s.retries {
-				delay := s.backoff(attempt)
-				s.log.Debug("nfce: portal HTTP retry scheduled",
-					"access_key", key.String(),
-					"attempt", attempt,
-					"next_attempt", attempt+1,
-					"status", status,
-					"backoff_ms", delay.Milliseconds(),
-				)
-				if !sleepCtx(ctx, delay) {
-					return nil, ctx.Err()
-				}
-				continue
-			}
-			return nil, fmt.Errorf("%w: %v", ErrUpstream, lastErr)
-		case status >= 400:
-			return nil, fmt.Errorf("%w: portal answered HTTP %d", ErrUpstream, status)
 		}
 
 		if err := pageFailure(body); err != nil {
@@ -392,6 +402,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 // applyCooldown records a shared cooldown and logs the safe transition fields
 // (never the response body).
 func (s *HTTPSource) applyCooldown(reason string, d time.Duration, attempt, status, bodyBytes int, supportID string) {
+	d = capCooldown(d)
 	if d <= 0 {
 		return
 	}
@@ -414,6 +425,90 @@ func (s *HTTPSource) applyCooldown(reason string, d time.Duration, attempt, stat
 		return
 	}
 	s.log.Debug("nfce: portal cooldown already active", attrs...)
+}
+
+// classifyPortalBlock returns a typed anti-bot error when the response is an
+// explicit rejection page, an F5 JavaScript challenge, an HTTP 403 block, or a
+// blank HTTP 200 block page. It applies the shared cooldown before returning,
+// so callers must stop immediately and never retry into it.
+//
+// bodyComplete is false when the response body ended early: a partial body can
+// still contain a challenge/rejection marker, but a short partial body must be
+// reported as truncated rather than as a blank block page.
+func (s *HTTPSource) classifyPortalBlock(key AccessKey, status int, header http.Header, body []byte, attempt int, bodyComplete bool) error {
+	if pageHasDANFE(body) {
+		return nil
+	}
+
+	if supportID, rejected := antiBotRejection(body); rejected {
+		cooldown := s.cooldown
+		reason := "anti_bot_rejection"
+		if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
+			s.log.Debug("Retry After", "retry", retryAfter)
+			cooldown = retryAfter
+			reason = "anti_bot_rejection_retry_after"
+		}
+		s.applyCooldown(reason, cooldown, attempt, status, len(body), supportID)
+		return &AntiBotError{
+			StatusCode: status,
+			SupportID:  supportID,
+			BodyBytes:  len(body),
+			RetryAfter: cooldown,
+		}
+	}
+
+	// F5/BIG-IP JavaScript challenges are a distinct block: unlike the
+	// explicit rejection page, the portal expects the client to run a script.
+	// This server does not, and never will. Classify it, apply the shared
+	// cooldown, and stop: retrying or "solving" it only deepens the block.
+	if marker, challenged := antiBotChallenge(body); challenged {
+		s.log.Warn("nfce: portal JavaScript challenge classified as anti-bot block",
+			"access_key", key.String(),
+			"attempt", attempt,
+			"status", status,
+			"bytes", len(body),
+			"marker", marker,
+		)
+		s.applyCooldown("js_challenge", s.cooldown, attempt, status, len(body), "")
+		return &AntiBotChallengeError{
+			StatusCode: status,
+			BodyBytes:  len(body),
+			Reason:     "F5/BIG-IP JavaScript challenge",
+			RetryAfter: s.cooldown,
+		}
+	}
+
+	if status == http.StatusForbidden {
+		cooldown := s.cooldown
+		if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
+			cooldown = retryAfter
+		}
+		s.applyCooldown("http_403", cooldown, attempt, status, len(body), "")
+		return &AntiBotError{
+			StatusCode: status,
+			BodyBytes:  len(body),
+			Reason:     "HTTP 403 block page",
+			RetryAfter: cooldown,
+		}
+	}
+
+	if bodyComplete && status == http.StatusOK && len(normalizeWS(string(body))) < 100 {
+		// A blank or near-empty 200 is the other shape of the same edge
+		// block: there is no document to parse and no retry is useful.
+		cooldown := s.cooldown
+		if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
+			cooldown = retryAfter
+		}
+		s.applyCooldown("empty_200", cooldown, attempt, status, len(body), "")
+		return &AntiBotError{
+			StatusCode: status,
+			BodyBytes:  len(body),
+			Reason:     "empty HTTP 200 block page",
+			RetryAfter: cooldown,
+		}
+	}
+
+	return nil
 }
 
 func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.Header, []byte, error) {
@@ -471,10 +566,10 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		return resp.StatusCode, resp.Header, nil, err
-	}
-	return resp.StatusCode, resp.Header, body, nil
+	// Preserve the status, headers and any partial bytes even when the body
+	// read fails: that is what lets the caller distinguish a truncated HTTP
+	// response from a connection-layer drop before any response.
+	return resp.StatusCode, resp.Header, body, err
 }
 
 // parseCookieHeader turns a raw diagnostic "a=b; c=d" Cookie header into
@@ -661,11 +756,21 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 // isEdgeDrop reports whether err is the connection-level failure the SEFAZ
 // anti-bot edge uses for challenge-less clients: the TCP connection is reset or
-// closed before an HTTP response is produced. These are not ordinary upstream
-// errors: retrying them immediately is what escalates the block.
+// closed before any HTTP response is produced. It deliberately excludes
+// GOAWAY and closed-connection transport conditions (see isConnectionDrain):
+// those are normal connection lifecycle events, not blocks. Prefer typed
+// inspection; the string fallback only covers opaque wrapped errors.
 func isEdgeDrop(err error) bool {
 	if err == nil {
 		return false
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && errors.Is(opErr.Err, syscall.ECONNRESET) {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return true
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
@@ -677,9 +782,31 @@ func isEdgeDrop(err error) bool {
 		"connection reset",
 		"broken pipe",
 		"unexpected eof",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// isConnectionDrain reports whether err is a transport/lifecycle condition:
+// an HTTP/2 GOAWAY, or a socket the client already closed. These are not
+// anti-bot blocks; a retry on a fresh connection is allowed when the retry
+// budget permits.
+func isConnectionDrain(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
 		"server sent goaway",
 		"use of closed network connection",
-		"connection closed by",
+		"http2: client connection lost",
 	} {
 		if strings.Contains(msg, marker) {
 			return true
@@ -748,17 +875,24 @@ func antiBotRejection(body []byte) (string, bool) {
 }
 
 func parseRetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
-	retryAfter := header.Get("Retry-After")
+	retryAfter := strings.TrimSpace(header.Get("Retry-After"))
 	if retryAfter == "" {
 		return 0, false
 	}
 
 	// Try parsing as seconds first.
-	if sec, err := strconv.Atoi(retryAfter); err == nil {
+	if sec, err := strconv.ParseInt(retryAfter, 10, 64); err == nil {
 		if sec < 0 {
 			return 0, false
 		}
+		if sec >= int64(maxPortalCooldown/time.Second) {
+			return maxPortalCooldown, true
+		}
 		return time.Duration(sec) * time.Second, true
+	} else if isDigits(retryAfter) {
+		// A syntactically valid but oversized delay-seconds value overflows
+		// ParseInt; it is still a huge cooldown and must be capped.
+		return maxPortalCooldown, true
 	}
 
 	// Fallback to HTTP date (RFC1123/RFC850 etc.).
@@ -771,7 +905,32 @@ func parseRetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 		// If the date is in the past, we treat it as immediate (no wait).
 		return 0, true
 	}
-	return diff, true
+	return capCooldown(diff), true
+}
+
+// isDigits reports whether s is a non-empty run of ASCII digits.
+func isDigits(s string) bool {
+	if strings.TrimSpace(s) == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// capCooldown clamps a cooldown to maxPortalCooldown. Non-positive values stay
+// zero, meaning "no cooldown", and are never turned into a wait.
+func capCooldown(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	if d > maxPortalCooldown {
+		return maxPortalCooldown
+	}
+	return d
 }
 
 // normalizeWS collapses every run of whitespace, including non-breaking

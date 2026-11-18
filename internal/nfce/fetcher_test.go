@@ -4,16 +4,31 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// roundTripFunc lets a test inject transport-level responses and errors
+// without a live server.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// errorReader yields no data and the supplied error, simulating a connection
+// that dies mid-body.
+type errorReader struct{ err error }
+
+func (r errorReader) Read([]byte) (int, error) { return 0, r.err }
 
 func serveFixture(t *testing.T, file string) *httptest.Server {
 	t.Helper()
@@ -793,6 +808,7 @@ func TestHTTPSourceEdgeDropStopsWithoutRetry(t *testing.T) {
 }
 
 func TestIsEdgeDrop(t *testing.T) {
+	typedReset := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
 	tests := []struct {
 		name string
 		err  error
@@ -802,7 +818,10 @@ func TestIsEdgeDrop(t *testing.T) {
 		{"eof", io.EOF, true},
 		{"unexpected eof", io.ErrUnexpectedEOF, true},
 		{"reset", errors.New("read tcp 192.0.2.1:443: read: connection reset by peer"), true},
-		{"goaway", errors.New("http2: server sent GOAWAY and closed the connection"), true},
+		{"typed reset", typedReset, true},
+		{"wrapped typed reset", fmt.Errorf("wrapped: %w", typedReset), true},
+		{"goaway", errors.New("http2: server sent GOAWAY and closed the connection"), false},
+		{"closed connection", errors.New("use of closed network connection"), false},
 		{"broken pipe", errors.New("write: broken pipe"), true},
 		{"connection refused", errors.New("dial tcp: connect: connection refused"), false},
 		{"tls", errors.New("tls: handshake failure"), false},
@@ -813,6 +832,250 @@ func TestIsEdgeDrop(t *testing.T) {
 				t.Errorf("isEdgeDrop(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsConnectionDrain(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"goaway", errors.New("http2: server sent GOAWAY and closed the connection"), true},
+		{"wrapped goaway", fmt.Errorf("wrapped: %w", errors.New("http2: server sent GOAWAY")), true},
+		{"closed connection", errors.New("use of closed network connection"), true},
+		{"typed closed", net.ErrClosed, true},
+		{"reset", errors.New("connection reset by peer"), false},
+		{"connection refused", errors.New("dial tcp: connect: connection refused"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isConnectionDrain(tt.err); got != tt.want {
+				t.Errorf("isConnectionDrain(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHTTPSourceTransportResetStopsWithoutRetry(t *testing.T) {
+	var calls atomic.Int32
+	reset := fmt.Errorf("read tcp: %w", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET})
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    "https://portal.example",
+		RPS:        1000,
+		MaxRetries: 3,
+		Cooldown:   time.Minute,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, reset
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	if !errors.Is(err, ErrAntiBotRejection) {
+		t.Fatalf("fetch error = %v, want ErrAntiBotRejection", err)
+	}
+	var antiBotErr *AntiBotError
+	if !errors.As(err, &antiBotErr) {
+		t.Fatalf("fetch error = %v, want *AntiBotError", err)
+	}
+	if antiBotErr.StatusCode != 0 || antiBotErr.Reason == "" {
+		t.Errorf("reset error = %+v, want no status and a reason", antiBotErr)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("transport calls = %d, want 1 (no retry on a reset)", calls.Load())
+	}
+	if until := src.limit.CooldownUntil(); !until.After(time.Now()) {
+		t.Errorf("cooldown = %v, want an active cooldown", until)
+	}
+}
+
+func TestHTTPSourceGoAwayRetriesAsTransport(t *testing.T) {
+	var calls atomic.Int32
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:     "https://portal.example",
+		RPS:         1000,
+		MaxRetries:  2,
+		Cooldown:    time.Minute,
+		BackoffBase: time.Millisecond,
+		BackoffCap:  time.Millisecond,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return nil, errors.New("http2: server sent GOAWAY and closed the connection")
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("fetch error = %v, want ErrUpstream", err)
+	}
+	if errors.Is(err, ErrAntiBotRejection) || errors.Is(err, ErrAntiBotChallenge) {
+		t.Fatalf("fetch error = %v, want a transport classification, not anti-bot", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("transport calls = %d, want 2 (one retry on a fresh connection)", calls.Load())
+	}
+	if until := src.limit.CooldownUntil(); until.After(time.Now()) {
+		t.Errorf("cooldown = %v, want no anti-bot cooldown for GOAWAY", until)
+	}
+}
+
+func TestHTTPSourceTruncatedBodyIsUpstreamNotEdgeDrop(t *testing.T) {
+	const partial = `<html><body>partial`
+	var calls atomic.Int32
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    "https://portal.example",
+		RPS:        1000,
+		MaxRetries: 3,
+		Cooldown:   time.Minute,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/html"}},
+				Body: io.NopCloser(io.MultiReader(
+					strings.NewReader(partial),
+					errorReader{err: io.ErrUnexpectedEOF},
+				)),
+			}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("fetch error = %v, want ErrUpstream", err)
+	}
+	if errors.Is(err, ErrAntiBotRejection) {
+		t.Fatalf("fetch error = %v, want a truncated body, not an edge drop", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, fmt.Sprintf("truncated after %d bytes", len(partial))) ||
+		!strings.Contains(msg, "status 200") {
+		t.Errorf("fetch error = %q, want status and partial-byte diagnostics", msg)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("transport calls = %d, want 1 (no retry on a truncated body)", calls.Load())
+	}
+	if until := src.limit.CooldownUntil(); until.After(time.Now()) {
+		t.Errorf("cooldown = %v, want no anti-bot cooldown for a truncated body", until)
+	}
+}
+
+func TestHTTPSourceHTTP403IsAntiBot(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 3,
+		Cooldown:   time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	var antiBotErr *AntiBotError
+	if !errors.As(err, &antiBotErr) {
+		t.Fatalf("fetch error = %v, want *AntiBotError", err)
+	}
+	if antiBotErr.StatusCode != http.StatusForbidden || antiBotErr.Reason == "" {
+		t.Errorf("403 error = %+v, want the status and a reason", antiBotErr)
+	}
+	if !errors.Is(err, ErrAntiBotRejection) {
+		t.Fatalf("fetch error = %v, want ErrAntiBotRejection", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("server calls = %d, want 1 (no retry on an HTTP block)", calls.Load())
+	}
+	if until := src.limit.CooldownUntil(); !until.After(time.Now()) {
+		t.Errorf("cooldown = %v, want an active cooldown", until)
+	}
+}
+
+func TestHTTPSourceEmpty200IsAntiBot(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 3,
+		Cooldown:   time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	var antiBotErr *AntiBotError
+	if !errors.As(err, &antiBotErr) {
+		t.Fatalf("fetch error = %v, want *AntiBotError", err)
+	}
+	if antiBotErr.StatusCode != http.StatusOK || antiBotErr.Reason == "" {
+		t.Errorf("empty-200 error = %+v, want the status and a reason", antiBotErr)
+	}
+	if !errors.Is(err, ErrAntiBotRejection) {
+		t.Fatalf("fetch error = %v, want ErrAntiBotRejection", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("server calls = %d, want 1 (no retry on a blank block page)", calls.Load())
+	}
+	if until := src.limit.CooldownUntil(); !until.After(time.Now()) {
+		t.Errorf("cooldown = %v, want an active cooldown", until)
+	}
+}
+
+func TestParseRetryAfterCapsAndRejectsNegative(t *testing.T) {
+	for _, value := range []string{"999999999", strings.Repeat("9", 40)} {
+		huge := http.Header{"Retry-After": []string{value}}
+		delay, ok := parseRetryAfter(huge, time.Now())
+		if !ok || delay != maxPortalCooldown {
+			t.Errorf("Retry-After %q = %v, %v; want %v, true", value, delay, ok, maxPortalCooldown)
+		}
+	}
+
+	negative := http.Header{"Retry-After": []string{"-10"}}
+	if delay, ok := parseRetryAfter(negative, time.Now()); ok || delay != 0 {
+		t.Errorf("negative Retry-After = %v, %v; want 0, false", delay, ok)
+	}
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:  "https://portal.example",
+		Cooldown: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.cooldown != maxPortalCooldown {
+		t.Errorf("configured cooldown = %v, want %v", src.cooldown, maxPortalCooldown)
 	}
 }
 
