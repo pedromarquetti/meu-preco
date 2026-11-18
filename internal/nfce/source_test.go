@@ -91,6 +91,31 @@ func TestResolverSolvedCacheSkipsFetch(t *testing.T) {
 	}
 }
 
+func TestMultiResolverSolvedCacheSkipsFetch(t *testing.T) {
+	src := &countingSource{}
+	m := NewMultiResolver(map[string]*Resolver{"35": NewResolver(src, fakeParser{})})
+	key, _ := ParseAccessKey(senateKey)
+
+	m.CacheSolved(key, []byte("<solved/>"))
+	if n, err := m.Resolve(context.Background(), key, ""); err != nil || n == nil {
+		t.Fatalf("resolve = %+v, %v", n, err)
+	}
+	if src.fetches != 0 {
+		t.Errorf("source fetches = %d, want 0 (served through MultiResolver)", src.fetches)
+	}
+}
+
+func TestMultiResolverSolvedCacheUnsupportedUFIsNoOp(t *testing.T) {
+	m := NewMultiResolver(map[string]*Resolver{"35": NewResolver(&countingSource{}, fakeParser{})})
+	key, _ := ParseAccessKey("31240112345000123456650010000002571123456785") // MG
+
+	m.CacheSolved(key, []byte("<solved/>")) // must not panic
+
+	if _, err := m.Resolve(context.Background(), key, ""); !errors.Is(err, ErrUnsupportedUF) {
+		t.Fatalf("resolve error = %v, want ErrUnsupportedUF", err)
+	}
+}
+
 func TestResolverSolvedCacheExpires(t *testing.T) {
 	src := &countingSource{}
 	r := NewResolver(src, fakeParser{})

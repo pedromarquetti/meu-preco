@@ -197,7 +197,7 @@ func TestHTTPSourceFetchAntiBotCooldownAppliesToNextRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	const cooldown = 40 * time.Millisecond
+	const cooldown = time.Hour
 	src, err := NewHTTPSource(HTTPSourceOptions{
 		BaseURL:    srv.URL,
 		RPS:        1000,
@@ -212,15 +212,31 @@ func TestHTTPSourceFetchAntiBotCooldownAppliesToNextRequest(t *testing.T) {
 		t.Fatalf("first fetch error = %v, want anti-bot rejection", err)
 	}
 
+	// A fetch during the cooldown must fail fast instead of sleeping through it
+	// (the server write timeout is shorter than the default cooldown).
 	start := time.Now()
-	if _, err := src.Fetch(context.Background(), key, ""); err != nil {
-		t.Fatalf("second fetch: %v", err)
+	if _, err := src.Fetch(context.Background(), key, ""); !errors.Is(err, ErrPortalCoolingDown) {
+		t.Fatalf("second fetch error = %v, want ErrPortalCoolingDown", err)
 	}
-	if elapsed := time.Since(start); elapsed < cooldown-10*time.Millisecond {
-		t.Fatalf("second fetch waited %v, want at least about %v", elapsed, cooldown)
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("second fetch took %v, want an immediate cooldown error", elapsed)
 	}
-	if calls != 2 {
-		t.Fatalf("server calls = %d, want 2", calls)
+	if calls != 1 {
+		t.Fatalf("server calls = %d, want 1 (no fetch during cooldown)", calls)
+	}
+}
+
+func TestRateLimiterCooldownExpires(t *testing.T) {
+	rl := NewPortalLimiter(1000, 0)
+	rl.Cooldown(20 * time.Millisecond)
+
+	if err := rl.Wait(context.Background()); !errors.Is(err, ErrPortalCoolingDown) {
+		t.Fatalf("Wait during cooldown = %v, want ErrPortalCoolingDown", err)
+	}
+
+	time.Sleep(25 * time.Millisecond)
+	if err := rl.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait after cooldown = %v, want nil", err)
 	}
 }
 
@@ -272,29 +288,19 @@ func TestHTTPSourceRetriesThenSucceeds(t *testing.T) {
 	}
 }
 
-func TestHTTPSource429RetryAfterUsesCooldown(t *testing.T) {
-	raw, err := os.ReadFile("../../testdata/nfce_1.html")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestHTTPSource429RetryAfterFailsFast(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
-		if calls == 1 {
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "busy", http.StatusTooManyRequests)
-			return
-		}
-		_, _ = w.Write(raw)
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "busy", http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
 
 	src, err := NewHTTPSource(HTTPSourceOptions{
-		BaseURL:     srv.URL,
-		RPS:         1000,
-		MaxRetries:  2,
-		BackoffBase: time.Millisecond,
-		BackoffCap:  time.Millisecond,
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -302,14 +308,22 @@ func TestHTTPSource429RetryAfterUsesCooldown(t *testing.T) {
 	key, _ := ParseAccessKey(senateKey)
 
 	start := time.Now()
-	if _, err := src.Fetch(context.Background(), key, ""); err != nil {
-		t.Fatalf("fetch: %v", err)
+	_, err = src.Fetch(context.Background(), key, "")
+	var cooldown *PortalCooldownError
+	if !errors.As(err, &cooldown) {
+		t.Fatalf("fetch error = %v, want *PortalCooldownError", err)
 	}
-	if elapsed := time.Since(start); elapsed < 900*time.Millisecond {
-		t.Fatalf("fetch completed after %v, want Retry-After cooldown", elapsed)
+	if cooldown.RetryAfter < 900*time.Millisecond {
+		t.Errorf("retry after = %v, want the Retry-After header value", cooldown.RetryAfter)
 	}
-	if calls != 2 {
-		t.Fatalf("server calls = %d, want 2", calls)
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Errorf("fetch took %v, want an immediate cooldown error", elapsed)
+	}
+	if calls != 1 {
+		t.Fatalf("server calls = %d, want 1 (no retry into cooldown)", calls)
+	}
+	if until := src.limit.CooldownUntil(); !until.After(time.Now()) {
+		t.Errorf("cooldown = %v, want an active cooldown", until)
 	}
 }
 
@@ -374,7 +388,7 @@ func TestHTTPSourceBackoffKnobs(t *testing.T) {
 }
 
 func TestRateLimiterPaces(t *testing.T) {
-	rl := newRateLimiter(10, 0) // 100ms between tokens
+	rl := NewPortalLimiter(10, 0) // 100ms between tokens
 	ctx := context.Background()
 
 	start := time.Now()
@@ -389,14 +403,37 @@ func TestRateLimiterPaces(t *testing.T) {
 	}
 }
 
-func TestRateLimiterCooldownCancellation(t *testing.T) {
-	rl := newRateLimiter(1000, 0)
+func TestRateLimiterCooldownFailsFast(t *testing.T) {
+	rl := NewPortalLimiter(1000, 0)
 	rl.Cooldown(100 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	if err := rl.Wait(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Wait error = %v, want deadline exceeded", err)
+	start := time.Now()
+	err := rl.Wait(ctx)
+	if !errors.Is(err, ErrPortalCoolingDown) {
+		t.Fatalf("Wait error = %v, want ErrPortalCoolingDown", err)
+	}
+	if elapsed := time.Since(start); elapsed > 20*time.Millisecond {
+		t.Errorf("Wait took %v, want an immediate cooldown error", elapsed)
+	}
+}
+
+func TestRateLimiterBusyOnDeadline(t *testing.T) {
+	rl := NewPortalLimiter(1, 0) // one token per second
+	if err := rl.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := rl.Wait(ctx)
+	var busy *PortalBusyError
+	if !errors.As(err, &busy) {
+		t.Fatalf("Wait error = %v, want *PortalBusyError", err)
+	}
+	if busy.RetryAfter <= 0 {
+		t.Errorf("RetryAfter = %v, want a positive delay", busy.RetryAfter)
 	}
 }
 
@@ -528,7 +565,7 @@ func TestHTTPSourceMinIntervalOverridesRPS(t *testing.T) {
 
 func TestRateLimiterHonorsMinInterval(t *testing.T) {
 	// RPS alone would allow a token every 1ms; MinInterval must win.
-	rl := newRateLimiter(1000, 100*time.Millisecond)
+	rl := NewPortalLimiter(1000, 100*time.Millisecond)
 	ctx := context.Background()
 
 	start := time.Now()
@@ -688,5 +725,149 @@ func TestHTTPSourceLogsCookieNamesNotValues(t *testing.T) {
 	}
 	if strings.Contains(out, secret) {
 		t.Errorf("cookie value leaked into logs: %s", out)
+	}
+}
+
+func TestHTTPSourceCaptchaWithoutCookieJarDoesNotPanic(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/captcha.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	// A custom client with no jar used to panic when captureChallenge read
+	// s.client.Jar.Cookies.
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 1,
+		HTTPClient: &http.Client{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	var capErr *CaptchaError
+	if !errors.As(err, &capErr) {
+		t.Fatalf("fetch error = %v, want *CaptchaError", err)
+	}
+	if capErr.ChallengeID == "" {
+		t.Errorf("challenge was not registered")
+	}
+}
+
+func TestHTTPSourceJarSendsCookieOnNextRequest(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent = append(sent, r.Header.Get("Cookie"))
+		http.SetCookie(w, &http.Cookie{Name: "ASP.NET_SessionId", Value: "abc", Path: "/"})
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	src, err := NewHTTPSource(HTTPSourceOptions{BaseURL: srv.URL, RPS: 1000, MaxRetries: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+	for i := 0; i < 2; i++ {
+		if _, err := src.Fetch(context.Background(), key, ""); err != nil {
+			t.Fatalf("fetch %d: %v", i+1, err)
+		}
+	}
+
+	if len(sent) != 2 {
+		t.Fatalf("requests = %d, want 2", len(sent))
+	}
+	if sent[0] != "" {
+		t.Errorf("first request Cookie = %q, want empty", sent[0])
+	}
+	if !strings.Contains(sent[1], "ASP.NET_SessionId=abc") {
+		t.Errorf("second request Cookie = %q, want the jar cookie", sent[1])
+	}
+}
+
+func TestHTTPSourceDiagnosticCookieDoesNotDuplicateJarCookies(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent = append(sent, r.Header.Get("Cookie"))
+		http.SetCookie(w, &http.Cookie{Name: "TSPD_101", Value: "fresh", Path: "/"})
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 1,
+		Cookie:     "ASP.NET_SessionId=abc; TSPD_101=def",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+	for i := 0; i < 2; i++ {
+		if _, err := src.Fetch(context.Background(), key, ""); err != nil {
+			t.Fatalf("fetch %d: %v", i+1, err)
+		}
+	}
+
+	if len(sent) != 2 {
+		t.Fatalf("requests = %d, want 2", len(sent))
+	}
+	for i, header := range sent {
+		if got := strings.Count(header, "ASP.NET_SessionId="); got != 1 {
+			t.Errorf("request %d: ASP.NET_SessionId appears %d times in %q", i+1, got, header)
+		}
+		if got := strings.Count(header, "TSPD_101="); got != 1 {
+			t.Errorf("request %d: TSPD_101 appears %d times in %q", i+1, got, header)
+		}
+	}
+}
+
+func TestPortalLimiterSharedBetweenFetcherAndSolver(t *testing.T) {
+	var imageCalls atomic.Int32
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		imageCalls.Add(1)
+		_, _ = w.Write([]byte("png"))
+	}))
+	defer imgSrv.Close()
+
+	limiter := NewPortalLimiter(1000, 0)
+	src, err := NewHTTPSource(HTTPSourceOptions{BaseURL: "https://portal.example", Limiter: limiter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	solver := NewHTTPChallengeSolver(HTTPChallengeSolverOptions{
+		Limiter:    limiter,
+		HTTPClient: &http.Client{},
+	})
+	if src.limit != solver.limit {
+		t.Fatalf("fetcher and solver do not share the limiter")
+	}
+
+	limiter.Cooldown(200 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, _, err = solver.Image(ctx, &Challenge{ImageURL: imgSrv.URL})
+	if !errors.Is(err, ErrPortalCoolingDown) {
+		t.Fatalf("solver.Image error = %v, want ErrPortalCoolingDown", err)
+	}
+	if imageCalls.Load() != 0 {
+		t.Errorf("image requests = %d, want 0 during shared cooldown", imageCalls.Load())
 	}
 }

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -135,7 +136,10 @@ func (api *captchaAPI) solve(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	res, err := api.svc.SolveCaptcha(req.Context(), service.SolveCaptchaRequest{
+	ctx, cancel := context.WithTimeout(req.Context(), portalRequestBudget)
+	defer cancel()
+
+	res, err := api.svc.SolveCaptcha(ctx, service.SolveCaptchaRequest{
 		UserID:      userID,
 		ChallengeID: body.ChallengeID,
 		Solution:    body.Solution,
@@ -157,7 +161,10 @@ func (api *captchaAPI) image(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	data, ctype, err := api.svc.ChallengeImage(req.Context(), id)
+	ctx, cancel := context.WithTimeout(req.Context(), portalRequestBudget)
+	defer cancel()
+
+	data, ctype, err := api.svc.ChallengeImage(ctx, id)
 	if err != nil {
 		api.respondSolveError(w, req, err)
 		return
@@ -213,6 +220,17 @@ func (api *captchaAPI) respondSolveError(w http.ResponseWriter, req *http.Reques
 	case errors.Is(err, nfce.ErrChallengeReused):
 		httpx.Error(w, req, http.StatusConflict, "challenge_used",
 			"this challenge was already solved; the receipt is already drafted under this session")
+	case errors.Is(err, nfce.ErrPortalCoolingDown):
+		setRetryAfter(w, err)
+		httpx.Error(w, req, http.StatusTooManyRequests, "upstream_cooling_down",
+			"the fiscal portal is cooling down after rejecting requests; retry after the indicated delay")
+	case errors.Is(err, nfce.ErrPortalBusy):
+		setRetryAfter(w, err)
+		httpx.Error(w, req, http.StatusServiceUnavailable, "upstream_busy",
+			"the fiscal portal request queue is saturated; retry shortly")
+	case errors.Is(err, context.DeadlineExceeded):
+		httpx.Error(w, req, http.StatusServiceUnavailable, "upstream_timeout",
+			"the fiscal portal did not answer within the request budget; retry later")
 	default:
 		httpx.InternalError(w, req)
 	}

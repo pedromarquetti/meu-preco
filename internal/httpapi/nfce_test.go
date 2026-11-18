@@ -187,6 +187,48 @@ func TestNfceNewBadBody(t *testing.T) {
 	}
 }
 
+func TestNfceNewPortalCooldownReturnsRetryAfter(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		status     int
+		code       string
+		retryAfter string
+	}{
+		{
+			name:       "cooldown",
+			err:        &nfce.PortalCooldownError{RetryAfter: 90 * time.Second},
+			status:     http.StatusTooManyRequests,
+			code:       "upstream_cooling_down",
+			retryAfter: "90",
+		},
+		{
+			name:       "busy",
+			err:        &nfce.PortalBusyError{RetryAfter: 5 * time.Second},
+			status:     http.StatusServiceUnavailable,
+			code:       "upstream_busy",
+			retryAfter: "5",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := postNfce(t, nfceRouter(t, stubResolver{err: tc.err}, nil),
+				"/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
+
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.status, rec.Body.String())
+			}
+			if got := rec.Header().Get("Retry-After"); got != tc.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, tc.retryAfter)
+			}
+			if code, _ := decodeErrorEnvelope(t, rec); code != tc.code {
+				t.Errorf("error code = %q, want %q", code, tc.code)
+			}
+		})
+	}
+}
+
 func TestNfceNewCaptcha(t *testing.T) {
 	rec := postNfce(t, nfceRouter(t, stubResolver{
 		err: &nfce.CaptchaError{ChallengeID: "abc123", ImageURL: "../DownloadCaptcha.ashx"},

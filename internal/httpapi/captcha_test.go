@@ -273,6 +273,23 @@ func TestCaptchaStatePending(t *testing.T) {
 	}
 }
 
+func TestCaptchaRespondSolveErrorPortalCooldown(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nfce/captcha", nil)
+
+	(&captchaAPI{}).respondSolveError(rec, req, &nfce.PortalCooldownError{RetryAfter: 30 * time.Second})
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "30" {
+		t.Errorf("Retry-After = %q, want 30", got)
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "upstream_cooling_down" {
+		t.Errorf("error code = %q", code)
+	}
+}
+
 func TestCaptchaSolveRequiresAuth(t *testing.T) {
 	cfg := config.Config{JWTSecret: "overridden-tests"}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

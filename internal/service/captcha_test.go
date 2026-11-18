@@ -31,6 +31,19 @@ func (c *cachingResolver) CacheSolved(key nfce.AccessKey, _ []byte) {
 
 // fakeSolver mirrors the httpapi fake: "OKAY" is correct; anything else
 // rejects with the fixture captcha page.
+type countingFetchSource struct{ fetches int }
+
+func (c *countingFetchSource) Fetch(_ context.Context, _ nfce.AccessKey, _ string) ([]byte, error) {
+	c.fetches++
+	return []byte("<danfe/>"), nil
+}
+
+type staticParser struct{}
+
+func (staticParser) Parse(_ context.Context, _ nfce.AccessKey, _ []byte) (*domain.Nfce, error) {
+	return testReceipt(), nil
+}
+
 type fakeSolver struct {
 	danfe []byte
 	wrong []byte
@@ -105,6 +118,28 @@ func TestSolveCaptchaDraftsAndSeedsSolvedCache(t *testing.T) {
 	})
 	if !errors.Is(err, nfce.ErrChallengeReused) {
 		t.Fatalf("replay err = %v, want ErrChallengeReused", err)
+	}
+}
+
+func TestSolveCaptchaThroughMultiResolverDoesNotRefetch(t *testing.T) {
+	m := newMemStores()
+	src := &countingFetchSource{}
+	key, _ := nfce.ParseAccessKey(testAccessKey)
+	multi := nfce.NewMultiResolver(map[string]*nfce.Resolver{
+		"35": nfce.NewResolver(src, staticParser{}),
+	})
+	store := nfce.NewChallengeStore()
+	svc := New(m, multi, nil, &CaptchaSupport{Store: store, Solver: newFakeSolver(t), MaxAttempts: 5})
+
+	id := store.Register(&nfce.Challenge{AccessKey: key.String()}).ID
+	if _, err := svc.SolveCaptcha(context.Background(), SolveCaptchaRequest{
+		UserID: 1, ChallengeID: id, Solution: "OKAY",
+	}); err != nil {
+		t.Fatalf("solve: %v", err)
+	}
+
+	if src.fetches != 0 {
+		t.Errorf("source fetches = %d, want 0: the solve result must be cached, not refetched", src.fetches)
 	}
 }
 

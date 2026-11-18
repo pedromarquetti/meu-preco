@@ -16,6 +16,7 @@ package nfce
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 var (
@@ -47,9 +48,18 @@ var (
 
 	// ErrAntiBotRejection reports that SEFAZ returned an anti-bot or
 	// rate-limit rejection page (e.g., HTTP 200 with "Request Rejected"),
-	// rather than a DANFE. The API maps it to 503. AntiBotError carries the
+	// rather than a DANFE. The API maps it to 429. AntiBotError carries the
 	// safe diagnostic metadata.
 	ErrAntiBotRejection = errors.New("SEFAZ portal rejected the request due to anti-bot/rate-limiting")
+
+	// ErrPortalCoolingDown reports that the shared portal limiter is refusing
+	// requests until an anti-bot cooldown expires. The API maps it to 429 with
+	// a Retry-After header; callers must not sleep through it in a handler.
+	ErrPortalCoolingDown = errors.New("fiscal portal is cooling down")
+
+	// ErrPortalBusy reports that a request could not reserve a portal slot
+	// before its context deadline. The API maps it to 503 with Retry-After.
+	ErrPortalBusy = errors.New("fiscal portal request queue is saturated")
 
 	// ErrWrongSolution reports a captcha answer the portal rejected. The
 	// challenge stays usable until its attempt budget is spent.
@@ -85,6 +95,9 @@ type AntiBotError struct {
 	// Reason is a short, safe classification such as "connection dropped by
 	// the portal edge". It never contains response bodies or cookie values.
 	Reason string
+	// RetryAfter is the cooldown the rejection triggered, when known. The API
+	// surfaces it as the Retry-After header.
+	RetryAfter time.Duration
 }
 
 func (e *AntiBotError) Error() string {
@@ -99,6 +112,41 @@ func (e *AntiBotError) Error() string {
 
 // Unwrap makes errors.Is(err, ErrAntiBotRejection) hold for the typed error.
 func (e *AntiBotError) Unwrap() error { return ErrAntiBotRejection }
+
+// PortalCooldownError reports an active anti-bot cooldown. It unwraps to
+// ErrPortalCoolingDown and carries a bounded Retry-After for the API.
+type PortalCooldownError struct {
+	Until      time.Time
+	RetryAfter time.Duration
+}
+
+func (e *PortalCooldownError) Error() string {
+	retry := e.RetryAfter.Round(time.Second)
+	if retry < time.Second {
+		retry = time.Second
+	}
+	return fmt.Sprintf("fiscal portal cooling down for %s", retry)
+}
+
+// Unwrap makes errors.Is(err, ErrPortalCoolingDown) hold for the typed error.
+func (e *PortalCooldownError) Unwrap() error { return ErrPortalCoolingDown }
+
+// PortalBusyError reports that a queued portal request could not start before
+// its context deadline. It unwraps to ErrPortalBusy.
+type PortalBusyError struct {
+	RetryAfter time.Duration
+}
+
+func (e *PortalBusyError) Error() string {
+	retry := e.RetryAfter.Round(time.Second)
+	if retry < time.Second {
+		retry = time.Second
+	}
+	return fmt.Sprintf("fiscal portal request queue is busy for %s", retry)
+}
+
+// Unwrap makes errors.Is(err, ErrPortalBusy) hold for the typed error.
+func (e *PortalBusyError) Unwrap() error { return ErrPortalBusy }
 
 // CaptchaError is returned by a Source when the portal answers with its
 // human-verification challenge instead of the receipt. It carries a handle

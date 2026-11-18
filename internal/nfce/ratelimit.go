@@ -2,28 +2,35 @@ package nfce
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
 
-// rateLimiter is a token-bucket paced by an interval between releases (burst
+// PortalLimiter is a token-bucket paced by an interval between releases (burst
 // of 1). It exists to stay polite to the fiscal portal: one request per token.
 //
 // It also carries a shared cooldown deadline: when the portal serves an
 // anti-bot/rate-limit rejection page or drops the connection at its edge,
-// every request for the same source waits until that deadline before touching
-// the portal again.
-type rateLimiter struct {
+// every request for the same source refuses to touch the portal until that
+// deadline instead of sleeping through it (see Wait).
+//
+// One limiter belongs to one portal host. The fetcher and the captcha solver
+// must share it so a rejection on either path stops the other too.
+type PortalLimiter struct {
 	mu            sync.Mutex
 	interval      time.Duration
 	next          time.Time
 	cooldownUntil time.Time
 }
 
-// newRateLimiter paces requests at max(1/rps, minInterval). minInterval exists
+// NewPortalLimiter paces requests at max(1/rps, minInterval). minInterval exists
 // because the SEFAZ edge blocks a source quickly: 1 RPS is still too fast for a
 // bot-defense-protected portal, and rps alone cannot express sub-1Hz pacing.
-func newRateLimiter(rps int, minInterval time.Duration) *rateLimiter {
+func NewPortalLimiter(rps int, minInterval time.Duration) *PortalLimiter {
+	if rps < 1 {
+		rps = 1
+	}
 	interval := time.Second / time.Duration(rps)
 	if interval <= 0 {
 		interval = time.Nanosecond
@@ -31,20 +38,25 @@ func newRateLimiter(rps int, minInterval time.Duration) *rateLimiter {
 	if minInterval > interval {
 		interval = minInterval
 	}
-	return &rateLimiter{interval: interval}
+	return &PortalLimiter{interval: interval}
 }
 
-// Wait blocks until a token is available and any active cooldown has expired,
-// or ctx is done. The slot is reserved up-front so concurrent callers queue
-// instead of racing for the same token. If another request extends the
-// cooldown while this one waits, the wait is extended too.
-func (r *rateLimiter) Wait(ctx context.Context) error {
+// Wait blocks until a token is available, or returns a typed error when the
+// portal is cooling down or the context deadline cannot be met.
+//
+// An active cooldown fails fast: a caller must never sit through the default
+// one-minute cooldown inside an HTTP handler (the server write timeout is
+// shorter). The slot is reserved up-front so concurrent callers queue instead
+// of racing for the same token.
+func (r *PortalLimiter) Wait(ctx context.Context) error {
 	r.mu.Lock()
 	now := time.Now()
-	slot := r.next
-	if r.cooldownUntil.After(slot) {
-		slot = r.cooldownUntil
+	if r.cooldownUntil.After(now) {
+		err := newCooldownError(r.cooldownUntil, now)
+		r.mu.Unlock()
+		return err
 	}
+	slot := r.next
 	if slot.Before(now) {
 		slot = now
 	}
@@ -53,22 +65,32 @@ func (r *rateLimiter) Wait(ctx context.Context) error {
 
 	for {
 		now = time.Now()
+
+		// A cooldown may have been applied after this caller reserved its slot;
+		// re-read it before sleeping so it also fails fast.
+		r.mu.Lock()
+		if r.cooldownUntil.After(now) {
+			err := newCooldownError(r.cooldownUntil, now)
+			r.mu.Unlock()
+			return err
+		}
+		r.mu.Unlock()
+
 		if !slot.After(now) {
 			return nil
 		}
-
-		// The cooldown may have been extended after this caller reserved its
-		// slot, so re-read it before sleeping and after every wake-up.
-		r.mu.Lock()
-		if r.cooldownUntil.After(slot) {
-			slot = r.cooldownUntil
-		}
-		r.mu.Unlock()
 
 		timer := time.NewTimer(slot.Sub(now))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				retry := time.Until(slot)
+				if retry <= 0 {
+					retry = time.Millisecond
+				}
+				return &PortalBusyError{RetryAfter: retry}
+			}
 			return ctx.Err()
 		case <-timer.C:
 		}
@@ -79,7 +101,7 @@ func (r *rateLimiter) Wait(ctx context.Context) error {
 // later rejection may extend the deadline but never shortens it. It returns
 // the effective deadline and whether it moved forward, so callers can log the
 // transition.
-func (r *rateLimiter) Cooldown(d time.Duration) (time.Time, bool) {
+func (r *PortalLimiter) Cooldown(d time.Duration) (time.Time, bool) {
 	if d <= 0 {
 		return r.CooldownUntil(), false
 	}
@@ -97,8 +119,24 @@ func (r *rateLimiter) Cooldown(d time.Duration) (time.Time, bool) {
 
 // CooldownUntil returns the current cooldown deadline, or the zero time when
 // no cooldown is active.
-func (r *rateLimiter) CooldownUntil() time.Time {
+func (r *PortalLimiter) CooldownUntil() time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.cooldownUntil
+}
+
+// cooldownError builds the typed fail-fast error for an active cooldown.
+// Callers that already recorded the cooldown can return it directly.
+func (r *PortalLimiter) cooldownError() *PortalCooldownError {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return newCooldownError(r.cooldownUntil, time.Now())
+}
+
+// newCooldownError returns nil when the deadline is not in the future.
+func newCooldownError(until, now time.Time) *PortalCooldownError {
+	if !until.After(now) {
+		return nil
+	}
+	return &PortalCooldownError{Until: until, RetryAfter: until.Sub(now)}
 }

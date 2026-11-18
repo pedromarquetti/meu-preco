@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -37,6 +38,11 @@ type HTTPSourceOptions struct {
 	// production config sets SEFAZ_MIN_INTERVAL because the SEFAZ edge blocks
 	// a source after a couple of rapid requests.
 	MinInterval time.Duration
+	// Limiter is the shared portal pacing/cooldown gate. When set, RPS and
+	// MinInterval are ignored: the caller owns one limiter per portal host and
+	// also injects it into the captcha solver, so a rejection on either path
+	// stops the other.
+	Limiter *PortalLimiter
 	// UserAgent sent with every request. Defaults to a descriptive one.
 	UserAgent string
 	// Cookie is an optional raw Cookie header used only by the diagnostic CLI
@@ -74,9 +80,10 @@ type HTTPSourceOptions struct {
 // the DANFE through its "qrcode" view for an access key or QR payload.
 type HTTPSource struct {
 	baseURL     string
-	limit       *rateLimiter
+	limit       *PortalLimiter
 	user_agent  string
 	cookie      string
+	cookieSeed  sync.Once
 	client      *http.Client
 	log         *slog.Logger
 	retries     int
@@ -128,6 +135,10 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 		opts.ChallengeStore = NewChallengeStore()
 	}
 
+	if opts.Limiter == nil {
+		opts.Limiter = NewPortalLimiter(opts.RPS, opts.MinInterval)
+	}
+
 	if opts.HTTPClient == nil {
 		jar, err := cookiejar.New(nil)
 		if err != nil {
@@ -152,7 +163,7 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 
 	return &HTTPSource{
 		baseURL:     opts.BaseURL,
-		limit:       newRateLimiter(opts.RPS, opts.MinInterval),
+		limit:       opts.Limiter,
 		user_agent:  opts.UserAgent,
 		cookie:      opts.Cookie,
 		client:      opts.HTTPClient,
@@ -236,7 +247,10 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 					"err", err,
 				)
 				s.applyCooldown("edge_drop", s.cooldown, attempt, 0, 0, "")
-				return nil, &AntiBotError{Reason: "connection dropped by the portal edge"}
+				return nil, &AntiBotError{
+					Reason:     "connection dropped by the portal edge",
+					RetryAfter: s.cooldown,
+				}
 			}
 			if attempt < s.retries {
 				delay := s.backoff(attempt)
@@ -251,7 +265,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 				}
 				continue
 			}
-			return nil, lastErr
+			return nil, fmt.Errorf("%w: %v", ErrUpstream, lastErr)
 		}
 
 		s.log.Debug("nfce: portal response received",
@@ -279,34 +293,26 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 					StatusCode: status,
 					SupportID:  supportID,
 					BodyBytes:  len(body),
+					RetryAfter: cooldown,
 				}
 			}
 		}
 
 		switch {
 		case status == http.StatusTooManyRequests:
-			// HTTP 429 is still retried within the configured budget, but a
-			// Retry-After header is honored through the shared cooldown so
-			// other callers do not hit the portal early either.
+			// The portal explicitly asked us to wait. Record the shared
+			// cooldown and fail fast instead of retrying into it: sleeping
+			// through Retry-After in the handler would exceed the server's
+			// write timeout and the caller would see a reset, not a 429.
+			cooldown := s.cooldown
 			if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
-				s.applyCooldown("http_429_retry_after", retryAfter, attempt, status, len(body), "")
+				cooldown = retryAfter
 			}
-			lastErr = fmt.Errorf("nfce: portal answered HTTP %d", status)
-			if attempt < s.retries {
-				delay := s.backoff(attempt)
-				s.log.Debug("nfce: portal HTTP retry scheduled",
-					"access_key", key.String(),
-					"attempt", attempt,
-					"next_attempt", attempt+1,
-					"status", status,
-					"backoff_ms", delay.Milliseconds(),
-				)
-				if !sleepCtx(ctx, delay) {
-					return nil, ctx.Err()
-				}
-				continue
+			s.applyCooldown("http_429", cooldown, attempt, status, len(body), "")
+			if err := s.limit.cooldownError(); err != nil {
+				return nil, err
 			}
-			return nil, fmt.Errorf("%w: %v", ErrUpstream, lastErr)
+			return nil, fmt.Errorf("%w: portal answered HTTP %d", ErrUpstream, status)
 		case status >= 500:
 			lastErr = fmt.Errorf("nfce: portal answered HTTP %d", status)
 			if attempt < s.retries {
@@ -397,8 +403,19 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.
 	req.Header.Set("Accept-Language", "pt-BR,pt;q=0.9")
 	if source.cookie != "" {
 		// Diagnostic cookie transplant only (see HTTPSourceOptions.Cookie).
-		// The value is a session credential: never log it.
-		req.Header.Set("Cookie", source.cookie)
+		// Seed the jar rather than setting a manual Cookie header: the client
+		// appends jar cookies to any manual header, which would duplicate
+		// names. A jar-less client (tests) gets the header directly. The
+		// value is a session credential: never log it.
+		if source.client.Jar != nil {
+			// Seed once: later Set-Cookie values from the portal must win over
+			// the diagnostic snapshot.
+			source.cookieSeed.Do(func() {
+				source.client.Jar.SetCookies(req.URL, parseCookieHeader(source.cookie))
+			})
+		} else {
+			req.Header.Set("Cookie", source.cookie)
+		}
 	}
 
 	// Record which cookies the jar would send before the request runs. Only
@@ -437,6 +454,23 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.
 	return resp.StatusCode, resp.Header, body, nil
 }
 
+// parseCookieHeader turns a raw diagnostic "a=b; c=d" Cookie header into
+// cookies the jar can seed. Malformed pairs are dropped; values are never
+// logged.
+func parseCookieHeader(raw string) []*http.Cookie {
+	var cookies []*http.Cookie
+
+	for part := range strings.SplitSeq(raw, ";") {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			continue
+		}
+		cookies = append(cookies, &http.Cookie{Name: name, Value: strings.TrimSpace(value)})
+	}
+	return cookies
+}
+
 // cookieNames returns the names (never the values) of the cookies the jar
 // would attach to a request for u.
 func (source *HTTPSource) cookieNames(u *url.URL) []string {
@@ -473,8 +507,10 @@ func (s *HTTPSource) captureChallenge(fetchURL, payload string, key AccessKey, i
 	base, _ := url.Parse(fetchURL)
 
 	var cookies []*http.Cookie
-	if u, err := url.Parse(fetchURL); err == nil {
-		cookies = s.client.Jar.Cookies(u)
+	if s.client.Jar != nil {
+		if u, err := url.Parse(fetchURL); err == nil {
+			cookies = s.client.Jar.Cookies(u)
+		}
 	}
 
 	return s.challenges.Register(&Challenge{

@@ -129,6 +129,15 @@ func (m *MultiResolver) Resolve(ctx context.Context, key AccessKey, payload stri
 	return r.Resolve(ctx, key, payload)
 }
 
+// CacheSolved delegates the captcha bridge to the UF's own resolver. An
+// unsupported UF is a no-op: there is no cached receipt to serve because the
+// resolve path would have rejected the key before any fetch.
+func (m *MultiResolver) CacheSolved(key AccessKey, raw []byte) {
+	if r, ok := m.byUF[key.UFCode()]; ok {
+		r.CacheSolved(key, raw)
+	}
+}
+
 func ufDisplayName(uf string) string {
 	if cfg, ok := LookupUF(uf); ok {
 		return fmt.Sprintf("%s (%s)", cfg.FullName, cfg.UF)

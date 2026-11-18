@@ -34,7 +34,7 @@ type HTTPChallengeSolver struct {
 	client    *http.Client
 	log       *slog.Logger
 	userAgent string
-	limit     *rateLimiter
+	limit     *PortalLimiter
 }
 
 // HTTPChallengeSolverOptions configures the solver. Zero values fall back to
@@ -53,6 +53,10 @@ type HTTPChallengeSolverOptions struct {
 	// MinInterval is the minimum spacing between solver requests, applied on
 	// top of RPS. Defaults to 0; the production config sets SEFAZ_MIN_INTERVAL.
 	MinInterval time.Duration
+	// Limiter is the shared portal pacing/cooldown gate. When set, RPS and
+	// MinInterval are ignored: the caller injects the same limiter used by
+	// the fetcher, so a fetcher rejection also stops solver requests.
+	Limiter *PortalLimiter
 	// Timeout bounds each solve/image request. Defaults to 30s.
 	Timeout time.Duration
 }
@@ -76,11 +80,15 @@ func NewHTTPChallengeSolver(opts HTTPChallengeSolverOptions) *HTTPChallengeSolve
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.Limiter == nil {
+		opts.Limiter = NewPortalLimiter(opts.RPS, opts.MinInterval)
+	}
+
 	return &HTTPChallengeSolver{
 		client:    opts.HTTPClient,
 		log:       opts.Logger,
 		userAgent: opts.UserAgent,
-		limit:     newRateLimiter(opts.RPS, opts.MinInterval),
+		limit:     opts.Limiter,
 	}
 }
 
