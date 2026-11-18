@@ -12,6 +12,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,15 +32,26 @@ type HTTPSourceOptions struct {
 	BaseURL string
 	// RPS (Requests Per Second) caps requests per second to the portal. Defaults to 1.
 	RPS int
+	// MinInterval is the minimum spacing between two portal requests. It is
+	// applied on top of RPS (whichever is slower wins). Defaults to 0; the
+	// production config sets SEFAZ_MIN_INTERVAL because the SEFAZ edge blocks
+	// a source after a couple of rapid requests.
+	MinInterval time.Duration
 	// UserAgent sent with every request. Defaults to a descriptive one.
 	UserAgent string
+	// Cookie is an optional raw Cookie header used only by the diagnostic CLI
+	// to replay a browser session (Phase 7 experiment E4). It is never wired
+	// from the server config and never logged.
+	Cookie string
 	// HTTPClient is used verbatim when set; otherwise a client with a cookie
 	// jar and sane timeouts is built. Provide your own to inject a transport
 	// (httptest) or tweak timeouts.
 	HTTPClient *http.Client
 	// Logger receives debug logs (retries, rates). Optional.
 	Logger *slog.Logger
-	// MaxRetries is the number of attempts per fetch (>= 1). Defaults to 3.
+	// MaxRetries is the number of attempts per fetch (>= 1). Defaults to 1: a
+	// challenge-less request to the SEFAZ edge is dropped at the network level,
+	// and retrying it immediately only amplifies the source block.
 	MaxRetries int
 	// Timeout bounds each portal request (including retries of the same
 	// attempt sequence). Defaults to 30s.
@@ -64,6 +76,7 @@ type HTTPSource struct {
 	baseURL     string
 	limit       *rateLimiter
 	user_agent  string
+	cookie      string
 	client      *http.Client
 	log         *slog.Logger
 	retries     int
@@ -87,7 +100,7 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 	}
 
 	if opts.MaxRetries < 1 {
-		opts.MaxRetries = 3
+		opts.MaxRetries = 1
 	}
 
 	if opts.Timeout <= 0 {
@@ -139,8 +152,9 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 
 	return &HTTPSource{
 		baseURL:     opts.BaseURL,
-		limit:       newRateLimiter(opts.RPS),
+		limit:       newRateLimiter(opts.RPS, opts.MinInterval),
 		user_agent:  opts.UserAgent,
+		cookie:      opts.Cookie,
 		client:      opts.HTTPClient,
 		log:         opts.Logger,
 		retries:     opts.MaxRetries,
@@ -209,6 +223,20 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 			)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
+			}
+			if isEdgeDrop(err) {
+				// The SEFAZ edge drops challenge-less clients at the network
+				// layer (TCP reset / EOF) before any HTTP response. Retrying
+				// immediately is exactly what the anti-bot policy penalises,
+				// so classify it as a block and let the shared cooldown apply.
+				s.log.Warn("nfce: portal edge drop classified as anti-bot block",
+					"access_key", key.String(),
+					"attempt", attempt,
+					"duration_ms", duration.Milliseconds(),
+					"err", err,
+				)
+				s.applyCooldown("edge_drop", s.cooldown, attempt, 0, 0, "")
+				return nil, &AntiBotError{Reason: "connection dropped by the portal edge"}
 			}
 			if attempt < s.retries {
 				delay := s.backoff(attempt)
@@ -367,6 +395,20 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.
 	req.Header.Set("User-Agent", source.user_agent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("Accept-Language", "pt-BR,pt;q=0.9")
+	if source.cookie != "" {
+		// Diagnostic cookie transplant only (see HTTPSourceOptions.Cookie).
+		// The value is a session credential: never log it.
+		req.Header.Set("Cookie", source.cookie)
+	}
+
+	// Record which cookies the jar would send before the request runs. Only
+	// names are logged: values are session credentials, and the F5 challenge
+	// cookies are signed/fingerprinted secrets.
+	logCookies := source.log.Enabled(ctx, slog.LevelDebug)
+	var sentNames []string
+	if logCookies {
+		sentNames = source.cookieNames(req.URL)
+	}
 
 	resp, err := source.client.Do(req)
 	if err != nil {
@@ -378,11 +420,48 @@ func (source *HTTPSource) doRequest(ctx context.Context, url string) (int, http.
 		_ = resp.Body.Close()
 	}()
 
+	if logCookies {
+		source.log.Debug("nfce: portal cookie state",
+			"host", req.URL.Host,
+			"cookie_names_sent", sentNames,
+			"cookie_count_sent", len(sentNames),
+			"cookie_names_set", setCookieNames(resp),
+			"cookie_count_set", len(resp.Cookies()),
+		)
+	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		return resp.StatusCode, resp.Header, nil, err
 	}
 	return resp.StatusCode, resp.Header, body, nil
+}
+
+// cookieNames returns the names (never the values) of the cookies the jar
+// would attach to a request for u.
+func (source *HTTPSource) cookieNames(u *url.URL) []string {
+	if source.client.Jar == nil {
+		return nil
+	}
+	cookies := source.client.Jar.Cookies(u)
+	names := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		names = append(names, c.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// setCookieNames returns the names (never the values) of the cookies the
+// portal attempted to set on a response.
+func setCookieNames(resp *http.Response) []string {
+	cookies := resp.Cookies()
+	names := make([]string, 0, len(cookies))
+	for _, c := range cookies {
+		names = append(names, c.Name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // captureChallenge registers the session context of a captcha-challenged fetch
@@ -513,6 +592,35 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// isEdgeDrop reports whether err is the connection-level failure the SEFAZ
+// anti-bot edge uses for challenge-less clients: the TCP connection is reset or
+// closed before an HTTP response is produced. These are not ordinary upstream
+// errors: retrying them immediately is what escalates the block.
+func isEdgeDrop(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"connection reset by peer",
+		"connection reset",
+		"broken pipe",
+		"unexpected eof",
+		"server sent goaway",
+		"use of closed network connection",
+		"connection closed by",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func antiBotRejection(body []byte) (string, bool) {

@@ -10,8 +10,9 @@ import (
 // of 1). It exists to stay polite to the fiscal portal: one request per token.
 //
 // It also carries a shared cooldown deadline: when the portal serves an
-// anti-bot/rate-limit rejection page, every request for the same source waits
-// until that deadline before touching the portal again.
+// anti-bot/rate-limit rejection page or drops the connection at its edge,
+// every request for the same source waits until that deadline before touching
+// the portal again.
 type rateLimiter struct {
 	mu            sync.Mutex
 	interval      time.Duration
@@ -19,10 +20,16 @@ type rateLimiter struct {
 	cooldownUntil time.Time
 }
 
-func newRateLimiter(rps int) *rateLimiter {
+// newRateLimiter paces requests at max(1/rps, minInterval). minInterval exists
+// because the SEFAZ edge blocks a source quickly: 1 RPS is still too fast for a
+// bot-defense-protected portal, and rps alone cannot express sub-1Hz pacing.
+func newRateLimiter(rps int, minInterval time.Duration) *rateLimiter {
 	interval := time.Second / time.Duration(rps)
 	if interval <= 0 {
 		interval = time.Nanosecond
+	}
+	if minInterval > interval {
+		interval = minInterval
 	}
 	return &rateLimiter{interval: interval}
 }

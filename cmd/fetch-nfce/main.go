@@ -24,10 +24,12 @@ func init() {
 func main() {
 	baseURL := flag.String("u", nfce.DefaultSPQRBaseURL, "SEFAZ base URL")
 	userAgent := flag.String("a", "", "User agent for the request")
+	cookieHeader := flag.String("c", "", "Raw Cookie header for diagnostic replay (never logged)")
 	timeoutStr := flag.String("t", "30s", "Timeout per attempt (e.g., 15s, 60s)")
+	minIntervalStr := flag.String("i", "0s", "Minimum spacing between attempts (e.g., 10s)")
 	logLevel := flag.String("l", "info", "Set the logger's Log level")
 	logFormat := flag.String("f", "", "Set the logger's Log format (json or pretty print)")
-	retries := flag.Int("r", 3, "Maximum number of attempts/retries")
+	retries := flag.Int("r", 1, "Maximum number of attempts/retries")
 	help := flag.Bool("h", false, "Print this help menu")
 
 	flag.Parse()
@@ -65,12 +67,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	minInterval, err := time.ParseDuration(*minIntervalStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid minimum interval: %v\n", err)
+		os.Exit(1)
+	}
+
 	opts := nfce.HTTPSourceOptions{
-		BaseURL:    *baseURL,
-		UserAgent:  *userAgent,
-		MaxRetries: *retries,
-		Timeout:    timeout,
-		Logger:     log,
+		BaseURL:     *baseURL,
+		UserAgent:   *userAgent,
+		Cookie:      *cookieHeader,
+		MinInterval: minInterval,
+		MaxRetries:  *retries,
+		Timeout:     timeout,
+		Logger:      log,
 	}
 
 	source, err := nfce.NewHTTPSource(opts)
@@ -88,6 +98,8 @@ func main() {
 		"log_level", *logLevel,
 		"NfcePortal", *baseURL,
 		"UA", *userAgent,
+		"CookieProvided", *cookieHeader != "",
+		"MinInterval", minInterval,
 		"MaxRetries", *retries,
 		"Timeout", timeout,
 	)

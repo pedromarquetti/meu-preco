@@ -52,8 +52,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SEFAZFetchRPS != 1 {
 		t.Errorf("SEFAZFetchRPS = %d, want 1", cfg.SEFAZFetchRPS)
 	}
-	if cfg.SEFAZMaxRetries != 3 || cfg.SEFAZTimeout != 30*time.Second {
-		t.Errorf("SEFAZ retry knobs = %d/%v, want 3/30s", cfg.SEFAZMaxRetries, cfg.SEFAZTimeout)
+	if cfg.SEFAZMaxRetries != 1 || cfg.SEFAZTimeout != 30*time.Second {
+		t.Errorf("SEFAZ retry knobs = %d/%v, want 1/30s", cfg.SEFAZMaxRetries, cfg.SEFAZTimeout)
+	}
+	if cfg.SEFAZMinInterval != 10*time.Second {
+		t.Errorf("SEFAZMinInterval = %v, want 10s", cfg.SEFAZMinInterval)
 	}
 	if cfg.SEFAZBackoffBase != 200*time.Millisecond || cfg.SEFAZBackoffCap != 2*time.Second {
 		t.Errorf("SEFAZ backoff = %v/%v, want 200ms/2s", cfg.SEFAZBackoffBase, cfg.SEFAZBackoffCap)
@@ -101,21 +104,25 @@ func TestLoadBadSefazBaseURL(t *testing.T) {
 
 func TestLoadOverrides(t *testing.T) {
 	cfg, err := load(env(map[string]string{
-		"PORT":            "9090",
-		"LOG_LEVEL":       "debug",
-		"CORS_ORIGINS":    "https://a.example.com, https://b.example.com",
-		"JWT_ACCESS_TTL":  "5m",
-		"JWT_REFRESH_TTL": "1h",
-		"SEFAZ_FETCH_RPS": "2",
-		"POSTGRES_HOST":   "db.internal",
-		"POSTGRES_PORT":   "5433",
-		"JWT_SECRET":      "an-overridden-secret-with-more-than-32-chars",
+		"PORT":               "9090",
+		"LOG_LEVEL":          "debug",
+		"CORS_ORIGINS":       "https://a.example.com, https://b.example.com",
+		"JWT_ACCESS_TTL":     "5m",
+		"JWT_REFRESH_TTL":    "1h",
+		"SEFAZ_FETCH_RPS":    "2",
+		"SEFAZ_MIN_INTERVAL": "45s",
+		"POSTGRES_HOST":      "db.internal",
+		"POSTGRES_PORT":      "5433",
+		"JWT_SECRET":         "an-overridden-secret-with-more-than-32-chars",
 	}))
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if cfg.Port != "9090" || cfg.LogLevel != "debug" || cfg.SEFAZFetchRPS != 2 {
 		t.Errorf("overrides not applied: %+v", cfg)
+	}
+	if cfg.SEFAZMinInterval != 45*time.Second {
+		t.Errorf("SEFAZMinInterval override = %v, want 45s", cfg.SEFAZMinInterval)
 	}
 	if len(cfg.CORSOrigins) != 2 || cfg.CORSOrigins[1] != "https://b.example.com" {
 		t.Errorf("CORSOrigins = %v", cfg.CORSOrigins)
@@ -277,6 +284,7 @@ func TestLoadBadRPS(t *testing.T) {
 func TestLoadSefazTuning(t *testing.T) {
 	cfg, err := load(env(map[string]string{
 		"SEFAZ_MAX_RETRIES":  "5",
+		"SEFAZ_MIN_INTERVAL": "45s",
 		"SEFAZ_TIMEOUT":      "10s",
 		"SEFAZ_BACKOFF_BASE": "50ms",
 		"SEFAZ_BACKOFF_CAP":  "1s",
@@ -289,6 +297,9 @@ func TestLoadSefazTuning(t *testing.T) {
 		t.Errorf("tuning = %d/%v/%v/%v", cfg.SEFAZMaxRetries, cfg.SEFAZTimeout,
 			cfg.SEFAZBackoffBase, cfg.SEFAZBackoffCap)
 	}
+	if cfg.SEFAZMinInterval != 45*time.Second {
+		t.Errorf("SEFAZMinInterval = %v, want 45s", cfg.SEFAZMinInterval)
+	}
 }
 
 func TestLoadBadSefazTuning(t *testing.T) {
@@ -297,6 +308,7 @@ func TestLoadBadSefazTuning(t *testing.T) {
 		value string
 	}{
 		{"SEFAZ_MAX_RETRIES", "0"}, {"SEFAZ_TIMEOUT", "0s"},
+		{"SEFAZ_MIN_INTERVAL", "-1s"},
 		{"SEFAZ_BACKOFF_CAP", "100ms"}, {"SEFAZ_BACKOFF_BASE", "-1ms"},
 		{"SEFAZ_BACKOFF_BASE", "soon"},
 	}

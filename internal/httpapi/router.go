@@ -180,7 +180,7 @@ func userRateKey(r *http.Request) string {
 func newCaptchaSupport(cfg config.Config, log *slog.Logger) *service.CaptchaSupport {
 	return &service.CaptchaSupport{
 		Store:       nfce.NewChallengeStore(),
-		Solver:      nfce.NewHTTPChallengeSolver(nfce.HTTPChallengeSolverOptions{RPS: cfg.SEFAZFetchRPS, Timeout: cfg.SEFAZTimeout, Logger: log}),
+		Solver:      nfce.NewHTTPChallengeSolver(nfce.HTTPChallengeSolverOptions{RPS: cfg.SEFAZFetchRPS, MinInterval: cfg.SEFAZMinInterval, Timeout: cfg.SEFAZTimeout, Logger: log}),
 		MaxAttempts: 5,
 	}
 }
@@ -210,6 +210,7 @@ func newNfceResolver(cfg config.Config, log *slog.Logger) nfceResolver {
 		src, err := nfce.NewHTTPSource(nfce.HTTPSourceOptions{
 			BaseURL:     baseURL,
 			RPS:         cfg.SEFAZFetchRPS,
+			MinInterval: cfg.SEFAZMinInterval,
 			MaxRetries:  cfg.SEFAZMaxRetries,
 			Timeout:     cfg.SEFAZTimeout,
 			BackoffBase: cfg.SEFAZBackoffBase,

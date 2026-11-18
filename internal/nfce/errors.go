@@ -75,15 +75,22 @@ var (
 // ErrAntiBotRejection so callers can classify it with errors.Is, while carrying
 // only safe diagnostic metadata (never the portal body itself).
 type AntiBotError struct {
-	// StatusCode is the HTTP status the portal answered with (often 200).
+	// StatusCode is the HTTP status the portal answered with (often 200). It is
+	// zero when the block happened at the connection layer, before a response.
 	StatusCode int
 	// SupportID is the reference ID printed on the rejection page, when any.
 	SupportID string
 	// BodyBytes is the size of the rejected response body.
 	BodyBytes int
+	// Reason is a short, safe classification such as "connection dropped by
+	// the portal edge". It never contains response bodies or cookie values.
+	Reason string
 }
 
 func (e *AntiBotError) Error() string {
+	if e.StatusCode == 0 && e.Reason != "" {
+		return fmt.Sprintf("fiscal portal rejected the request (%s)", e.Reason)
+	}
 	if e.SupportID != "" {
 		return fmt.Sprintf("fiscal portal rejected the request (status %d, support ID %s)", e.StatusCode, e.SupportID)
 	}

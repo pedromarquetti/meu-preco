@@ -1,12 +1,16 @@
 package nfce
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -370,7 +374,7 @@ func TestHTTPSourceBackoffKnobs(t *testing.T) {
 }
 
 func TestRateLimiterPaces(t *testing.T) {
-	rl := newRateLimiter(10) // 100ms between tokens
+	rl := newRateLimiter(10, 0) // 100ms between tokens
 	ctx := context.Background()
 
 	start := time.Now()
@@ -386,7 +390,7 @@ func TestRateLimiterPaces(t *testing.T) {
 }
 
 func TestRateLimiterCooldownCancellation(t *testing.T) {
-	rl := newRateLimiter(1000)
+	rl := newRateLimiter(1000, 0)
 	rl.Cooldown(100 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -491,5 +495,198 @@ func TestHTTPSourceFetchHeaders(t *testing.T) { // Fixed scope for srv
 
 	if capturedUA != customUA {
 		t.Errorf("expected user agent %q, got %q", customUA, capturedUA)
+	}
+}
+
+func TestHTTPSourceDefaultsToSingleAttempt(t *testing.T) {
+	src, err := NewHTTPSource(HTTPSourceOptions{BaseURL: "https://portal.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.retries != 1 {
+		t.Errorf("default retries = %d, want 1", src.retries)
+	}
+	// RPS defaults to 1 => 1s, and no MinInterval override.
+	if src.limit.interval != time.Second {
+		t.Errorf("default interval = %v, want 1s", src.limit.interval)
+	}
+}
+
+func TestHTTPSourceMinIntervalOverridesRPS(t *testing.T) {
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:     "https://portal.example",
+		RPS:         1000,
+		MinInterval: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.limit.interval != 10*time.Second {
+		t.Errorf("interval = %v, want MinInterval 10s", src.limit.interval)
+	}
+}
+
+func TestRateLimiterHonorsMinInterval(t *testing.T) {
+	// RPS alone would allow a token every 1ms; MinInterval must win.
+	rl := newRateLimiter(1000, 100*time.Millisecond)
+	ctx := context.Background()
+
+	start := time.Now()
+	if err := rl.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := rl.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 95*time.Millisecond {
+		t.Errorf("second Wait returned after %v, want >= ~100ms (MinInterval)", elapsed)
+	}
+}
+
+func TestHTTPSourceEdgeDropStopsWithoutRetry(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Errorf("response writer is not a Hijacker")
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		// Close without writing a response: the client sees EOF/reset, which
+		// is how the SEFAZ bot-defense edge rejects a challenge-less request.
+		_ = conn.Close()
+	}))
+	defer srv.Close()
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 3,
+		Cooldown:   50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	if !errors.Is(err, ErrAntiBotRejection) {
+		t.Fatalf("fetch error = %v, want ErrAntiBotRejection", err)
+	}
+	var antiBotErr *AntiBotError
+	if !errors.As(err, &antiBotErr) {
+		t.Fatalf("fetch error = %v, want *AntiBotError", err)
+	}
+	if antiBotErr.StatusCode != 0 || antiBotErr.Reason == "" {
+		t.Errorf("edge-drop error = %+v, want no status and a reason", antiBotErr)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("server calls = %d, want 1 (no retry on an edge drop)", calls.Load())
+	}
+	if until := src.limit.CooldownUntil(); !until.After(time.Now()) {
+		t.Errorf("cooldown = %v, want an active cooldown", until)
+	}
+}
+
+func TestIsEdgeDrop(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"eof", io.EOF, true},
+		{"unexpected eof", io.ErrUnexpectedEOF, true},
+		{"reset", errors.New("read tcp 192.0.2.1:443: read: connection reset by peer"), true},
+		{"goaway", errors.New("http2: server sent GOAWAY and closed the connection"), true},
+		{"broken pipe", errors.New("write: broken pipe"), true},
+		{"connection refused", errors.New("dial tcp: connect: connection refused"), false},
+		{"tls", errors.New("tls: handshake failure"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isEdgeDrop(tt.err); got != tt.want {
+				t.Errorf("isEdgeDrop(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHTTPSourceSendsDiagnosticCookie(t *testing.T) {
+	var gotCookie string
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 1,
+		Cookie:     "ASP.NET_SessionId=abc; TSPD_101=def",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+	if _, err := src.Fetch(context.Background(), key, ""); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if gotCookie != "ASP.NET_SessionId=abc; TSPD_101=def" {
+		t.Errorf("Cookie header = %q, want the supplied diagnostic value", gotCookie)
+	}
+}
+
+func TestHTTPSourceLogsCookieNamesNotValues(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secret = "super-secret-cookie-value"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:  "ASP.NET_SessionId",
+			Value: secret,
+			Path:  "/",
+		})
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 1,
+		Logger:     logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	for i := 0; i < 2; i++ {
+		if _, err := src.Fetch(context.Background(), key, ""); err != nil {
+			t.Fatalf("fetch %d: %v", i+1, err)
+		}
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "ASP.NET_SessionId") {
+		t.Errorf("cookie names not logged: %s", out)
+	}
+	if strings.Contains(out, secret) {
+		t.Errorf("cookie value leaked into logs: %s", out)
 	}
 }

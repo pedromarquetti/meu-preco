@@ -192,7 +192,8 @@ The server expects some env. vars to be set.
 | LOG_FORMAT            | no       | pretty           | `pretty` \| `json`                                                     |
 | CORS_ORIGINS          | no       | \*               | comma-separated origins, or `*`                                        |
 | SEFAZ_FETCH_RPS       | no       | 1                | integer ≥ 1                                                            |
-| SEFAZ_MAX_RETRIES     | no       | 3                | integer ≥ 1 (fetch attempts per receipt)                               |
+| SEFAZ_MIN_INTERVAL    | no       | 10s              | Go duration ≥ 0 (minimum spacing between fetches)                      |
+| SEFAZ_MAX_RETRIES     | no       | 1                | integer ≥ 1 (fetch attempts per receipt)                               |
 | SEFAZ_TIMEOUT         | no       | 30s              | Go duration (per portal request)                                       |
 | SEFAZ_BACKOFF_BASE    | no       | 200ms            | Go duration ≥ 0 (start of the exponential retry delay)                 |
 | SEFAZ_BACKOFF_CAP     | no       | 2s               | Go duration ≥ `SEFAZ_BACKOFF_BASE` (cap per retry delay)               |
@@ -648,60 +649,53 @@ make migrate-down
 make migrate-version
 ```
 
-- [x] Diagnostics — a standalone command (`diag`) to reproduce SEFAZ regressions
-      with custom user agents and retry counts without modifying the server.
+- [x] Diagnostics — a standalone command (`fetch-nfce`) to reproduce SEFAZ
+      regressions with custom user agents, pacing and retry counts without
+      modifying the server.
 
 ### Diagnostic Command
 
-The `diag` tool allows you to isolate variables (like User Agent or Base URL)
-that might be causing connection resets from the fiscal portal. It uses the same
-internal fetcher logic as the main application but prints detailed telemetry for
-every attempt directly to stdout/stderr.
+`fetch-nfce` isolates variables (user agent, base URL, pacing, retries) that may
+be causing connection resets from the fiscal portal. It uses the same internal
+fetcher as the main application and prints per-attempt telemetry.
 
 ```sh
 # Basic usage:
-./cmd/diag <access_key>
+go run ./cmd/fetch-nfce <access_key>
 
-# Test a specific user agent and retry count (e.g., 10 attempts):
-./cmd/diag --user-agent "Mozilla/5.0" --retries 10 <access_key>
+# Test a specific user agent, one attempt, 30s apart:
+go run ./cmd/fetch-nfce -a "Mozilla/5.0 ..." -r 1 -i 30s <access_key>
 
 # Test against a different base URL:
-./cmd/diag --base-url https://test.portal.gov.br <access_key>
+go run ./cmd/fetch-nfce -u https://test.portal.gov.br <access_key>
 
-# Replay an exact QR payload (if known):
-./cmd/diag --payload "p=abc|3|1" <access_key>
+# Replay an exact QR payload:
+go run ./cmd/fetch-nfce <access_key> "p=abc|3|1"
 ```
 
 **Warning:** This command contacts a live fiscal portal and should be run at low
-frequency with public test receipts only. Never use it to process production
-data or for high-frequency testing.
+frequency with public test receipts only. Every failed request may extend an
+IP-level block for the whole deployment, so keep the default single attempt and
+the `-i` spacing.
 
 ### Fetch test command
 
-The server also includes `fetch-nfce` command
-
-Use this command to test basic SEFAZ fetcher (no parser, only fetch, mainly for
-rejection/debug quick local test)
+`fetch-nfce` is the fetch-only diagnostic (no parser), useful for quick
+rejection/debug tests:
 
 ```bash
-flag needs an argument: -h
 Usage: fetch-nfce [flags] <access_key> [payload]
 
 Flags:
-  -a string
-    	User agent for the request
-  -f string
-    	Set the logger's Log format (json or pretty print)
-  -h string
-    	Print this help menu
-  -l string
-    	Set the logger's Log level (default "info")
-  -r int
-    	Maximum number of attempts/retries (default 3)
-  -t string
-    	Timeout per attempt (e.g., 15s, 60s) (default "30s")
-  -u string
-    	SEFAZ base URL (default "https://www.nfce.fazenda.sp.gov.br/qrcode")
+  -a string   User agent for the request
+  -c string   Raw Cookie header for diagnostic replay (never logged)
+  -f string   Set the logger's Log format (json or pretty print)
+  -h          Print this help menu
+  -i string   Minimum spacing between attempts (default "0s")
+  -l string   Set the logger's Log level (default "info")
+  -r int      Maximum number of attempts/retries (default 1)
+  -t string   Timeout per attempt (default "30s")
+  -u string   SEFAZ base URL (default "https://www.nfce.fazenda.sp.gov.br/qrcode")
 ```
 
 ## Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)

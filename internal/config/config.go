@@ -39,6 +39,11 @@ type Config struct {
 	// SEFAZFetchRPS caps how many requests per second the SP NFC-e portal
 	// fetcher may issue (politeness/anti-ban knob).
 	SEFAZFetchRPS int
+	// SEFAZMinInterval is the minimum spacing between portal requests. It is
+	// applied on top of SEFAZFetchRPS (whichever is slower wins). The SEFAZ
+	// edge blocks a source after a couple of rapid requests, so this defaults
+	// to 10s.
+	SEFAZMinInterval time.Duration
 	// SEFAZMaxRetries is the number of fetch attempts per receipt (>= 1).
 	SEFAZMaxRetries int
 	// SEFAZTimeout bounds each portal request (retries included).
@@ -137,7 +142,12 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
-	sefaRetries, err := envInt(env, "SEFAZ_MAX_RETRIES", 3)
+	sefaRetries, err := envInt(env, "SEFAZ_MAX_RETRIES", 1)
+	if err != nil {
+		return Config{}, err
+	}
+
+	sefaMinInterval, err := envDuration(env, "SEFAZ_MIN_INTERVAL", 10*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -220,6 +230,7 @@ func load(env map[string]string) (Config, error) {
 		SefazBaseURL:  env["SEFAZ_BASE_URL"],
 
 		SEFAZMaxRetries:  sefaRetries,
+		SEFAZMinInterval: sefaMinInterval,
 		SEFAZTimeout:     sefaTimeout,
 		SEFAZBackoffBase: sefaBackoffBase,
 		SEFAZBackoffCap:  sefaBackoffCap,
@@ -316,6 +327,9 @@ func (c Config) Validate() error {
 	}
 	if c.SEFAZMaxRetries < 1 {
 		return fmt.Errorf("config: SEFAZ_MAX_RETRIES must be >= 1")
+	}
+	if c.SEFAZMinInterval < 0 {
+		return fmt.Errorf("config: SEFAZ_MIN_INTERVAL must be >= 0")
 	}
 	if c.SEFAZTimeout <= 0 {
 		return fmt.Errorf("config: SEFAZ_TIMEOUT must be a positive duration")

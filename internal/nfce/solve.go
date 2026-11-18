@@ -50,6 +50,9 @@ type HTTPChallengeSolverOptions struct {
 	Logger *slog.Logger
 	// RPS caps portal requests per second. Defaults to 1 (shared politeness).
 	RPS int
+	// MinInterval is the minimum spacing between solver requests, applied on
+	// top of RPS. Defaults to 0; the production config sets SEFAZ_MIN_INTERVAL.
+	MinInterval time.Duration
 	// Timeout bounds each solve/image request. Defaults to 30s.
 	Timeout time.Duration
 }
@@ -77,7 +80,7 @@ func NewHTTPChallengeSolver(opts HTTPChallengeSolverOptions) *HTTPChallengeSolve
 		client:    opts.HTTPClient,
 		log:       opts.Logger,
 		userAgent: opts.UserAgent,
-		limit:     newRateLimiter(opts.RPS),
+		limit:     newRateLimiter(opts.RPS, opts.MinInterval),
 	}
 }
 
