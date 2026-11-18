@@ -66,3 +66,63 @@ func TestNewNfceResolverSharesPortalState(t *testing.T) {
 		t.Errorf("captcha support has no solver")
 	}
 }
+
+// TestNewNfceResolverSendsConfiguredUserAgent proves the SEFAZ_USER_AGENT
+// configuration (and the ASCII default when unset) reaches the actual portal
+// request, not just the config struct.
+func TestNewNfceResolverSendsConfiguredUserAgent(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/nfce_1.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		ua   string
+		want string
+	}{
+		{name: "configured", ua: "MeuPreco/wiring-test", want: "MeuPreco/wiring-test"},
+		{name: "default", ua: "", want: "MeuPreco/0.1"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uaCh := make(chan string, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				uaCh <- r.UserAgent()
+				_, _ = w.Write(raw)
+			}))
+			defer srv.Close()
+
+			cfg := config.Config{
+				SefazBaseURL:     srv.URL,
+				SEFAZFetchRPS:    1000,
+				SEFAZMaxRetries:  1,
+				SEFAZTimeout:     2 * time.Second,
+				SEFAZCooldown:    50 * time.Millisecond,
+				SEFAZBackoffBase: time.Millisecond,
+				SEFAZBackoffCap:  time.Millisecond,
+				SefazUserAgent:   tc.ua,
+			}
+			log := slog.New(slog.NewTextHandler(io.Discard, nil))
+			res := newNfceResolver(cfg, log, newPortalState(cfg))
+
+			key, err := nfce.ParseAccessKey(senateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The parser outcome is irrelevant here: only the request header
+			// is under test.
+			_, _ = res.Resolve(context.Background(), key, "")
+
+			select {
+			case got := <-uaCh:
+				if got != tc.want {
+					t.Errorf("portal User-Agent = %q, want %q", got, tc.want)
+				}
+			default:
+				t.Fatal("portal received no request")
+			}
+		})
+	}
+}

@@ -83,6 +83,42 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadSefazUserAgent(t *testing.T) {
+	cfg, err := load(env(nil))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.SefazUserAgent != "MeuPreco/0.1" {
+		t.Errorf("default SefazUserAgent = %q, want MeuPreco/0.1", cfg.SefazUserAgent)
+	}
+
+	cfg, err = load(env(map[string]string{"SEFAZ_USER_AGENT": "  MeuPreco/2.0 (diagnostic)  "}))
+	if err != nil {
+		t.Fatalf("load override: %v", err)
+	}
+	if cfg.SefazUserAgent != "MeuPreco/2.0 (diagnostic)" {
+		t.Errorf("SefazUserAgent = %q, want trimmed override", cfg.SefazUserAgent)
+	}
+}
+
+func TestLoadBadSefazUserAgent(t *testing.T) {
+	cases := map[string]string{
+		"whitespace only": "   ",
+		"control char":    "MeuPreco/0.1\x01",
+		"newline":         "MeuPreco/0.1\nInjected: true",
+		"non-ascii":       "Meu Preço/0.1",
+		"too long":        strings.Repeat("a", maxSefazUserAgentLen+1),
+	}
+	for name, ua := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := load(env(map[string]string{"SEFAZ_USER_AGENT": ua}))
+			if err == nil || !strings.Contains(err.Error(), "SEFAZ_USER_AGENT") {
+				t.Fatalf("SEFAZ_USER_AGENT=%q: expected error naming it, got %v", ua, err)
+			}
+		})
+	}
+}
+
 func TestLoadSefazBaseURL(t *testing.T) {
 	cfg, err := load(env(map[string]string{"SEFAZ_BASE_URL": "https://portal.example.gov.br/qrcode"}))
 	if err != nil {

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	defaultUserAgent = "Meu Preço/0.1"
+	defaultUserAgent = "MeuPreco/0.1"
 	maxBodyBytes     = 2 << 20 // 2 MiB, DANFE pages are tens of KiB
 
 	// maxPortalCooldown bounds both a configured cooldown and a hostile or

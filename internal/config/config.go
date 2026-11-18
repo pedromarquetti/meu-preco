@@ -54,7 +54,7 @@ type Config struct {
 	SEFAZBackoffCap time.Duration
 
 	// SefazUserAgent specifies the user-agent string sent to the SP NFC-e portal.
-	// Defaults to "Meu Preço/0.1".
+	// Defaults to "MeuPreco/0.1"; it must be printable ASCII (see Validate).
 	SefazUserAgent string
 
 	// SEFAZCooldown is how long subsequent requests must wait after an
@@ -86,6 +86,15 @@ type Config struct {
 	// ingestion stays offline-first and deterministic.
 	EnableOFFEnrich bool
 }
+
+const (
+	// defaultSefazUserAgent is the neutral user agent sent to the SEFAZ portal.
+	// It is ASCII on purpose: net/http header values are not guaranteed to
+	// carry non-ASCII bytes, and browser impersonation is not a goal.
+	defaultSefazUserAgent = "MeuPreco/0.1"
+	// maxSefazUserAgentLen bounds SEFAZ_USER_AGENT to a sane header size.
+	maxSefazUserAgentLen = 256
+)
 
 // requiredEnv lists environment variables without which the process must not
 // boot.
@@ -172,7 +181,7 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
-	sefaUserAgent := envString(env, "SEFAZ_USER_AGENT", "Meu Preço/0.1")
+	sefaUserAgent := strings.TrimSpace(envString(env, "SEFAZ_USER_AGENT", defaultSefazUserAgent))
 
 	previewTTL, err := envDuration(env, "PREVIEWS_TTL", 15*time.Minute)
 	if err != nil {
@@ -343,6 +352,9 @@ func (c Config) Validate() error {
 	if c.SEFAZCooldown <= 0 {
 		return fmt.Errorf("config: SEFAZ_COOLDOWN must be a positive duration")
 	}
+	if err := validateSefazUserAgent(c.SefazUserAgent); err != nil {
+		return err
+	}
 	if c.PreviewTTL <= 0 {
 		return fmt.Errorf("config: PREVIEWS_TTL must be a positive duration")
 	}
@@ -370,6 +382,28 @@ func (c Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+// validateSefazUserAgent enforces that SEFAZ_USER_AGENT is a non-empty,
+// printable ASCII HTTP header value of bounded length. net/http rejects
+// control characters when sending and non-ASCII bytes are not portable, so
+// fail at boot instead of on the first receipt fetch.
+func validateSefazUserAgent(ua string) error {
+	if ua == "" {
+		return fmt.Errorf("config: SEFAZ_USER_AGENT must not be empty")
+	}
+	if ua != strings.TrimSpace(ua) {
+		return fmt.Errorf("config: SEFAZ_USER_AGENT must not have leading or trailing whitespace")
+	}
+	if len(ua) > maxSefazUserAgentLen {
+		return fmt.Errorf("config: SEFAZ_USER_AGENT must be at most %d bytes, got %d", maxSefazUserAgentLen, len(ua))
+	}
+	for i := 0; i < len(ua); i++ {
+		if b := ua[i]; b < 0x20 || b > 0x7e {
+			return fmt.Errorf("config: SEFAZ_USER_AGENT must be printable ASCII, found byte 0x%02x at offset %d", b, i)
+		}
+	}
 	return nil
 }
 
