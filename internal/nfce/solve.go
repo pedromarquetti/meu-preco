@@ -53,9 +53,14 @@ type HTTPChallengeSolverOptions struct {
 	// MinInterval is the minimum spacing between solver requests, applied on
 	// top of RPS. Defaults to 0; the production config sets SEFAZ_MIN_INTERVAL.
 	MinInterval time.Duration
-	// Limiter is the shared portal pacing/cooldown gate. When set, RPS and
-	// MinInterval are ignored: the caller injects the same limiter used by
-	// the fetcher, so a fetcher rejection also stops solver requests.
+	// QueueMaxWait bounds how long a solver request may wait for its pacing
+	// slot before failing with *PortalBusyError. Defaults to
+	// DefaultPortalQueueMaxWait.
+	QueueMaxWait time.Duration
+	// Limiter is the shared portal pacing/cooldown gate. When set, RPS,
+	// MinInterval and QueueMaxWait are ignored: the caller injects the same
+	// limiter used by the fetcher, so a fetcher rejection also stops solver
+	// requests.
 	Limiter *PortalLimiter
 	// Timeout bounds each solve/image request. Defaults to 30s.
 	Timeout time.Duration
@@ -81,7 +86,10 @@ func NewHTTPChallengeSolver(opts HTTPChallengeSolverOptions) *HTTPChallengeSolve
 		opts.Logger = slog.Default()
 	}
 	if opts.Limiter == nil {
-		opts.Limiter = NewPortalLimiter(opts.RPS, opts.MinInterval)
+		if opts.QueueMaxWait <= 0 {
+			opts.QueueMaxWait = DefaultPortalQueueMaxWait
+		}
+		opts.Limiter = NewPortalLimiterWithMaxWait(opts.RPS, opts.MinInterval, opts.QueueMaxWait)
 	}
 
 	return &HTTPChallengeSolver{

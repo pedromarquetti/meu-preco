@@ -49,11 +49,16 @@ type HTTPSourceOptions struct {
 	// production config sets SEFAZ_MIN_INTERVAL because the SEFAZ edge blocks
 	// a source after a couple of rapid requests.
 	MinInterval time.Duration
-	// Limiter is the shared portal pacing/cooldown gate. When set, RPS and
-	// MinInterval are ignored: the caller owns one limiter per portal host and
-	// also injects it into the captcha solver, so a rejection on either path
-	// stops the other.
+	// Limiter is the shared portal pacing/cooldown gate. When set, RPS,
+	// MinInterval and QueueMaxWait are ignored: the caller owns one limiter per
+	// portal host and also injects it into the captcha solver, so a rejection
+	// on either path stops the other.
 	Limiter *PortalLimiter
+
+	// QueueMaxWait bounds how long a request may wait for its pacing slot
+	// before failing with *PortalBusyError (the API maps it to 503 with
+	// Retry-After). Defaults to DefaultPortalQueueMaxWait.
+	QueueMaxWait time.Duration
 	// UserAgent sent with every request. Defaults to a descriptive one.
 	UserAgent string
 	// Cookie is an optional raw Cookie header used only by the diagnostic CLI
@@ -148,7 +153,10 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 	}
 
 	if opts.Limiter == nil {
-		opts.Limiter = NewPortalLimiter(opts.RPS, opts.MinInterval)
+		if opts.QueueMaxWait <= 0 {
+			opts.QueueMaxWait = DefaultPortalQueueMaxWait
+		}
+		opts.Limiter = NewPortalLimiterWithMaxWait(opts.RPS, opts.MinInterval, opts.QueueMaxWait)
 	}
 
 	if opts.HTTPClient == nil {
