@@ -473,6 +473,168 @@ func TestAntiBotRejectionVariants(t *testing.T) {
 	}
 }
 
+func TestHTTPSourceFetchAntiBotChallengeStopsWithoutRetry(t *testing.T) {
+	const secret = "challenge-body-secret"
+	challenge := `<html><head><title>Secure Connection</title>` +
+		`<script type="text/javascript" src="/TSPD/abc123?type=challenge"></script></head>` +
+		`<body><p>BIG-IP</p><noscript>Please enable JavaScript to continue. ` +
+		secret + `</noscript></body></html>`
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(challenge))
+	}))
+	defer srv.Close()
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	src, err := NewHTTPSource(HTTPSourceOptions{
+		BaseURL:    srv.URL,
+		RPS:        1000,
+		MaxRetries: 3,
+		Cooldown:   time.Minute,
+		Logger:     logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ParseAccessKey(senateKey)
+
+	_, err = src.Fetch(context.Background(), key, "")
+	var challengeErr *AntiBotChallengeError
+	if !errors.As(err, &challengeErr) {
+		t.Fatalf("fetch error = %v, want *AntiBotChallengeError", err)
+	}
+	if !errors.Is(err, ErrAntiBotChallenge) {
+		t.Fatalf("fetch error = %v, want ErrAntiBotChallenge", err)
+	}
+	if challengeErr.StatusCode != http.StatusOK || challengeErr.BodyBytes != len(challenge) {
+		t.Errorf("challenge error = %+v, want status 200 and the body size", challengeErr)
+	}
+	if challengeErr.RetryAfter <= 0 {
+		t.Errorf("RetryAfter = %v, want the configured cooldown", challengeErr.RetryAfter)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("server calls = %d, want 1 (no retry into the challenge)", calls.Load())
+	}
+	if until := src.limit.CooldownUntil(); !until.After(time.Now()) {
+		t.Errorf("cooldown = %v, want an active cooldown", until)
+	}
+
+	// A second fetch must fail fast on the shared cooldown, without touching
+	// the portal again.
+	if _, err := src.Fetch(context.Background(), key, ""); !errors.Is(err, ErrPortalCoolingDown) {
+		t.Fatalf("second fetch error = %v, want ErrPortalCoolingDown", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("server calls = %d, want 1 after the cooldown", calls.Load())
+	}
+
+	if out := logs.String(); strings.Contains(out, secret) {
+		t.Errorf("raw challenge body leaked into logs: %s", out)
+	}
+}
+
+func TestAntiBotChallengeVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "TSPD script mixed case",
+			body: `<html><head><script src="/TsPd/abc?x=1"></script></head><body>wait</body></html>`,
+			want: true,
+		},
+		{
+			name: "TSPD cookie",
+			body: `<html><body>TSPD_101=abc; TS01234567=def</body></html>`,
+			want: true,
+		},
+		{
+			name: "BIG-IP",
+			body: `<html><body>Blocked by BIG-IP</body></html>`,
+			want: true,
+		},
+		{
+			name: "BIGIP concatenated",
+			body: `<html><body>BIGIP appliance</body></html>`,
+			want: true,
+		},
+		{
+			name: "F5 networks with newline",
+			body: "<html><body>F5\nNetworks challenge</body></html>",
+			want: true,
+		},
+		{
+			name: "JavaScript challenge with whitespace",
+			body: "<html><body>JavaScript\n\tchallenge</body></html>",
+			want: true,
+		},
+		{
+			name: "ordinary malformed page",
+			body: "Consulta Resumida NFC-e is temporarily unavailable",
+			want: false,
+		},
+		{
+			name: "DANFE with a challenge marker",
+			body: `<html><body id="tabResult"><script src="/TSPD/ignored"></script></body></html>`,
+			want: false,
+		},
+		{
+			name: "captcha with a challenge marker",
+			body: `<html><body><input type="hidden" name="__VIEWSTATE" value="x">` +
+				`<img src="captcha.png"><script src="/TSPD/ignored"></script></body></html>`,
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			marker, got := antiBotChallenge([]byte(tt.body))
+			if got != tt.want {
+				t.Fatalf("antiBotChallenge() = %q, %v; want %v", marker, got, tt.want)
+			}
+			if got && marker == "" {
+				t.Error("matched challenge has an empty marker")
+			}
+		})
+	}
+}
+
+func TestHTTPChallengeSolverSolveDetectsAntiBotChallenge(t *testing.T) {
+	challenge := `<html><head><script src="/TSPD/solver"></script></head>` +
+		`<body>BIG-IP JavaScript challenge</body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		_, _ = w.Write([]byte(challenge))
+	}))
+	defer srv.Close()
+
+	solver := NewHTTPChallengeSolver(HTTPChallengeSolverOptions{
+		HTTPClient: &http.Client{},
+		Limiter:    NewPortalLimiter(1000, 0),
+	})
+	ch := &Challenge{
+		FormAction: srv.URL,
+		Fields:     map[string]string{"__VIEWSTATE": "x"},
+	}
+
+	_, err := solver.Solve(context.Background(), ch, "1234")
+	if !errors.Is(err, ErrAntiBotChallenge) {
+		t.Fatalf("solver error = %v, want ErrAntiBotChallenge", err)
+	}
+	var challengeErr *AntiBotChallengeError
+	if !errors.As(err, &challengeErr) {
+		t.Fatalf("solver error = %v, want *AntiBotChallengeError", err)
+	}
+	if challengeErr.BodyBytes == 0 {
+		t.Error("challenge error carries no body size")
+	}
+}
+
 func TestParseRetryAfterDateUsesProvidedNow(t *testing.T) {
 	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
 	header := http.Header{"Retry-After": []string{"Wed, 03 Nov 2026 12:00:05 GMT"}}

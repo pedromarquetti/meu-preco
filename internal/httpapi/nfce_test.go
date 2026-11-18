@@ -294,6 +294,25 @@ func TestNfceNewAntiBotRejection(t *testing.T) {
 	}
 }
 
+func TestNfceNewAntiBotChallenge(t *testing.T) {
+	rec := postNfce(t, nfceRouter(t, stubResolver{
+		err: &nfce.AntiBotChallengeError{
+			StatusCode: http.StatusOK,
+			BodyBytes:  100,
+			RetryAfter: time.Minute,
+		},
+	}, nil), "/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if code, _ := decodeErrorEnvelope(t, rec); code != "upstream_js_challenge" {
+		t.Errorf("code = %q, want upstream_js_challenge", code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "60" {
+		t.Errorf("Retry-After = %q, want 60", got)
+	}
+}
+
 func TestNfceNewUnknownError(t *testing.T) {
 	rec := postNfce(t, nfceRouter(t, stubResolver{err: errors.New("mystery")}, nil),
 		"/api/v1/nfce/new", `{"access_key":"`+senateKey+`"}`)

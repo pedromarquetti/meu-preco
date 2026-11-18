@@ -296,6 +296,29 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 					RetryAfter: cooldown,
 				}
 			}
+
+			// F5/BIG-IP JavaScript challenges are a distinct block: unlike the
+			// explicit rejection page, the portal expects the client to run a
+			// script. This server does not, and never will. Classify it, apply
+			// the shared cooldown, and stop: retrying or "solving" it only
+			// deepens the block.
+			if marker, challenged := antiBotChallenge(body); challenged {
+				s.log.Warn("nfce: portal JavaScript challenge classified as anti-bot block",
+					"access_key", key.String(),
+					"attempt", attempt,
+					"status", status,
+					"bytes", len(body),
+					"duration_ms", duration.Milliseconds(),
+					"marker", marker,
+				)
+				s.applyCooldown("js_challenge", s.cooldown, attempt, status, len(body), "")
+				return nil, &AntiBotChallengeError{
+					StatusCode: status,
+					BodyBytes:  len(body),
+					Reason:     "F5/BIG-IP JavaScript challenge",
+					RetryAfter: s.cooldown,
+				}
+			}
 		}
 
 		switch {
@@ -543,9 +566,6 @@ func resolveURL(base *url.URL, ref, fallback string) string {
 
 // pageFailure returns a typed error whenever body is not a healthy DANFE page.
 func pageFailure(body []byte) error {
-	if len(normalizeWS(string(body))) < 100 {
-		return fmt.Errorf("%w: empty or truncated portal response", ErrUpstream)
-	}
 	if pageHasDANFE(body) {
 		return nil
 	}
@@ -553,6 +573,15 @@ func pageFailure(body []byte) error {
 		return &CaptchaError{
 			ImageURL: extractCaptchaImage(body),
 		}
+	}
+	if _, challenged := antiBotChallenge(body); challenged {
+		return &AntiBotChallengeError{
+			BodyBytes: len(body),
+			Reason:    "F5/BIG-IP JavaScript challenge",
+		}
+	}
+	if len(normalizeWS(string(body))) < 100 {
+		return fmt.Errorf("%w: empty or truncated portal response", ErrUpstream)
 	}
 	lower := strings.ToLower(string(body))
 
@@ -657,6 +686,48 @@ func isEdgeDrop(err error) bool {
 		}
 	}
 	return false
+}
+
+// antiBotChallenge reports whether body is an F5/BIG-IP JavaScript challenge
+// page and returns the stable marker that matched. It only classifies pages
+// that are neither a DANFE nor a captcha form: the DANFE result page also
+// carries scripts, and a captcha is handled by its own interactive path.
+//
+// The markers are deliberately specific. "F5" alone is a common substring, so
+// only its challenge-facing variants count. The returned marker is safe to log;
+// the body itself is never logged.
+func antiBotChallenge(body []byte) (string, bool) {
+	if pageHasDANFE(body) || looksLikeCaptcha(body) {
+		return "", false
+	}
+
+	lower := strings.ToLower(string(body))
+	for _, marker := range []string{
+		"/tspd",
+		"tspd_101",
+		"big-ip",
+		"bigip",
+	} {
+		if strings.Contains(lower, marker) {
+			return marker, true
+		}
+	}
+
+	// Challenge text may be split across tags or whitespace, so match phrases
+	// against a whitespace-collapsed copy.
+	collapsed := normalizeWS(lower)
+	for _, phrase := range []string{
+		"f5 networks",
+		"javascript challenge",
+		"enable javascript",
+		"checking your browser",
+		"checking if the site connection is secure",
+	} {
+		if strings.Contains(collapsed, phrase) {
+			return phrase, true
+		}
+	}
+	return "", false
 }
 
 func antiBotRejection(body []byte) (string, bool) {

@@ -52,6 +52,14 @@ var (
 	// safe diagnostic metadata.
 	ErrAntiBotRejection = errors.New("SEFAZ portal rejected the request due to anti-bot/rate-limiting")
 
+	// ErrAntiBotChallenge reports that the portal served an F5/BIG-IP
+	// JavaScript challenge instead of the requested page. It is distinct from
+	// ErrAntiBotRejection (the explicit "Request Rejected" page): the server
+	// cannot and must not solve the challenge, so it applies the shared
+	// cooldown and stops. The API maps it to 429. AntiBotChallengeError
+	// carries only safe diagnostic metadata.
+	ErrAntiBotChallenge = errors.New("SEFAZ portal requires an unsupported JavaScript challenge")
+
 	// ErrPortalCoolingDown reports that the shared portal limiter is refusing
 	// requests until an anti-bot cooldown expires. The API maps it to 429 with
 	// a Retry-After header; callers must not sleep through it in a handler.
@@ -112,6 +120,34 @@ func (e *AntiBotError) Error() string {
 
 // Unwrap makes errors.Is(err, ErrAntiBotRejection) hold for the typed error.
 func (e *AntiBotError) Unwrap() error { return ErrAntiBotRejection }
+
+// AntiBotChallengeError is returned when the portal serves an F5/BIG-IP
+// JavaScript challenge page instead of the requested document. It unwraps to
+// ErrAntiBotChallenge so callers can distinguish it from the explicit
+// "Request Rejected" page, while carrying only safe diagnostic metadata (never
+// the challenge body or its scripts).
+type AntiBotChallengeError struct {
+	// StatusCode is the HTTP status the portal answered with (often 200).
+	StatusCode int
+	// BodyBytes is the size of the challenge response body.
+	BodyBytes int
+	// Reason is a short, safe classification. It never contains the response
+	// body or cookie values.
+	Reason string
+	// RetryAfter is the cooldown the challenge triggered, when known. The API
+	// surfaces it as the Retry-After header.
+	RetryAfter time.Duration
+}
+
+func (e *AntiBotChallengeError) Error() string {
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("fiscal portal requires an unsupported JavaScript challenge (status %d)", e.StatusCode)
+	}
+	return "fiscal portal requires an unsupported JavaScript challenge"
+}
+
+// Unwrap makes errors.Is(err, ErrAntiBotChallenge) hold for the typed error.
+func (e *AntiBotChallengeError) Unwrap() error { return ErrAntiBotChallenge }
 
 // PortalCooldownError reports an active anti-bot cooldown. It unwraps to
 // ErrPortalCoolingDown and carries a bounded Retry-After for the API.

@@ -268,6 +268,10 @@ func respondResolveError(writer http.ResponseWriter, req *http.Request, err erro
 		setRetryAfter(writer, err)
 		httpx.Error(writer, req, http.StatusServiceUnavailable, "upstream_busy",
 			"the fiscal portal request queue is saturated; retry shortly")
+	case errors.Is(err, nfce.ErrAntiBotChallenge):
+		setRetryAfter(writer, err)
+		httpx.Error(writer, req, http.StatusTooManyRequests, "upstream_js_challenge",
+			"the fiscal portal requires a browser challenge this server cannot solve; try again later")
 	case errors.Is(err, nfce.ErrAntiBotRejection):
 		setRetryAfter(writer, err)
 		httpx.Error(writer, req, http.StatusTooManyRequests, "upstream_rate_limited",
@@ -304,6 +308,7 @@ func setRetryAfter(w http.ResponseWriter, err error) {
 	var cooldown *nfce.PortalCooldownError
 	var busy *nfce.PortalBusyError
 	var antiBot *nfce.AntiBotError
+	var challenge *nfce.AntiBotChallengeError
 
 	var d time.Duration
 	switch {
@@ -313,6 +318,8 @@ func setRetryAfter(w http.ResponseWriter, err error) {
 		d = busy.RetryAfter
 	case errors.As(err, &antiBot):
 		d = antiBot.RetryAfter
+	case errors.As(err, &challenge):
+		d = challenge.RetryAfter
 	default:
 		return
 	}
