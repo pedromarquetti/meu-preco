@@ -295,7 +295,7 @@ func TestCaptchaSolveRequiresAuth(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	store := nfce.NewChallengeStore()
 	raw := newRouter(cfg, log, stubResolver{receipt: uidUncertainReceipt()}, newStubStores(),
-		&service.CaptchaSupport{Store: store, Solver: newFakeSolver(t), MaxAttempts: 5})
+		&service.CaptchaSupport{Store: store, Solver: newFakeSolver(t), MaxAttempts: 5}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/nfce/captcha",
 		strings.NewReader(`{"challenge_id":"x","solution":"y"}`))

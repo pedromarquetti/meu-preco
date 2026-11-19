@@ -21,15 +21,26 @@ import (
 // New builds the full HTTP handler from the validated configuration.
 // stores drives /readyz (Ping) and auth endpoints.
 func New(cfg config.Config, log *slog.Logger, stores domain.Stores) http.Handler {
-	portal := newPortalState(cfg)
-	return newRouter(cfg, log, newNfceResolver(cfg, log, portal), stores, newCaptchaSupport(cfg, log, portal))
+	portal := newPortalState(cfg, log)
+	return newRouter(cfg, log, newNfceResolver(cfg, log, portal), stores, newCaptchaSupport(cfg, log, portal), portal.outcomes)
 }
 
 // newRouter assembles the router with the given nfce resolver (kept injectable
 // for httptest tests).
 // TODO: handle PostgreSQL errors correctly: the server should at least log the error so the server admin can see what is going on (nfceAPI currently returns http 500 if there is a postgres err)
-func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores domain.Stores, captcha *service.CaptchaSupport) http.Handler {
+func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores domain.Stores, captcha *service.CaptchaSupport, outcomes *nfce.PortalOutcomes) http.Handler {
 	router := chi.NewRouter()
+
+	// The captcha path is part of the same portal pipeline. When a caller
+	// injects a resolver but no captcha support (tests), build one so the
+	// routes exist; it then also owns the outcomes recorder used by /metrics.
+	if captcha == nil {
+		portal := newPortalState(cfg, log)
+		captcha = newCaptchaSupport(cfg, log, portal)
+		if outcomes == nil {
+			outcomes = portal.outcomes
+		}
+	}
 
 	router.Use(
 		middleware.RequestID,
@@ -43,18 +54,16 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 	router.MethodNotAllowed(httpx.MethodNotAllowed)
 
 	// A shared Open Food Facts lookup client backs both the opt-in gtin_new
-	// enrichment and the OFF cache-hit stats surfaced on /metrics. Nil when
-	// enrichment is disabled.
+	// enrichment and the OFF cache-hit stats surfaced on the admin metrics
+	// endpoint. Nil when enrichment is disabled.
 	var offClient *enrich.OFFClient
 	if cfg.EnableOFFEnrich {
 		offClient = enrich.NewOFFClient()
 	}
 
-	// Health checks and metrics stay unprefixed; everything else lives under
-	// /api/v1/.
+	// Health checks stay unprefixed; everything else lives under /api/v1/.
 	router.Get("/healthz", healthz)
 	router.Get("/readyz", readyz(stores))
-	router.Get("/metrics", metricsHandler(offClient))
 
 	if err := documentationRoutes(router); err != nil {
 		panic("httpapi: initialize embedded documentation: " + err.Error())
@@ -68,10 +77,6 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 		// Zero/negative configuration values disable the buckets (tests).
 		r.Use(middleware.KeyedRateLimit(cfg.RateLimitIPRPS, cfg.RateLimitIPBurst, middleware.IPKey))
 		userRL := middleware.KeyedRateLimit(cfg.RateLimitUserRPS, cfg.RateLimitUserBurst, userRateKey)
-
-		if captcha == nil {
-			captcha = newCaptchaSupport(cfg, log, newPortalState(cfg))
-		}
 
 		// One service instance drives every group: ingestion, reads and admin
 		// curation all share the same stores + resolver + transaction boundary.
@@ -144,6 +149,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 			ar.Get("/users", adminAPI.listUsers)
 			ar.Get("/user/{id}", adminAPI.getUser)
 			ar.Patch("/users/{id}/role", adminAPI.patchRole)
+			ar.Get("/metrics", metricsHandler(offClient, outcomes))
 			// ar.Delete("/users/{id}", // TODO: implement a user deletion endpoint)
 			ar.Get("/products/needs-review", adminAPI.needsReview)
 			ar.Get("/products", adminAPI.searchProducts)
@@ -181,12 +187,14 @@ func userRateKey(r *http.Request) string {
 type portalState struct {
 	limiter    *nfce.PortalLimiter
 	challenges *nfce.ChallengeStore
+	outcomes   *nfce.PortalOutcomes
 }
 
-func newPortalState(cfg config.Config) *portalState {
+func newPortalState(cfg config.Config, log *slog.Logger) *portalState {
 	return &portalState{
 		limiter:    nfce.NewPortalLimiter(cfg.SEFAZFetchRPS, cfg.SEFAZMinInterval),
 		challenges: nfce.NewChallengeStore(),
+		outcomes:   nfce.NewPortalOutcomes(log),
 	}
 }
 
@@ -199,9 +207,10 @@ func newCaptchaSupport(cfg config.Config, log *slog.Logger, portal *portalState)
 	return &service.CaptchaSupport{
 		Store: portal.challenges,
 		Solver: nfce.NewHTTPChallengeSolver(nfce.HTTPChallengeSolverOptions{
-			Limiter: portal.limiter,
-			Timeout: cfg.SEFAZTimeout,
-			Logger:  log,
+			Limiter:  portal.limiter,
+			Timeout:  cfg.SEFAZTimeout,
+			Logger:   log,
+			Outcomes: portal.outcomes,
 		}),
 		MaxAttempts: 5,
 	}
@@ -242,6 +251,7 @@ func newNfceResolver(cfg config.Config, log *slog.Logger, portal *portalState) n
 			Logger:         log,
 			Limiter:        portal.limiter,
 			ChallengeStore: portal.challenges,
+			Outcomes:       portal.outcomes,
 		})
 
 		if err != nil {

@@ -158,8 +158,9 @@ resetting connections, or unavailable.
       429 with `Retry-After` header
 - [x] Security headers — `X-Content-Type-Options`, `X-Frame-Options`,
       `Referrer-Policy`, `Cache-Control: no-store`
-- [x] Health & metrics — `/healthz` liveness, `/readyz` readiness, `/metrics`
-      with route counters, latency histogram, auth failures, OFF cache stats
+- [x] Health & metrics — `/healthz` liveness, `/readyz` readiness, and the
+      admin-only `/api/v1/admin/metrics` with route counters, latency histogram,
+      auth failures, OFF cache stats and portal outcome counters
 - [x] Database & migrations — PostgreSQL with `pg_trgm`, `golang-migrate` with
       embedded migrations, initial schema + commodity synonyms seeding
 - [x] Configuration — env var + `.env` file, configurable
@@ -273,9 +274,15 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
   nosniff`, `X-Frame-Options: DENY` and
   `Referrer-Policy: no-referrer`; JSON responses (and the captcha image proxy)
   are sent `Cache-Control: no-store`.
-- **Metrics** — `GET /metrics` (unauthenticated) returns per-route request
-  counters, a latency histogram, auth-failure counts and, when
-  `ENRICH_OFF=true`, the Open Food Facts cache hit/miss counters as JSON.
+- **Metrics** — `GET /api/v1/admin/metrics` (admin bearer token) returns
+  per-route request counters, a latency histogram, auth-failure counts, the
+  Open Food Facts cache hit/miss counters when `ENRICH_OFF=true`, and the
+  fiscal-portal outcome counters (`portal_outcomes`) when portal traffic has
+  been observed. The portal block rate (anti-bot rejections + JavaScript
+  challenges over all recorded outcomes) is included per host and in aggregate.
+  Counters are process-local and reset on restart; the anti-bot cooldown is
+  shared by the fetcher and captcha solver within one process but is **not**
+  shared across replicas. No server-side cookie storage is added.
 - **Contract** — `api/openapi.yaml` is the versioned source of truth for the
   HTTP surface; the SPA consumes only that.
 

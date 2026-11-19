@@ -47,7 +47,7 @@ func roleRouter(t *testing.T, stores domain.Stores, res nfceResolver, userID int
 		t.Fatalf("issue token: %v", err)
 	}
 
-	handler := newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), res, stores, nil)
+	handler := newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), res, stores, nil, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Authorization", "Bearer "+token)
 		handler.ServeHTTP(w, r)
@@ -260,7 +260,7 @@ func TestSharedReads(t *testing.T) {
 
 	// Unauthenticated reads are 401.
 	raw := newRouter(config.Config{JWTSecret: testJWTSecret, CORSOrigins: []string{"https://app.example.com"}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil, nil)
 	rec, _ = do(t, raw, http.MethodGet, "/api/v1/products", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated read = %d, want 401", rec.Code)
@@ -312,7 +312,7 @@ func TestRoleGating(t *testing.T) {
 
 	// No token at all: RequireAuth answers 401 before the role middleware runs.
 	raw := newRouter(config.Config{JWTSecret: testJWTSecret, CORSOrigins: []string{"https://app.example.com"}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil, nil)
 	rec, _ = do(t, raw, http.MethodGet, "/api/v1/admin/users", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("unauthenticated admin = %d, want 401", rec.Code)
@@ -506,7 +506,7 @@ func TestAdminReviewQueueShowsProposedAssignment(t *testing.T) {
 		t.Errorf("user queue access = %d, want 403", rec.Code)
 	}
 	raw := newRouter(config.Config{JWTSecret: testJWTSecret, CORSOrigins: []string{"https://app.example.com"}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil, nil)
 	rec, _ = do(t, raw, http.MethodGet, "/api/v1/admin/products/needs-review", "")
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("anonymous queue access = %d, want 401", rec.Code)

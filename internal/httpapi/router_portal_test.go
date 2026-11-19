@@ -40,7 +40,7 @@ func TestNewNfceResolverSharesPortalState(t *testing.T) {
 		SEFAZBackoffCap:  time.Millisecond,
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	portal := newPortalState(cfg)
+	portal := newPortalState(cfg, log)
 
 	res := newNfceResolver(cfg, log, portal)
 	key, err := nfce.ParseAccessKey(senateKey)
@@ -105,7 +105,7 @@ func TestNewNfceResolverSendsConfiguredUserAgent(t *testing.T) {
 				SefazUserAgent:   tc.ua,
 			}
 			log := slog.New(slog.NewTextHandler(io.Discard, nil))
-			res := newNfceResolver(cfg, log, newPortalState(cfg))
+			res := newNfceResolver(cfg, log, newPortalState(cfg, log))
 
 			key, err := nfce.ParseAccessKey(senateKey)
 			if err != nil {

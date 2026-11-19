@@ -12,11 +12,12 @@ import (
 	"meupreco/internal/auth"
 	"meupreco/internal/config"
 	"meupreco/internal/domain"
+	"meupreco/internal/nfce"
 )
 
 func hardeningRouter(t *testing.T, cfg config.Config) http.Handler {
 	t.Helper()
-	return newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), stubResolver{}, &fakeStores{}, nil)
+	return newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), stubResolver{}, &fakeStores{}, nil, nil)
 }
 
 func bearer(t *testing.T, cfg config.Config, u *domain.User) string {
@@ -53,9 +54,50 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
-func TestMetricsEndpoint(t *testing.T) {
+// metricsTestConfig returns a config with a usable JWT secret so the admin
+// middleware can validate bearer tokens in metrics tests.
+func metricsTestConfig() config.Config {
+	return config.Config{
+		JWTSecret:     testJWTSecret,
+		JWTAccessTTL:  30 * time.Minute,
+		JWTRefreshTTL: 24 * time.Hour,
+	}
+}
+
+func adminToken(t *testing.T, cfg config.Config) string {
+	t.Helper()
+	return bearer(t, cfg, &domain.User{ID: 1, Email: "admin@example.com", Role: "admin"})
+}
+
+func TestMetricsEndpointRequiresAdmin(t *testing.T) {
+	cfg := metricsTestConfig()
+	h := hardeningRouter(t, cfg)
+
+	// Unauthenticated: 401.
 	rec := httptest.NewRecorder()
-	hardeningRouter(t, config.Config{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/metrics", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous metrics status = %d, want 401", rec.Code)
+	}
+
+	// Authenticated but not an admin: 403.
+	userToken := bearer(t, cfg, &domain.User{ID: 7, Email: "u@example.com", Role: "user"})
+	if rec := doAuthed(h, "/api/v1/admin/metrics", userToken); rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin metrics status = %d, want 403", rec.Code)
+	}
+
+	// The old unauthenticated route no longer exists.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("legacy /metrics status = %d, want 404", rec.Code)
+	}
+}
+
+func TestMetricsEndpoint(t *testing.T) {
+	cfg := metricsTestConfig()
+	h := hardeningRouter(t, cfg)
+	rec := doAuthed(h, "/api/v1/admin/metrics", adminToken(t, cfg))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -75,15 +117,52 @@ func TestMetricsEndpoint(t *testing.T) {
 }
 
 func TestMetricsEndpointIncludesOFFStatsWhenEnabled(t *testing.T) {
-	rec := httptest.NewRecorder()
-	hardeningRouter(t, config.Config{EnableOFFEnrich: true}).
-		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	cfg := metricsTestConfig()
+	cfg.EnableOFFEnrich = true
+	h := hardeningRouter(t, cfg)
+	rec := doAuthed(h, "/api/v1/admin/metrics", adminToken(t, cfg))
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if _, ok := body["off_cache"]; !ok {
 		t.Errorf("off_cache missing while enrichment enabled: %v", body)
+	}
+}
+
+func TestMetricsEndpointIncludesPortalOutcomes(t *testing.T) {
+	cfg := metricsTestConfig()
+	outcomes := nfce.NewPortalOutcomes(nil)
+	outcomes.Record("https://www.nfce.fazenda.sp.gov.br/qrcode", nfce.OutcomeSuccess)
+	outcomes.Record("https://www.nfce.fazenda.sp.gov.br/qrcode", nfce.OutcomeJSChallenge)
+
+	h := newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), stubResolver{}, &fakeStores{}, nil, outcomes)
+	rec := doAuthed(h, "/api/v1/admin/metrics", adminToken(t, cfg))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body struct {
+		PortalOutcomes struct {
+			Totals struct {
+				Success     int64 `json:"success"`
+				JSChallenge int64 `json:"js_challenge"`
+			} `json:"totals"`
+			BlockRatePct float64                    `json:"block_rate_pct"`
+			Hosts        map[string]json.RawMessage `json:"hosts"`
+		} `json:"portal_outcomes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.PortalOutcomes.Totals.Success != 1 || body.PortalOutcomes.Totals.JSChallenge != 1 {
+		t.Errorf("portal totals = %+v, want 1 success and 1 js challenge", body.PortalOutcomes.Totals)
+	}
+	if body.PortalOutcomes.BlockRatePct != 50 {
+		t.Errorf("block rate = %v, want 50", body.PortalOutcomes.BlockRatePct)
+	}
+	if _, ok := body.PortalOutcomes.Hosts["www.nfce.fazenda.sp.gov.br"]; !ok {
+		t.Errorf("missing per-host counters: %v", body.PortalOutcomes.Hosts)
 	}
 }
 

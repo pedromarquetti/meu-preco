@@ -90,6 +90,10 @@ type HTTPSourceOptions struct {
 	// ChallengeStore records captcha challenges for later resolution.
 	// Defaults to a fresh store.
 	ChallengeStore *ChallengeStore
+	// Outcomes records portal interaction outcomes (success, captcha, blocks,
+	// transport, cooldown, busy). Optional; a nil recorder disables counting.
+	// The same recorder is shared with the captcha solver.
+	Outcomes *PortalOutcomes
 }
 
 // HTTPSource fetches raw NFC-e pages from a state fiscal portal that renders
@@ -107,6 +111,7 @@ type HTTPSource struct {
 	backoffCap  time.Duration
 	cooldown    time.Duration
 	challenges  *ChallengeStore
+	outcomes    *PortalOutcomes
 }
 
 func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
@@ -193,6 +198,7 @@ func NewHTTPSource(opts HTTPSourceOptions) (*HTTPSource, error) {
 		backoffCap:  opts.BackoffCap,
 		cooldown:    opts.Cooldown,
 		challenges:  opts.ChallengeStore,
+		outcomes:    opts.Outcomes,
 	}, nil
 }
 
@@ -221,6 +227,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 	for attempt := 1; attempt <= s.retries; attempt++ {
 		waitStarted := time.Now()
 		if err := s.limit.Wait(ctx); err != nil {
+			recordWaitOutcome(s.outcomes, host, err)
 			s.log.Debug("nfce: portal rate limiter wait failed",
 				"access_key", key.String(),
 				"attempt", attempt,
@@ -275,7 +282,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 
 			// Order matters: an explicit block page or JS challenge wins over
 			// the status code, then HTTP status wins over body truncation.
-			if blockErr := s.classifyPortalBlock(key, status, header, body, attempt, err == nil); blockErr != nil {
+			if blockErr := s.classifyPortalBlock(key, host, status, header, body, attempt, err == nil); blockErr != nil {
 				return nil, blockErr
 			}
 
@@ -285,6 +292,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 				// cooldown and fail fast instead of retrying into it: sleeping
 				// through Retry-After in the handler would exceed the server's
 				// write timeout and the caller would see a reset, not a 429.
+				s.outcomes.Record(host, OutcomeAntiBotRejection)
 				cooldown := s.cooldown
 				if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
 					cooldown = retryAfter
@@ -313,8 +321,10 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 					}
 					continue
 				}
+				s.outcomes.Record(host, OutcomeTransport)
 				return nil, fmt.Errorf("%w: %v", ErrUpstream, lastErr)
 			case status >= 400:
+				s.outcomes.Record(host, OutcomeTransport)
 				return nil, fmt.Errorf("%w: portal answered HTTP %d", ErrUpstream, status)
 			}
 
@@ -322,6 +332,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 				// A 2xx/3xx response whose body ended early is a truncated
 				// upstream response, not an edge drop. Keep the status and the
 				// partial byte count for diagnostics.
+				s.outcomes.Record(host, OutcomeTransport)
 				return nil, fmt.Errorf("%w: portal response truncated after %d bytes (status %d): %v",
 					ErrUpstream, len(body), status, err)
 			}
@@ -341,6 +352,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 				// layer (TCP reset / EOF) before any HTTP response. Retrying
 				// immediately is exactly what the anti-bot policy penalises,
 				// so classify it as a block and let the shared cooldown apply.
+				s.outcomes.Record(host, OutcomeAntiBotRejection)
 				s.log.Warn("nfce: portal edge drop classified as anti-bot block",
 					"access_key", key.String(),
 					"attempt", attempt,
@@ -377,6 +389,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 				}
 				continue
 			}
+			s.outcomes.Record(host, OutcomeTransport)
 			return nil, fmt.Errorf("%w: %v", ErrUpstream, lastErr)
 		}
 
@@ -390,6 +403,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 			)
 			capErr, asErr := errors.AsType[*CaptchaError](err)
 			if asErr {
+				s.outcomes.Record(host, OutcomeCaptcha)
 				ch := s.captureChallenge(requestURL, payload, key, capErr.ImageURL, body)
 				capErr.ChallengeID = ch.ID
 				return nil, capErr
@@ -401,6 +415,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 			"attempt", attempt,
 			"bytes", len(body),
 		)
+		s.outcomes.Record(host, OutcomeSuccess)
 		return body, nil
 	}
 
@@ -408,6 +423,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, key AccessKey, payload string) (
 		if lastErr == nil {
 			return fmt.Errorf("%w: no attempts made", ErrUpstream)
 		}
+		s.outcomes.Record(host, OutcomeTransport)
 		return fmt.Errorf("%w: %v", ErrUpstream, lastErr)
 	}()
 }
@@ -448,19 +464,21 @@ func (s *HTTPSource) applyCooldown(reason string, d time.Duration, attempt, stat
 // bodyComplete is false when the response body ended early: a partial body can
 // still contain a challenge/rejection marker, but a short partial body must be
 // reported as truncated rather than as a blank block page.
-func (s *HTTPSource) classifyPortalBlock(key AccessKey, status int, header http.Header, body []byte, attempt int, bodyComplete bool) error {
+func (s *HTTPSource) classifyPortalBlock(key AccessKey, host string, status int, header http.Header, body []byte, attempt int, bodyComplete bool) error {
 	if pageHasDANFE(body) {
 		return nil
 	}
 
 	if supportID, rejected := antiBotRejection(body); rejected {
+		s.outcomes.Record(host, OutcomeAntiBotRejection)
+
 		cooldown := s.cooldown
 		reason := "anti_bot_rejection"
 		if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
-			s.log.Debug("Retry After", "retry", retryAfter)
 			cooldown = retryAfter
 			reason = "anti_bot_rejection_retry_after"
 		}
+
 		s.applyCooldown(reason, cooldown, attempt, status, len(body), supportID)
 		return &AntiBotError{
 			StatusCode: status,
@@ -475,6 +493,8 @@ func (s *HTTPSource) classifyPortalBlock(key AccessKey, status int, header http.
 	// This server does not, and never will. Classify it, apply the shared
 	// cooldown, and stop: retrying or "solving" it only deepens the block.
 	if marker, challenged := antiBotChallenge(body); challenged {
+		s.outcomes.Record(host, OutcomeJSChallenge)
+
 		s.log.Warn("nfce: portal JavaScript challenge classified as anti-bot block",
 			"access_key", key.String(),
 			"attempt", attempt,
@@ -492,6 +512,7 @@ func (s *HTTPSource) classifyPortalBlock(key AccessKey, status int, header http.
 	}
 
 	if status == http.StatusForbidden {
+		s.outcomes.Record(host, OutcomeAntiBotRejection)
 		cooldown := s.cooldown
 		if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
 			cooldown = retryAfter
@@ -508,6 +529,7 @@ func (s *HTTPSource) classifyPortalBlock(key AccessKey, status int, header http.
 	if bodyComplete && status == http.StatusOK && len(normalizeWS(string(body))) < 100 {
 		// A blank or near-empty 200 is the other shape of the same edge
 		// block: there is no document to parse and no retry is useful.
+		s.outcomes.Record(host, OutcomeAntiBotRejection)
 		cooldown := s.cooldown
 		if retryAfter, ok := parseRetryAfter(header, time.Now()); ok {
 			cooldown = retryAfter
