@@ -80,6 +80,10 @@ paths:
     post:
       tags: [auth]
       summary: Create an account (role "user")
+      description: >
+        Open only when `ENABLE_REGISTRATION=true`. When registration is
+        disabled (the default) the server answers `403 registration_disabled`
+        before parsing the body.
       security: []
       requestBody:
         required: true
@@ -92,6 +96,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UserResponse" }
+        "403":
+          description: Registration is disabled (`registration_disabled`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RegistrationDisabledError" }
         "409":
           description: Name or email already registered (`user_exists`)
           content:
@@ -1265,6 +1274,7 @@ components:
                 - already_processed
                 - receipt_not_found
                 - refresh_reuse_detected
+                - registration_disabled
                 - unauthorized
                 - unsupported_uf
                 - upstream_error
@@ -1650,6 +1660,16 @@ components:
           required: [code, message]
           properties:
             code: { const: user_exists }
+            message: { type: string }
+    RegistrationDisabledError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { const: registration_disabled }
             message: { type: string }
     CaptchaChallenge:
       type: object

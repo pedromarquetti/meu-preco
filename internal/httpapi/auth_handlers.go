@@ -38,17 +38,19 @@ type authResponse struct {
 
 // authAPI token signer/verifier and the RequireAuth/RequireRole gates.
 type authAPI struct {
-	tokens        *auth.TokenService
-	mw            *auth.Middleware
-	users         domain.UserStore
-	refreshTokens domain.RefreshTokenStore
+	tokens             *auth.TokenService
+	mw                 *auth.Middleware
+	users              domain.UserStore
+	refreshTokens      domain.RefreshTokenStore
+	enableRegistration bool
 }
 
 func newAuthAPI(cfg config.Config, stores domain.Stores) *authAPI {
 	tokens := auth.NewTokenService(cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
 	api := &authAPI{
-		tokens: tokens,
-		mw:     auth.NewMiddleware(tokens),
+		tokens:             tokens,
+		mw:                 auth.NewMiddleware(tokens),
+		enableRegistration: cfg.EnableRegistration,
 	}
 
 	if stores == nil {
@@ -66,6 +68,15 @@ func newAuthAPI(cfg config.Config, stores domain.Stores) *authAPI {
 // insert a role="user" account. Duplicate emails are a 409; the hash never
 // leaves the server.
 func (a *authAPI) register(w http.ResponseWriter, r *http.Request) {
+	// Close signup by default (and before body parsing, so an unauthenticated
+	// client cannot spend CPU on hashing). Set ENABLE_REGISTRATION=true to
+	// re-open it.
+	if !a.enableRegistration {
+		httpx.Error(w, r, http.StatusForbidden,
+			"registration_disabled", "registering disabled")
+		return
+	}
+
 	var req struct {
 		Name     string `json:"name"`
 		Email    string `json:"email"`

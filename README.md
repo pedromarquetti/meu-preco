@@ -267,6 +267,10 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
   (keyed by the JWT subject). A throttled request answers `429` with the
   canonical envelope (`error.code = "rate_limited"`) and a `Retry-After` header.
   Set the relevant `RATE_LIMIT_*` var to `0` to disable that bucket.
+- **Registration gate** — `POST /api/v1/auth/register` is closed by default and
+  answers `403 registration_disabled` / `"registering disabled"` before parsing
+  the body. Set `ENABLE_REGISTRATION=true` to accept new accounts. There is no
+  admin create-user endpoint yet, so keep this in mind for closed deployments.
 - **Preview GC** — expired drafts are purged on write _and_ by a background
   goroutine every `PREVIEW_GC_INTERVAL`, so the `previews` table stays bounded
   even on an idle server.

@@ -195,6 +195,9 @@ func authTestEnv(t *testing.T, opts ...func(*config.Config)) (http.Handler, *mem
 		JWTRefreshTTL: 30 * 24 * time.Hour,
 		AdminEmail:    "admin@example.com",
 		AdminPassword: "adm1n-password",
+		// Most auth tests exercise the enabled signup flow; the disabled path
+		// is covered explicitly by TestRegisterDisabled.
+		EnableRegistration: true,
 	}
 	for _, apply := range opts {
 		apply(&cfg)
@@ -237,6 +240,41 @@ type errEnvelope struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+func TestRegisterDisabled(t *testing.T) {
+	h, users, _ := authTestEnv(t, func(c *config.Config) { c.EnableRegistration = false })
+
+	body := `{"name":"Alice","email":"alice@example.com","password":"a-really-good-password"}`
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/register", body, "")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var env errEnvelope
+	decodeBody(t, rec, &env)
+	if env.Error.Code != "registration_disabled" {
+		t.Errorf("code = %q, want registration_disabled", env.Error.Code)
+	}
+	if env.Error.Message != "registering disabled" {
+		t.Errorf("message = %q, want %q", env.Error.Message, "registering disabled")
+	}
+	if len(users.byID) != 0 {
+		t.Errorf("disabled registration inserted %d user(s)", len(users.byID))
+	}
+}
+
+func TestRegisterEnabled(t *testing.T) {
+	h, users, _ := authTestEnv(t, func(c *config.Config) { c.EnableRegistration = true })
+
+	body := `{"name":"Alice","email":"alice@example.com","password":"a-really-good-password"}`
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/register", body, "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(users.byID) != 1 {
+		t.Errorf("users = %d, want 1", len(users.byID))
+	}
 }
 
 func TestRegisterLoginMeRefresh(t *testing.T) {
