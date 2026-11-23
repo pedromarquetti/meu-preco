@@ -106,6 +106,11 @@ func TestServerGracefulShutdown(t *testing.T) {
 	}
 
 	cmd.Env = withEnv(cmd.Env, "ADMIN_PASSWORD", adminPassword)
+
+	// This test only verifies boot/shutdown. Do not depend on external DNS for
+	// a hostname entry in the developer's .env (e.g. https://api.phlm.dev.br).
+	cmd.Env = withEnv(cmd.Env, "KNOWN_PROXIES", "127.0.0.1,::1")
+
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 

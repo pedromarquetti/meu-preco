@@ -122,3 +122,33 @@ func TestKeyedLimiterSweepsIdleBuckets(t *testing.T) {
 		t.Error("idle ip:a bucket not swept")
 	}
 }
+
+// TestIPKeyUsesResolvedClientIP proves the limiter keys on the IP resolved by
+// the RealIP middleware, not on the immediate proxy peer. Two clients behind
+// the same trusted proxy therefore get independent budgets.
+func TestIPKeyUsesResolvedClientIP(t *testing.T) {
+	rr := NewRealIPResolver(mustPrefixes(t, "127.0.0.1/32"), discardLogger())
+
+	r := chi.NewRouter()
+	r.Use(RealIP(rr), KeyedRateLimit(0.001, 1, IPKey))
+	r.Get("/", okHandler)
+
+	send := func(clientIP string) int {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-Forwarded-For", clientIP)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if got := send("203.0.113.1"); got != http.StatusNoContent {
+		t.Fatalf("client A first = %d, want 204", got)
+	}
+	if got := send("203.0.113.1"); got != http.StatusTooManyRequests {
+		t.Fatalf("client A second = %d, want 429", got)
+	}
+	if got := send("203.0.113.2"); got != http.StatusNoContent {
+		t.Fatalf("client B first = %d, want 204 (independent bucket)", got)
+	}
+}

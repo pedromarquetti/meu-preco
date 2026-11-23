@@ -68,6 +68,10 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 		// Zero/negative configuration values disable the buckets (tests).
 		r.Use(middleware.KeyedRateLimit(cfg.RateLimitIPRPS, cfg.RateLimitIPBurst, middleware.IPKey))
 		userRL := middleware.KeyedRateLimit(cfg.RateLimitUserRPS, cfg.RateLimitUserBurst, userRateKey)
+		// A stricter per-IP bucket guards the unauthenticated auth routes
+		// (login/register/refresh) against brute force and signup abuse. It is
+		// layered on top of the global per-IP budget above.
+		authIPRL := middleware.KeyedRateLimit(cfg.RateLimitAuthIPRPS, cfg.RateLimitAuthIPBurst, middleware.IPKey)
 
 		if captcha == nil {
 			captcha = newCaptchaSupport(cfg, log)
@@ -105,10 +109,10 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 		})
 
 		r.Route("/auth", func(ar chi.Router) {
-			ar.Post("/register", authAPI.register)
+			ar.With(authIPRL).Post("/register", authAPI.register)
 			// TODO: check if a logout endpoint should be implemented here
-			ar.Post("/login", authAPI.login)
-			ar.Post("/refresh", authAPI.refreshHandler)
+			ar.With(authIPRL).Post("/login", authAPI.login)
+			ar.With(authIPRL).Post("/refresh", authAPI.refreshHandler)
 			ar.With(authAPI.mw.RequireAuth, userRL).Get("/me", authAPI.me)
 			ar.NotFound(httpx.NotFound)
 		})
