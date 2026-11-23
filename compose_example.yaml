@@ -59,6 +59,14 @@ services:
       JWT_SECRET: "${JWT_SECRET}"
       ADMIN_EMAIL: "${ADMIN_EMAIL}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
+      # Public exposure hardening (see .env.docker.example):
+      KNOWN_PROXIES: "${KNOWN_PROXIES:-127.0.0.1,::1}"
+      ENABLE_REGISTRATION: "${ENABLE_REGISTRATION:-false}"
+      ENABLE_DOCS: "${ENABLE_DOCS:-false}"
+      RATE_LIMIT_AUTH_IP_RPS: "${RATE_LIMIT_AUTH_IP_RPS:-0.2}"
+      RATE_LIMIT_AUTH_IP_BURST: "${RATE_LIMIT_AUTH_IP_BURST:-10}"
+      LOGIN_MAX_FAILURES: "${LOGIN_MAX_FAILURES:-10}"
+      LOGIN_WINDOW: "${LOGIN_WINDOW:-15m}"
     depends_on:
       postgres:
         condition: service_healthy

@@ -203,6 +203,13 @@ The server expects some env. vars to be set.
 | RATE_LIMIT_IP_BURST   | no       | 300              | integer ≥ 0 (per-IP burst)                                             |
 | RATE_LIMIT_USER_RPS   | no       | 20               | float ≥ 0 (0 disables the per-user bucket)                             |
 | RATE_LIMIT_USER_BURST | no       | 1000             | integer ≥ 0 (per-user burst)                                           |
+| RATE_LIMIT_AUTH_IP_RPS   | no    | 0.2              | float ≥ 0 (per-IP auth-route refill; 0 disables)                       |
+| RATE_LIMIT_AUTH_IP_BURST | no    | 10               | integer ≥ 0 (per-IP auth-route burst)                                  |
+| LOGIN_MAX_FAILURES    | no       | 10               | integer ≥ 1 (failed logins per account inside `LOGIN_WINDOW`)          |
+| LOGIN_WINDOW          | no       | 15m              | Go duration > 0 (login failure window)                                 |
+| KNOWN_PROXIES         | no       | 127.0.0.1,::1    | comma-separated trusted proxy IPs/CIDRs (empty uses the default)       |
+| ENABLE_REGISTRATION   | no       | false            | `true`/`false` (accept `POST /api/v1/auth/register`)                   |
+| ENABLE_DOCS           | no       | false            | `true`/`false` (serve `/docs/` and `/openapi.*`)                       |
 | ENRICH_OFF            | no       | false            | `true`/`false` (best-effort Open Food Facts enrichment of `gtin_new`)  |
 | POSTGRES_USERNAME     | yes      | —                | postgres login (builds the DSN)                                        |
 | POSTGRES_PASSWORD     | yes      | —                | postgres password (builds the DSN; never logged/committed)             |

@@ -43,6 +43,17 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.CORSOrigins) != 1 || cfg.CORSOrigins[0] != "*" {
 		t.Errorf("CORSOrigins = %v, want [*]", cfg.CORSOrigins)
 	}
+	if len(cfg.KnownProxies) != 2 ||
+		cfg.KnownProxies[0].String() != "127.0.0.1/32" ||
+		cfg.KnownProxies[1].String() != "::1/128" {
+		t.Errorf("KnownProxies = %v, want [127.0.0.1/32 ::1/128]", cfg.KnownProxies)
+	}
+	if cfg.EnableRegistration {
+		t.Errorf("EnableRegistration = true, want false default")
+	}
+	if cfg.EnableDocs {
+		t.Errorf("EnableDocs = true, want false default")
+	}
 	if cfg.JWTAccessTTL != 15*time.Minute {
 		t.Errorf("JWTAccessTTL = %v, want 15m", cfg.JWTAccessTTL)
 	}
@@ -68,6 +79,13 @@ func TestLoadDefaults(t *testing.T) {
 		cfg.RateLimitUserRPS != 20 || cfg.RateLimitUserBurst != 1000 {
 		t.Errorf("rate limits = %v/%v %v/%v, want 5/300 20/1000",
 			cfg.RateLimitIPRPS, cfg.RateLimitIPBurst, cfg.RateLimitUserRPS, cfg.RateLimitUserBurst)
+	}
+	if cfg.RateLimitAuthIPRPS != 0.2 || cfg.RateLimitAuthIPBurst != 10 {
+		t.Errorf("auth rate limits = %v/%v, want 0.2/10",
+			cfg.RateLimitAuthIPRPS, cfg.RateLimitAuthIPBurst)
+	}
+	if cfg.LoginMaxFailures != 10 || cfg.LoginWindow != 15*time.Minute {
+		t.Errorf("login throttle = %d/%v, want 10/15m", cfg.LoginMaxFailures, cfg.LoginWindow)
 	}
 	if cfg.EnableOFFEnrich {
 		t.Errorf("EnableOFFEnrich = true, want false default")
@@ -343,6 +361,107 @@ func TestLoadRateLimits(t *testing.T) {
 	_, err = load(env(map[string]string{"RATE_LIMIT_IP_RPS": "abc"}))
 	if err == nil || !strings.Contains(err.Error(), "RATE_LIMIT_IP_RPS") {
 		t.Error("bad RATE_LIMIT_IP_RPS accepted")
+	}
+}
+
+func TestLoadKnownProxies(t *testing.T) {
+	cfg, err := load(env(map[string]string{
+		"KNOWN_PROXIES": "10.0.0.0/8, 192.168.1.10 ,::1",
+	}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	want := []string{"10.0.0.0/8", "192.168.1.10/32", "::1/128"}
+	if len(cfg.KnownProxies) != len(want) {
+		t.Fatalf("KnownProxies = %v, want %v", cfg.KnownProxies, want)
+	}
+	for i, prefix := range cfg.KnownProxies {
+		if prefix.String() != want[i] {
+			t.Errorf("KnownProxies[%d] = %q, want %q", i, prefix.String(), want[i])
+		}
+	}
+}
+
+func TestLoadKnownProxiesUnmapsIPv4MappedIPv6(t *testing.T) {
+	cfg, err := load(env(map[string]string{
+		"KNOWN_PROXIES": "::ffff:127.0.0.1, ::ffff:10.0.0.0/104",
+	}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	want := []string{"127.0.0.1/32", "10.0.0.0/8"}
+	if len(cfg.KnownProxies) != len(want) {
+		t.Fatalf("KnownProxies = %v, want %v", cfg.KnownProxies, want)
+	}
+	for i, prefix := range cfg.KnownProxies {
+		if prefix.String() != want[i] {
+			t.Errorf("KnownProxies[%d] = %q, want %q", i, prefix.String(), want[i])
+		}
+	}
+}
+
+func TestLoadBadKnownProxies(t *testing.T) {
+	for _, bad := range []string{"not-an-ip", "10.0.0.0/33", "::1/129", "300.1.1.1"} {
+		_, err := load(env(map[string]string{"KNOWN_PROXIES": bad}))
+		if err == nil || !strings.Contains(err.Error(), "KNOWN_PROXIES") {
+			t.Errorf("KNOWN_PROXIES=%q: expected error naming it, got %v", bad, err)
+		}
+	}
+}
+
+func TestLoadRegistrationAndDocs(t *testing.T) {
+	cfg, err := load(env(map[string]string{
+		"ENABLE_REGISTRATION": "true",
+		"ENABLE_DOCS":         "true",
+	}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.EnableRegistration || !cfg.EnableDocs {
+		t.Errorf("flags = registration:%v docs:%v, want true/true",
+			cfg.EnableRegistration, cfg.EnableDocs)
+	}
+
+	for _, key := range []string{"ENABLE_REGISTRATION", "ENABLE_DOCS"} {
+		_, err := load(env(map[string]string{key: "maybe"}))
+		if err == nil || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s=maybe: expected error naming it, got %v", key, err)
+		}
+	}
+}
+
+func TestLoadAuthRateLimits(t *testing.T) {
+	cfg, err := load(env(map[string]string{
+		"RATE_LIMIT_AUTH_IP_RPS":   "0.5",
+		"RATE_LIMIT_AUTH_IP_BURST": "5",
+		"LOGIN_MAX_FAILURES":       "3",
+		"LOGIN_WINDOW":             "5m",
+	}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.RateLimitAuthIPRPS != 0.5 || cfg.RateLimitAuthIPBurst != 5 ||
+		cfg.LoginMaxFailures != 3 || cfg.LoginWindow != 5*time.Minute {
+		t.Errorf("auth limits = %v/%v %d/%v",
+			cfg.RateLimitAuthIPRPS, cfg.RateLimitAuthIPBurst,
+			cfg.LoginMaxFailures, cfg.LoginWindow)
+	}
+
+	for _, tc := range []struct {
+		key   string
+		value string
+	}{
+		{"RATE_LIMIT_AUTH_IP_RPS", "-1"},
+		{"RATE_LIMIT_AUTH_IP_BURST", "-1"},
+		{"LOGIN_MAX_FAILURES", "0"},
+		{"LOGIN_WINDOW", "0s"},
+	} {
+		_, err := load(env(map[string]string{tc.key: tc.value}))
+		if err == nil || !strings.Contains(err.Error(), tc.key) {
+			t.Errorf("%s=%q: expected error naming it, got %v", tc.key, tc.value, err)
+		}
 	}
 }
 

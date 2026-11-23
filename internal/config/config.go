@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -18,6 +19,19 @@ type Config struct {
 	LogLevel    string
 	LogFormat   string
 	CORSOrigins []string
+
+	// KnownProxies lists the trusted proxy IPs/CIDRs whose forwarding headers
+	// may be used to resolve the client IP. Only the immediate peer is checked
+	// against this list. Defaults to loopback.
+	KnownProxies []netip.Prefix
+
+	// EnableRegistration controls POST /api/v1/auth/register. It is off by
+	// default so a public deployment does not accept anonymous signups.
+	EnableRegistration bool
+
+	// EnableDocs controls the embedded /docs and OpenAPI routes. It is off by
+	// default so a public deployment does not expose the API reference.
+	EnableDocs bool
 
 	// DatabaseURL is built from POSTGRES_USERNAME, POSTGRES_PASSWORD,
 	// DATABASE_NAME and POSTGRES_HOST (plus optional POSTGRES_PORT).
@@ -75,12 +89,27 @@ type Config struct {
 	// applied to authenticated routes (keyed by the JWT subject).
 	RateLimitUserRPS   float64
 	RateLimitUserBurst int
+	// RateLimitAuthIPRPS/RateLimitAuthIPBurst shape the stricter per-IP token
+	// bucket applied to the unauthenticated auth routes (login/register/refresh).
+	RateLimitAuthIPRPS   float64
+	RateLimitAuthIPBurst int
+
+	// LoginMaxFailures/LoginWindow bound the per-account failed-login budget.
+	// A login identifier that exceeds the budget is answered 429 until the
+	// window expires.
+	LoginMaxFailures int
+	LoginWindow      time.Duration
 
 	// EnableOFFEnrich opts in to best-effort Open Food Facts enrichment of
 	// gtin_new lines at draft time (cached per barcode). Off by default:
 	// ingestion stays offline-first and deterministic.
 	EnableOFFEnrich bool
 }
+
+// defaultKnownProxies trusts only loopback: cloudflared and Nginx Proxy
+// Manager commonly connect from it. Operators behind a Docker network add the
+// proxy subnet explicitly.
+const defaultKnownProxies = "127.0.0.1,::1"
 
 // requiredEnv lists environment variables without which the process must not
 // boot.
@@ -174,6 +203,21 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	knownProxies, err := parseKnownProxies(envString(env, "KNOWN_PROXIES", defaultKnownProxies))
+	if err != nil {
+		return Config{}, err
+	}
+
+	enableRegistration, err := envBool(env, "ENABLE_REGISTRATION", false)
+	if err != nil {
+		return Config{}, err
+	}
+
+	enableDocs, err := envBool(env, "ENABLE_DOCS", false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	rlIPRPS, err := envFloat(env, "RATE_LIMIT_IP_RPS", 5)
 	if err != nil {
 		return Config{}, err
@@ -194,6 +238,26 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
+	rlAuthIPRPS, err := envFloat(env, "RATE_LIMIT_AUTH_IP_RPS", 0.2)
+	if err != nil {
+		return Config{}, err
+	}
+
+	rlAuthIPBurst, err := envInt(env, "RATE_LIMIT_AUTH_IP_BURST", 10)
+	if err != nil {
+		return Config{}, err
+	}
+
+	loginMaxFailures, err := envInt(env, "LOGIN_MAX_FAILURES", 10)
+	if err != nil {
+		return Config{}, err
+	}
+
+	loginWindow, err := envDuration(env, "LOGIN_WINDOW", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+
 	enrichOFF, err := envBool(env, "ENRICH_OFF", false)
 	if err != nil {
 		return Config{}, err
@@ -205,19 +269,22 @@ func load(env map[string]string) (Config, error) {
 	}
 
 	cfg := Config{
-		Port:          envString(env, "PORT", "8080"),
-		LogLevel:      envString(env, "LOG_LEVEL", "info"),
-		LogFormat:     envString(env, "LOG_FORMAT", "pretty"),
-		CORSOrigins:   csvSlice(envString(env, "CORS_ORIGINS", "*")),
-		DatabaseURL:   dsn,
-		JWTSecret:     env["JWT_SECRET"],
-		JWTAccessTTL:  jwtAccessTTL,
-		JWTRefreshTTL: jwtRefreshTTL,
-		AdminEmail:    env["ADMIN_EMAIL"],
-		AdminPassword: env["ADMIN_PASSWORD"],
-		AdminName:     env["ADMIN_NAME"],
-		SEFAZFetchRPS: sefaRPS,
-		SefazBaseURL:  env["SEFAZ_BASE_URL"],
+		Port:               envString(env, "PORT", "8080"),
+		LogLevel:           envString(env, "LOG_LEVEL", "info"),
+		LogFormat:          envString(env, "LOG_FORMAT", "pretty"),
+		CORSOrigins:        csvSlice(envString(env, "CORS_ORIGINS", "*")),
+		KnownProxies:       knownProxies,
+		EnableRegistration: enableRegistration,
+		EnableDocs:         enableDocs,
+		DatabaseURL:        dsn,
+		JWTSecret:          env["JWT_SECRET"],
+		JWTAccessTTL:       jwtAccessTTL,
+		JWTRefreshTTL:      jwtRefreshTTL,
+		AdminEmail:         env["ADMIN_EMAIL"],
+		AdminPassword:      env["ADMIN_PASSWORD"],
+		AdminName:          env["ADMIN_NAME"],
+		SEFAZFetchRPS:      sefaRPS,
+		SefazBaseURL:       env["SEFAZ_BASE_URL"],
 
 		SEFAZMaxRetries:  sefaRetries,
 		SEFAZTimeout:     sefaTimeout,
@@ -230,10 +297,15 @@ func load(env map[string]string) (Config, error) {
 		PreviewTTL:        previewTTL,
 		PreviewGCInterval: previewGC,
 
-		RateLimitIPRPS:     rlIPRPS,
-		RateLimitIPBurst:   rlIPBurst,
-		RateLimitUserRPS:   rlUserRPS,
-		RateLimitUserBurst: rlUserBurst,
+		RateLimitIPRPS:       rlIPRPS,
+		RateLimitIPBurst:     rlIPBurst,
+		RateLimitUserRPS:     rlUserRPS,
+		RateLimitUserBurst:   rlUserBurst,
+		RateLimitAuthIPRPS:   rlAuthIPRPS,
+		RateLimitAuthIPBurst: rlAuthIPBurst,
+
+		LoginMaxFailures: loginMaxFailures,
+		LoginWindow:      loginWindow,
 
 		EnableOFFEnrich: enrichOFF,
 	}
@@ -341,6 +413,23 @@ func (c Config) Validate() error {
 	if c.RateLimitIPBurst < 0 || c.RateLimitUserBurst < 0 {
 		return fmt.Errorf("config: RATE_LIMIT_*_BURST must be >= 0")
 	}
+	if c.RateLimitAuthIPRPS < 0 {
+		return fmt.Errorf("config: RATE_LIMIT_AUTH_IP_RPS must be >= 0")
+	}
+	if c.RateLimitAuthIPBurst < 0 {
+		return fmt.Errorf("config: RATE_LIMIT_AUTH_IP_BURST must be >= 0")
+	}
+	if c.LoginMaxFailures < 1 {
+		return fmt.Errorf("config: LOGIN_MAX_FAILURES must be >= 1")
+	}
+	if c.LoginWindow <= 0 {
+		return fmt.Errorf("config: LOGIN_WINDOW must be a positive duration")
+	}
+	for _, p := range c.KnownProxies {
+		if !p.IsValid() {
+			return fmt.Errorf("config: KNOWN_PROXIES contains an invalid prefix")
+		}
+	}
 	if c.SefazBaseURL != "" {
 		u, err := url.Parse(c.SefazBaseURL)
 
@@ -357,6 +446,49 @@ func (c Config) Validate() error {
 	}
 
 	return nil
+}
+
+// parseKnownProxies parses the comma-separated KNOWN_PROXIES value into
+// normalized prefixes. Plain IPs become single-host prefixes; CIDRs are kept.
+// IPv4-mapped IPv6 values are unmapped so they match IPv4 peers.
+func parseKnownProxies(raw string) ([]netip.Prefix, error) {
+	entries := csvSlice(raw)
+	prefixes := make([]netip.Prefix, 0, len(entries))
+
+	for _, entry := range entries {
+		p, err := parseKnownProxy(entry)
+		if err != nil {
+			return nil, fmt.Errorf("config: KNOWN_PROXIES entry %q is not an IP or CIDR: %w", entry, err)
+		}
+		prefixes = append(prefixes, p)
+	}
+
+	return prefixes, nil
+}
+
+func parseKnownProxy(entry string) (netip.Prefix, error) {
+	if strings.Contains(entry, "/") {
+		p, err := netip.ParsePrefix(entry)
+		if err != nil {
+			return netip.Prefix{}, err
+		}
+
+		addr, bits := p.Addr(), p.Bits()
+		if addr.Is4In6() && bits >= 96 {
+			addr = addr.Unmap()
+			bits -= 96
+		}
+
+		return netip.PrefixFrom(addr, bits), nil
+	}
+
+	addr, err := netip.ParseAddr(entry)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+
+	addr = addr.Unmap()
+	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
 func envString(env map[string]string, key, default_val string) string {
