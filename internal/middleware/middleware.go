@@ -104,6 +104,7 @@ func Logging(log *slog.Logger) func(http.Handler) http.Handler {
 				"duration_ms", dur.Milliseconds(),
 				"bytes", sr.bytes,
 				"request_id", RequestIDFrom(r.Context()),
+				"client_ip", ClientIP(r),
 				"remote_addr", r.RemoteAddr,
 			)
 		})

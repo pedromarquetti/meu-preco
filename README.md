@@ -207,7 +207,7 @@ The server expects some env. vars to be set.
 | RATE_LIMIT_AUTH_IP_BURST | no    | 10               | integer ≥ 0 (per-IP auth-route burst)                                  |
 | LOGIN_MAX_FAILURES    | no       | 10               | integer ≥ 1 (failed logins per account inside `LOGIN_WINDOW`)          |
 | LOGIN_WINDOW          | no       | 15m              | Go duration > 0 (login failure window)                                 |
-| KNOWN_PROXIES         | no       | 127.0.0.1,::1    | comma-separated trusted proxy IPs/CIDRs (empty uses the default)       |
+| KNOWN_PROXIES         | no       | 127.0.0.1,::1    | trusted proxy IPs/CIDRs/hostnames/http(s) URLs (comma-separated; resolved at boot) |
 | ENABLE_REGISTRATION   | no       | false            | `true`/`false` (accept `POST /api/v1/auth/register`)                   |
 | ENABLE_DOCS           | no       | false            | `true`/`false` (serve `/docs/` and `/openapi.*`)                       |
 | ENRICH_OFF            | no       | false            | `true`/`false` (best-effort Open Food Facts enrichment of `gtin_new`)  |
@@ -228,6 +228,12 @@ Missing DB vars (or a too-short `JWT_SECRET`, or a missing `ADMIN_EMAIL`/
 `ADMIN_PASSWORD`) abort startup with an explicit error. Secrets (DB password,
 `JWT_SECRET`, `ADMIN_PASSWORD`) are only ever set via the environment — never
 committed.
+
+`KNOWN_PROXIES` accepts plain IPs, CIDRs, DNS names, and `http(s)://` URLs.
+Hostnames are resolved **at startup** (5s timeout) and every returned address is
+trusted; a hostname that fails to resolve aborts startup. Restart the server
+after a DNS change. Only the immediate peer is checked against the list, so
+forwarding headers from anyone else are ignored.
 
 > [!IMPORTANT]
 > `POSTGRES_HOST` is **required and has no default**. `localhost` means _the

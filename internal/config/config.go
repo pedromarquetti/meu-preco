@@ -3,11 +3,13 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -111,6 +113,17 @@ type Config struct {
 // proxy subnet explicitly.
 const defaultKnownProxies = "127.0.0.1,::1"
 
+// dnsLookupTimeout bounds hostname resolution for KNOWN_PROXIES so a broken
+// resolver cannot stall startup.
+const dnsLookupTimeout = 5 * time.Second
+
+// netIPLookup resolves a hostname to addresses. It mirrors
+// net.Resolver.LookupNetIP and is injectable so tests stay offline.
+type netIPLookup func(ctx context.Context, network, host string) ([]netip.Addr, error)
+
+// defaultNetIPLookup resolves KNOWN_PROXIES hostnames with the system resolver.
+var defaultNetIPLookup netIPLookup = net.DefaultResolver.LookupNetIP
+
 // requiredEnv lists environment variables without which the process must not
 // boot.
 var requiredEnv = map[string]bool{
@@ -123,7 +136,7 @@ var requiredEnv = map[string]bool{
 // On any problem it returns an actionable error naming the offending
 // variable; main() must abort on it.
 func Load() (Config, error) {
-	return load(envSnapshot())
+	return loadWithLookup(envSnapshot(), defaultNetIPLookup)
 }
 
 // PostgresURLFromEnv builds the PostgreSQL DSN from the process environment
@@ -145,6 +158,10 @@ func envSnapshot() map[string]string {
 }
 
 func load(env map[string]string) (Config, error) {
+	return loadWithLookup(env, defaultNetIPLookup)
+}
+
+func loadWithLookup(env map[string]string, lookup netIPLookup) (Config, error) {
 	for key := range requiredEnv {
 		if env[key] == "" {
 			return Config{}, fmt.Errorf("config: required environment variable %s is not set", key)
@@ -203,7 +220,7 @@ func load(env map[string]string) (Config, error) {
 		return Config{}, err
 	}
 
-	knownProxies, err := parseKnownProxies(envString(env, "KNOWN_PROXIES", defaultKnownProxies))
+	knownProxies, err := parseKnownProxies(envString(env, "KNOWN_PROXIES", defaultKnownProxies), lookup)
 	if err != nil {
 		return Config{}, err
 	}
@@ -449,28 +466,57 @@ func (c Config) Validate() error {
 }
 
 // parseKnownProxies parses the comma-separated KNOWN_PROXIES value into
-// normalized prefixes. Plain IPs become single-host prefixes; CIDRs are kept.
+// normalized prefixes. Accepted entries:
+//
+//   - a plain IP (becomes /32 or /128)
+//   - a CIDR
+//   - a hostname (resolved to one /32 or /128 prefix per address)
+//   - an http(s) URL whose host is an IP or hostname, e.g.
+//     https://proxy.phlm.dev.br
+//
 // IPv4-mapped IPv6 values are unmapped so they match IPv4 peers.
-func parseKnownProxies(raw string) ([]netip.Prefix, error) {
+func parseKnownProxies(raw string, lookup netIPLookup) ([]netip.Prefix, error) {
 	entries := csvSlice(raw)
 	prefixes := make([]netip.Prefix, 0, len(entries))
 
 	for _, entry := range entries {
-		p, err := parseKnownProxy(entry)
+		parsed, err := parseKnownProxy(entry, lookup)
 		if err != nil {
-			return nil, fmt.Errorf("config: KNOWN_PROXIES entry %q is not an IP or CIDR: %w", entry, err)
+			return nil, fmt.Errorf("config: KNOWN_PROXIES entry %q: %w", entry, err)
 		}
-		prefixes = append(prefixes, p)
+		for _, p := range parsed {
+			prefixes = appendUniquePrefix(prefixes, p)
+		}
 	}
 
 	return prefixes, nil
 }
 
-func parseKnownProxy(entry string) (netip.Prefix, error) {
-	if strings.Contains(entry, "/") {
-		p, err := netip.ParsePrefix(entry)
+func parseKnownProxy(entry string, lookup netIPLookup) ([]netip.Prefix, error) {
+	host := entry
+
+	// URL form: https://proxy.example.com[:port][/path]. The scheme is
+	// validated so a typo like "proxy.example.com:443" (parsed as scheme
+	// "proxy.example.com") cannot silently become a hostname.
+	if strings.Contains(entry, "://") {
+		u, err := url.Parse(entry)
 		if err != nil {
-			return netip.Prefix{}, err
+			return nil, fmt.Errorf("not a valid URL: %w", err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return nil, fmt.Errorf("URL scheme must be http or https, got %q", u.Scheme)
+		}
+		host = u.Hostname()
+		if host == "" {
+			return nil, fmt.Errorf("URL has no host")
+		}
+	}
+
+	// CIDR.
+	if strings.Contains(host, "/") {
+		p, err := netip.ParsePrefix(host)
+		if err != nil {
+			return nil, fmt.Errorf("not a valid CIDR: %w", err)
 		}
 
 		addr, bits := p.Addr(), p.Bits()
@@ -479,16 +525,101 @@ func parseKnownProxy(entry string) (netip.Prefix, error) {
 			bits -= 96
 		}
 
-		return netip.PrefixFrom(addr, bits), nil
+		return []netip.Prefix{netip.PrefixFrom(addr, bits)}, nil
 	}
 
-	addr, err := netip.ParseAddr(entry)
+	// Plain IP.
+	if addr, err := netip.ParseAddr(host); err == nil {
+		addr = addr.Unmap()
+		return []netip.Prefix{netip.PrefixFrom(addr, addr.BitLen())}, nil
+	}
+
+	// Hostname: validate syntax, then resolve to addresses at startup so the
+	// resolver itself never performs DNS lookups on the request path.
+	if !validHostname(host) {
+		return nil, fmt.Errorf("not an IP, CIDR, hostname or http(s) URL")
+	}
+	if lookup == nil {
+		return nil, fmt.Errorf("hostname %q cannot be resolved: no resolver configured", host)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dnsLookupTimeout)
+	defer cancel()
+
+	addrs, err := lookup(ctx, "ip", host)
 	if err != nil {
-		return netip.Prefix{}, err
+		return nil, fmt.Errorf("hostname %q could not be resolved: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("hostname %q resolved to no addresses", host)
 	}
 
-	addr = addr.Unmap()
-	return netip.PrefixFrom(addr, addr.BitLen()), nil
+	prefixes := make([]netip.Prefix, 0, len(addrs))
+	for _, addr := range addrs {
+		addr = addr.Unmap()
+		if !addr.IsValid() {
+			continue
+		}
+		prefixes = appendUniquePrefix(prefixes, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	if len(prefixes) == 0 {
+		return nil, fmt.Errorf("hostname %q resolved to no usable addresses", host)
+	}
+
+	return prefixes, nil
+}
+
+// validHostname accepts RFC 1123 DNS names, including single-label Docker
+// service names. Numeric dotted strings are rejected because they are almost
+// always mistyped IPv4 addresses.
+func validHostname(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	if strings.ContainsAny(host, ":[]") {
+		return false
+	}
+	if isNumericDotted(host) {
+		return false
+	}
+
+	for label := range strings.SplitSeq(host, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '-' {
+				continue
+			}
+			return false
+		}
+	}
+
+	return true
+}
+
+func isNumericDotted(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if (s[i] < '0' || s[i] > '9') && s[i] != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func appendUniquePrefix(prefixes []netip.Prefix, p netip.Prefix) []netip.Prefix {
+	if slices.Contains(prefixes, p) {
+		return prefixes
+	}
+	return append(prefixes, p)
 }
 
 func envString(env map[string]string, key, default_val string) string {

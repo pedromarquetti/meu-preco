@@ -1,7 +1,10 @@
 package config
 
 import (
+	"context"
 	"maps"
+	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -364,6 +367,33 @@ func TestLoadRateLimits(t *testing.T) {
 	}
 }
 
+// stubLookup returns a netIPLookup backed by a fixed host -> addresses map so
+// tests never touch the network.
+func stubLookup(t *testing.T, hosts map[string][]string) netIPLookup {
+	t.Helper()
+
+	return func(_ context.Context, network, host string) ([]netip.Addr, error) {
+		if network != "ip" {
+			t.Fatalf("lookup network = %q, want ip", network)
+		}
+
+		raw, ok := hosts[host]
+		if !ok {
+			return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+		}
+
+		addrs := make([]netip.Addr, 0, len(raw))
+		for _, s := range raw {
+			addr, err := netip.ParseAddr(s)
+			if err != nil {
+				t.Fatalf("stub address %q: %v", s, err)
+			}
+			addrs = append(addrs, addr)
+		}
+		return addrs, nil
+	}
+}
+
 func TestLoadKnownProxies(t *testing.T) {
 	cfg, err := load(env(map[string]string{
 		"KNOWN_PROXIES": "10.0.0.0/8, 192.168.1.10 ,::1",
@@ -373,6 +403,37 @@ func TestLoadKnownProxies(t *testing.T) {
 	}
 
 	want := []string{"10.0.0.0/8", "192.168.1.10/32", "::1/128"}
+	if len(cfg.KnownProxies) != len(want) {
+		t.Fatalf("KnownProxies = %v, want %v", cfg.KnownProxies, want)
+	}
+	for i, prefix := range cfg.KnownProxies {
+		if prefix.String() != want[i] {
+			t.Errorf("KnownProxies[%d] = %q, want %q", i, prefix.String(), want[i])
+		}
+	}
+}
+
+func TestLoadKnownProxyHostnames(t *testing.T) {
+	lookup := stubLookup(t, map[string][]string{
+		"proxy.phlm.dev.br": {"203.0.113.10", "2001:db8::10"},
+		"docker-proxy":      {"172.18.0.5"},
+		"mapped.proxy":      {"::ffff:10.1.2.3"},
+	})
+
+	cfg, err := loadWithLookup(env(map[string]string{
+		"KNOWN_PROXIES": "127.0.0.1, https://proxy.phlm.dev.br, docker-proxy, http://mapped.proxy:8080",
+	}), lookup)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	want := []string{
+		"127.0.0.1/32",
+		"203.0.113.10/32",
+		"2001:db8::10/128",
+		"172.18.0.5/32",
+		"10.1.2.3/32",
+	}
 	if len(cfg.KnownProxies) != len(want) {
 		t.Fatalf("KnownProxies = %v, want %v", cfg.KnownProxies, want)
 	}
@@ -403,11 +464,29 @@ func TestLoadKnownProxiesUnmapsIPv4MappedIPv6(t *testing.T) {
 }
 
 func TestLoadBadKnownProxies(t *testing.T) {
-	for _, bad := range []string{"not-an-ip", "10.0.0.0/33", "::1/129", "300.1.1.1"} {
+	for _, bad := range []string{
+		"10.0.0.0/33",
+		"::1/129",
+		"300.1.1.1",
+		"bad host!",
+		"ftp://proxy.example.com",
+		"http://",
+	} {
 		_, err := load(env(map[string]string{"KNOWN_PROXIES": bad}))
 		if err == nil || !strings.Contains(err.Error(), "KNOWN_PROXIES") {
 			t.Errorf("KNOWN_PROXIES=%q: expected error naming it, got %v", bad, err)
 		}
+	}
+}
+
+func TestLoadKnownProxyHostnameLookupFails(t *testing.T) {
+	lookup := stubLookup(t, nil)
+	_, err := loadWithLookup(env(map[string]string{
+		"KNOWN_PROXIES": "missing.example",
+	}), lookup)
+	if err == nil || !strings.Contains(err.Error(), "KNOWN_PROXIES") ||
+		!strings.Contains(err.Error(), "missing.example") {
+		t.Fatalf("expected error naming KNOWN_PROXIES and the host, got %v", err)
 	}
 }
 

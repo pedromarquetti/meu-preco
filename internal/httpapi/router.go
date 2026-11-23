@@ -32,6 +32,7 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 
 	router.Use(
 		middleware.RequestID,
+		middleware.RealIP(middleware.NewRealIPResolver(cfg.KnownProxies, log)),
 		middleware.Logging(log),
 		middleware.PanicRecovery(log),
 		middleware.CORS(cfg.CORSOrigins),

@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -13,14 +12,14 @@ import (
 // request. An empty key means "not limited".
 type RateLimitKey func(r *http.Request) string
 
-// ClientIP returns the client's IP with any port stripped. It reads the peer
-// address from the request (RemoteAddr); it does not trust X-Forwarded-For.
+// ClientIP returns the resolved client IP when the RealIP middleware ran, and
+// falls back to the request's peer address otherwise. It never reads forwarding
+// headers directly: that decision belongs to RealIPResolver.
 func ClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	if ip, ok := r.Context().Value(realIPKey{}).(string); ok && ip != "" {
+		return ip
 	}
-	return host
+	return peerIP(r.RemoteAddr)
 }
 
 // IPKey limits by client IP.
