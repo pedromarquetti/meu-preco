@@ -138,14 +138,24 @@ func (r productRepo) searchFiltered(ctx context.Context, filter domain.ProductFi
 			qLen = 1
 		}
 
-		// Shorter queries → lower (more permissive) similarity requirement.
-		// Longer queries → higher (stricter) to avoid false positives from single-letter matches.
-		threshold := max(0.01, float64(qLen)/100)
+		// Short prefix searches ("k", "ki", "kit") score poorly under
+		// whole-string trigram similarity because it is length-sensitive: a
+		// short query against a long product name looks dissimilar even when
+		// the name starts with it. Match those directly with a case-insensitive
+		// substring test, which the gin_trgm_ops index can still serve.
+		like := fmt.Sprintf(
+			"(products.name ILIKE '%%' || $%d || '%%' OR COALESCE(products.brand, '') ILIKE '%%' || $%d || '%%' OR COALESCE(products.canonical_stem, '') ILIKE '%%' || $%d || '%%')",
+			n, n, n)
+
+		// Fuzzy branch keeps typo/accent tolerance ("limao" -> "limao
+		// tahiti"). The 0.1 floor prevents a single shared trigram (e.g. "ao "
+		// in "TIO JOAO") from matching an unrelated query such as "limao".
+		threshold := max(0.1, float64(qLen)/100)
 		sim := fmt.Sprintf(
 			"greatest(similarity(products.name, $%d), similarity(COALESCE(products.brand, ''), $%d), similarity(COALESCE(products.canonical_stem, ''), $%d))",
 			n, n, n)
 		args = append(args, threshold)
-		wheres = append(wheres, sim+fmt.Sprintf("> $%d", len(args)))
+		wheres = append(wheres, "("+like+" OR "+sim+fmt.Sprintf(" > $%d)", len(args)))
 	}
 
 	if gtin := strings.TrimSpace(filter.GTIN); gtin != "" {
@@ -179,7 +189,9 @@ func (r productRepo) searchFiltered(ctx context.Context, filter domain.ProductFi
 	withSim := false
 
 	if strings.Contains(where, "similarity") {
-		order = "sim DESC, products.name"
+		// Direct prefix hits ("k", "ki", "kit") outrank fuzzy-only matches so
+		// short queries are not pushed off the first page by length noise.
+		order = `(products.name ILIKE $1 || '%') DESC, sim DESC, products.name`
 		withSim = true
 		selectExtra = `, greatest(
 			similarity(products.name, $1),

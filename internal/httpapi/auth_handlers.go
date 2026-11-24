@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,6 +20,11 @@ import (
 
 const maxAuthBody = 16 << 10 // passwords/refresh tokens fit in 16 KiB
 const maxNameLength = 100    // reject long display names
+
+// dummyPasswordHash is a bcrypt hash of a random 32-byte value. Unknown-user
+// logins compare against it so the response time stays close to the
+// wrong-password path and does not reveal whether the account exists.
+const dummyPasswordHash = "$2a$10$bSJqMT3t60MvdY64GLGlX.IzSFFp4zOP/1xr/f0beuGPHcKeNvuES"
 
 // userView is the shape of a user in every auth response: never includes the
 // password hash (asserted by tests).
@@ -43,6 +50,7 @@ type authAPI struct {
 	users              domain.UserStore
 	refreshTokens      domain.RefreshTokenStore
 	enableRegistration bool
+	throttle           *auth.LoginThrottle
 }
 
 func newAuthAPI(cfg config.Config, stores domain.Stores) *authAPI {
@@ -51,6 +59,7 @@ func newAuthAPI(cfg config.Config, stores domain.Stores) *authAPI {
 		tokens:             tokens,
 		mw:                 auth.NewMiddleware(tokens),
 		enableRegistration: cfg.EnableRegistration,
+		throttle:           auth.NewLoginThrottle(cfg.LoginMaxFailures, cfg.LoginWindow),
 	}
 
 	if stores == nil {
@@ -126,41 +135,61 @@ func (a *authAPI) register(w http.ResponseWriter, r *http.Request) {
 // login implements POST /api/v1/auth/login: resolve the identifier (email or
 // name), verify the password and hand out an access+refresh pair (new token
 // family). The legacy "email" body field is still accepted as an alias.
-func (a *authAPI) login(w http.ResponseWriter, r *http.Request) {
+func (authApi *authAPI) login(writer http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Login    string `json:"login"`
 		Email    string `json:"email"`
 		Name     string `json:"name"`
 		Password string `json:"password"`
 	}
-	if !decodeAuthBody(w, r, &req) {
+	if !decodeAuthBody(writer, r, &req) {
 		return
 	}
 
 	login := firstNonEmpty(req.Login, req.Email, req.Name)
 	if login == "" {
-		httpx.Error(w, r, http.StatusUnauthorized, "invalid_credentials", "email/name or password is incorrect")
+		httpx.Error(writer, r, http.StatusUnauthorized, "invalid_credentials", "email/name or password is incorrect")
 		return
 	}
 
-	u, err := a.users.GetByLogin(r.Context(), normalizeLogin(login))
+	// Normalize the identifier so "Alice", "ALICE" and " alice " share one
+	// failure budget.
+	key := "login:" + strings.ToLower(strings.TrimSpace(login))
+
+	if !authApi.throttle.Allowed(key) {
+		retry := max(authApi.throttle.RetryAfter(key), time.Second)
+
+		writer.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(retry.Seconds())), 10))
+		httpx.Error(writer, r, http.StatusTooManyRequests,
+			"too_many_attempts", "too many failed login attempts; retry later")
+		return
+	}
+
+	u, err := authApi.users.GetByLogin(r.Context(), normalizeLogin(login))
 	if err != nil {
-		httpx.Error(w, r, http.StatusUnauthorized, "invalid_credentials", "email or name or password is incorrect")
+		// Spend the same bcrypt work as a real password check so an unknown
+		// account is not distinguishable by response time.
+		auth.CheckPassword(dummyPasswordHash, req.Password)
+		authApi.throttle.RecordFailure(key)
+		httpx.Error(writer, r, http.StatusUnauthorized, "invalid_credentials", "email or name or password is incorrect")
 		return
 	}
 
 	if !auth.CheckPassword(u.PasswordHash, req.Password) {
-		httpx.Error(w, r, http.StatusUnauthorized, "invalid_credentials", "email or name or password is incorrect")
+		authApi.throttle.RecordFailure(key)
+		httpx.Error(writer, r, http.StatusUnauthorized, "invalid_credentials", "email or name or password is incorrect")
 		return
 	}
 
-	pair, err := a.issuePair(r.Context(), u, "")
+	authApi.throttle.Reset(key)
+
+	pair, err := authApi.issuePair(r.Context(), u, "")
 	if err != nil {
-		httpx.InternalError(w, r)
+		httpx.InternalError(writer, r)
 		return
 	}
 
-	httpx.Respond(w, http.StatusOK, pair)
+	httpx.Respond(writer, http.StatusOK, pair)
 }
 
 // refresh implements POST /api/v1/auth/refresh: rotate the presented refresh

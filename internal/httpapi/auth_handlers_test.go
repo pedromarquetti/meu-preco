@@ -418,6 +418,127 @@ func TestLoginBadCredentials(t *testing.T) {
 	}
 }
 
+func TestLoginThrottleLocksAfterMaxFailures(t *testing.T) {
+	h, _, _ := authTestEnv(t, func(c *config.Config) {
+		c.LoginMaxFailures = 2
+		c.LoginWindow = 15 * time.Minute
+	})
+	doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
+		`{"name":"Bob","email":"bob@example.com","password":"long-enough-password"}`, "")
+
+	for i := 0; i < 2; i++ {
+		rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+			`{"email":"bob@example.com","password":"wrong-password-123"}`, "")
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d: status=%d, want 401", i+1, rec.Code)
+		}
+	}
+
+	// The correct password is still refused while the account is locked.
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"bob@example.com","password":"long-enough-password"}`, "")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked login status = %d, want 429", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("429 response missing Retry-After")
+	}
+	var env errEnvelope
+	decodeBody(t, rec, &env)
+	if env.Error.Code != "too_many_attempts" {
+		t.Errorf("code = %q, want too_many_attempts", env.Error.Code)
+	}
+}
+
+func TestLoginThrottleResetsOnSuccess(t *testing.T) {
+	h, _, _ := authTestEnv(t, func(c *config.Config) {
+		c.LoginMaxFailures = 2
+		c.LoginWindow = 15 * time.Minute
+	})
+	doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
+		`{"name":"Bob","email":"bob@example.com","password":"long-enough-password"}`, "")
+
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"bob@example.com","password":"wrong-password-123"}`, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("first failure = %d, want 401", rec.Code)
+	}
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"bob@example.com","password":"long-enough-password"}`, ""); rec.Code != http.StatusOK {
+		t.Fatalf("successful login = %d, want 200", rec.Code)
+	}
+
+	// The success reset the budget: two more failures are allowed before lock.
+	for i := 0; i < 2; i++ {
+		if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+			`{"email":"bob@example.com","password":"wrong-password-123"}`, ""); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("failure %d after reset = %d, want 401", i+1, rec.Code)
+		}
+	}
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"bob@example.com","password":"wrong-password-123"}`, ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third failure after reset = %d, want 429", rec.Code)
+	}
+}
+
+func TestLoginThrottleIsPerAccount(t *testing.T) {
+	h, _, _ := authTestEnv(t, func(c *config.Config) {
+		c.LoginMaxFailures = 1
+		c.LoginWindow = 15 * time.Minute
+	})
+	doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
+		`{"name":"Alice","email":"alice@example.com","password":"long-enough-password"}`, "")
+	doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
+		`{"name":"Bob","email":"bob@example.com","password":"long-enough-password"}`, "")
+
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"alice@example.com","password":"wrong-password-123"}`, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("alice failure = %d, want 401", rec.Code)
+	}
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"alice@example.com","password":"long-enough-password"}`, ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked alice = %d, want 429", rec.Code)
+	}
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"bob@example.com","password":"long-enough-password"}`, ""); rec.Code != http.StatusOK {
+		t.Fatalf("bob login = %d, want 200 (independent budget)", rec.Code)
+	}
+}
+
+func TestLoginThrottleKeyIsCaseInsensitive(t *testing.T) {
+	h, _, _ := authTestEnv(t, func(c *config.Config) {
+		c.LoginMaxFailures = 1
+		c.LoginWindow = 15 * time.Minute
+	})
+	doJSON(t, h, http.MethodPost, "/api/v1/auth/register",
+		`{"name":"Alice","email":"alice@example.com","password":"long-enough-password"}`, "")
+
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"ALICE@example.com","password":"wrong-password-123"}`, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("uppercase failure = %d, want 401", rec.Code)
+	}
+	// The same account with a different case shares the locked bucket.
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"alice@example.com","password":"long-enough-password"}`, ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("lowercase login = %d, want 429", rec.Code)
+	}
+}
+
+func TestLoginUnknownUserConsumesBudget(t *testing.T) {
+	h, _, _ := authTestEnv(t, func(c *config.Config) {
+		c.LoginMaxFailures = 1
+		c.LoginWindow = 15 * time.Minute
+	})
+
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"nobody@example.com","password":"wrong-password-123"}`, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown failure = %d, want 401", rec.Code)
+	}
+	if rec := doJSON(t, h, http.MethodPost, "/api/v1/auth/login",
+		`{"email":"nobody@example.com","password":"wrong-password-123"}`, ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("unknown retry = %d, want 429", rec.Code)
+	}
+}
+
 func TestMeRequiresAuth(t *testing.T) {
 	h, _, _ := authTestEnv(t)
 

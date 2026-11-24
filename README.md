@@ -271,6 +271,12 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
   answers `403 registration_disabled` / `"registering disabled"` before parsing
   the body. Set `ENABLE_REGISTRATION=true` to accept new accounts. There is no
   admin create-user endpoint yet, so keep this in mind for closed deployments.
+- **Login throttle** — failed logins are counted per account identifier
+  (case-insensitive) inside `LOGIN_WINDOW`. Once `LOGIN_MAX_FAILURES` is
+  exceeded, the account is answered `429 too_many_attempts` with a
+  `Retry-After` header until the window expires. A successful login clears the
+  counter. Unknown accounts run a dummy bcrypt comparison, so response timing
+  does not reveal whether the account exists.
 - **Preview GC** — expired drafts are purged on write _and_ by a background
   goroutine every `PREVIEW_GC_INTERVAL`, so the `previews` table stays bounded
   even on an idle server.

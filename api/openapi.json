@@ -243,7 +243,29 @@
             }
           },
           "429": {
-            "$ref": "#/components/responses/RateLimited"
+            "description": "Per-IP budget (`rate_limited`) or per-account login throttle (`too_many_attempts`)",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Seconds to wait before retrying"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/RateLimitedError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TooManyAttemptsError"
+                    }
+                  ]
+                }
+              }
+            }
           }
         }
       }
@@ -2401,6 +2423,7 @@
                   "receipt_not_found",
                   "refresh_reuse_detected",
                   "registration_disabled",
+                  "too_many_attempts",
                   "unauthorized",
                   "unsupported_uf",
                   "upstream_error",
@@ -3097,6 +3120,29 @@
             "properties": {
               "code": {
                 "const": "rate_limited"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "TooManyAttemptsError": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "const": "too_many_attempts"
               },
               "message": {
                 "type": "string"

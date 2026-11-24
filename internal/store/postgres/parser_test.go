@@ -91,6 +91,46 @@ func TestSearchFiltered(t *testing.T) {
 	}
 }
 
+// TestSearchFilteredShortPrefix proves short prefix queries return a product
+// whose name starts with them. Whole-string trigram similarity is too low for
+// "k"/"ki"/"kit" against a long name, so search must also match substrings.
+func TestSearchFilteredShortPrefix(t *testing.T) {
+	s := testStore
+	truncate(t)
+	ctx := context.Background()
+
+	p := &domain.Product{
+		ProductKey:    "kit-shampoo-elseve",
+		Name:          "KIT SHAMPOO ELSEVE LONGO DOS FIOS RECONSTRUCAO TOTAL 2X300ML",
+		Brand:         stringPtr("ELSEVE"),
+		Unit:          "UN",
+		CanonicalStem: stringPtr("kit shampoo elseve"),
+	}
+	if _, err := s.Products().Create(ctx, p); err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	sm := seedSupermarket(t, s)
+	n := seedNfce(t, s, sm)
+	if err := s.PriceLogs().Create(ctx, &domain.PriceLog{
+		NfceID: n.ID, ProductID: &p.ID, Line: 1,
+		DescriptionSnapshot: p.Name, Qty: decimal.NewFromInt(1), Unit: "UN",
+		UnitPrice: decimal.NewFromInt(10), TotalPrice: decimal.NewFromInt(10),
+		IdentityStatus: "gtin_known",
+	}); err != nil {
+		t.Fatalf("create approved log: %v", err)
+	}
+
+	for _, q := range []string{"k", "ki", "kit", "e", "shampoo", "elseve"} {
+		items, total, err := s.Products().SearchFiltered(ctx, domain.ProductFilter{Query: q}, 10, 0)
+		if err != nil {
+			t.Fatalf("search %q: %v", q, err)
+		}
+		if len(items) != 1 || items[0].ID != p.ID || total != 1 {
+			t.Errorf("search %q: hits=%+v total=%d, want the kit shampoo product", q, items, total)
+		}
+	}
+}
+
 func TestProductUpdate(t *testing.T) {
 	s := testStore
 	truncate(t)
