@@ -185,43 +185,43 @@ curl localhost:8080/healthz  # {"status":"ok"}
 
 The server expects some env. vars to be set.
 
-| Var                   | Required | Default          | Accepted values                                                        |
-| --------------------- | -------- | ---------------- | ---------------------------------------------------------------------- |
-| PORT                  | no       | 8080             | 1–65535                                                                |
-| LOG_LEVEL             | no       | info             | `debug` \| `info` \| `warn` \| `error`                                 |
-| LOG_FORMAT            | no       | pretty           | `pretty` \| `json`                                                     |
-| CORS_ORIGINS          | no       | \*               | comma-separated origins, or `*`                                        |
-| SEFAZ_FETCH_RPS       | no       | 1                | integer ≥ 1                                                            |
-| SEFAZ_MAX_RETRIES     | no       | 3                | integer ≥ 1 (fetch attempts per receipt)                               |
-| SEFAZ_TIMEOUT         | no       | 30s              | Go duration (per portal request)                                       |
-| SEFAZ_BACKOFF_BASE    | no       | 200ms            | Go duration ≥ 0 (start of the exponential retry delay)                 |
-| SEFAZ_BACKOFF_CAP     | no       | 2s               | Go duration ≥ `SEFAZ_BACKOFF_BASE` (cap per retry delay)               |
-| SEFAZ_BASE_URL        | no       | SP prod          | https URL (overrides the SP QR consultation endpoint for test proxies) |
-| PREVIEWS_TTL          | no       | 15m              | Go duration > 0 (pending draft + receipt snapshot lifetime)            |
-| PREVIEW_GC_INTERVAL   | no       | 5m               | Go duration > 0 (background sweep period)                              |
-| RATE_LIMIT_IP_RPS     | no       | 5                | float ≥ 0 (0 disables the per-IP bucket)                               |
-| RATE_LIMIT_IP_BURST   | no       | 300              | integer ≥ 0 (per-IP burst)                                             |
-| RATE_LIMIT_USER_RPS   | no       | 20               | float ≥ 0 (0 disables the per-user bucket)                             |
-| RATE_LIMIT_USER_BURST | no       | 1000             | integer ≥ 0 (per-user burst)                                           |
-| RATE_LIMIT_AUTH_IP_RPS   | no    | 0.2              | float ≥ 0 (per-IP auth-route refill; 0 disables)                       |
-| RATE_LIMIT_AUTH_IP_BURST | no    | 10               | integer ≥ 0 (per-IP auth-route burst)                                  |
-| LOGIN_MAX_FAILURES    | no       | 10               | integer ≥ 1 (failed logins per account inside `LOGIN_WINDOW`)          |
-| LOGIN_WINDOW          | no       | 15m              | Go duration > 0 (login failure window)                                 |
-| KNOWN_PROXIES         | no       | 127.0.0.1,::1    | trusted proxy IPs/CIDRs/hostnames/http(s) URLs (comma-separated; resolved at boot) |
-| ENABLE_REGISTRATION   | no       | false            | `true`/`false` (accept `POST /api/v1/auth/register`)                   |
-| ENABLE_DOCS           | no       | false            | `true`/`false` (serve `/docs/` and `/openapi.*`)                       |
-| ENRICH_OFF            | no       | false            | `true`/`false` (best-effort Open Food Facts enrichment of `gtin_new`)  |
-| POSTGRES_USERNAME     | yes      | —                | postgres login (builds the DSN)                                        |
-| POSTGRES_PASSWORD     | yes      | —                | postgres password (builds the DSN; never logged/committed)             |
-| DATABASE_NAME         | yes      | —                | database name, e.g. `meupreco`                                         |
-| POSTGRES_HOST         | yes      | —                | postgres host (no default; see the note below)                         |
-| POSTGRES_PORT         | no       | 5432             | postgres port (1–65535)                                                |
-| JWT_ACCESS_TTL        | no       | 15m              | Go duration (e.g. `15m`)                                               |
-| JWT_REFRESH_TTL       | no       | 720h             | Go duration (e.g. `720h`)                                              |
-| JWT_SECRET            | yes      | —                | ≥ 32 chars; signs access + refresh tokens                              |
-| ADMIN_EMAIL           | yes      | —                | seeds the first admin (role `admin`) at boot when `users` is empty     |
-| ADMIN_PASSWORD        | yes      | —                | seeds the first admin password (bcrypt-hashed at boot)                 |
-| ADMIN_NAME            | no       | email local part | seeds the first admin name (unique)                                    |
+| Var                      | Required | Default          | Accepted values                                                                    |
+| ------------------------ | -------- | ---------------- | ---------------------------------------------------------------------------------- |
+| PORT                     | no       | 8080             | 1–65535                                                                            |
+| LOG_LEVEL                | no       | info             | `debug` \| `info` \| `warn` \| `error`                                             |
+| LOG_FORMAT               | no       | pretty           | `pretty` \| `json`                                                                 |
+| CORS_ORIGINS             | no       | \*               | comma-separated origins, or `*`                                                    |
+| SEFAZ_FETCH_RPS          | no       | 1                | integer ≥ 1                                                                        |
+| SEFAZ_MAX_RETRIES        | no       | 3                | integer ≥ 1 (fetch attempts per receipt)                                           |
+| SEFAZ_TIMEOUT            | no       | 30s              | Go duration (per portal request)                                                   |
+| SEFAZ_BACKOFF_BASE       | no       | 200ms            | Go duration ≥ 0 (start of the exponential retry delay)                             |
+| SEFAZ_BACKOFF_CAP        | no       | 2s               | Go duration ≥ `SEFAZ_BACKOFF_BASE` (cap per retry delay)                           |
+| SEFAZ_BASE_URL           | no       | SP prod          | https URL (overrides the SP QR consultation endpoint for test proxies)             |
+| PREVIEWS_TTL             | no       | 15m              | Go duration > 0 (pending draft + receipt snapshot lifetime)                        |
+| PREVIEW_GC_INTERVAL      | no       | 5m               | Go duration > 0 (background sweep period)                                          |
+| RATE_LIMIT_IP_RPS        | no       | 5                | float ≥ 0 (0 disables the per-IP bucket)                                           |
+| RATE_LIMIT_IP_BURST      | no       | 300              | integer ≥ 0 (per-IP burst)                                                         |
+| RATE_LIMIT_USER_RPS      | no       | 20               | float ≥ 0 (0 disables the per-user bucket)                                         |
+| RATE_LIMIT_USER_BURST    | no       | 1000             | integer ≥ 0 (per-user burst)                                                       |
+| RATE_LIMIT_AUTH_IP_RPS   | no       | 0.2              | float ≥ 0 (per-IP auth-route refill; 0 disables)                                   |
+| RATE_LIMIT_AUTH_IP_BURST | no       | 10               | integer ≥ 0 (per-IP auth-route burst)                                              |
+| LOGIN_MAX_FAILURES       | no       | 10               | integer ≥ 1 (failed logins per account inside `LOGIN_WINDOW`)                      |
+| LOGIN_WINDOW             | no       | 15m              | Go duration > 0 (login failure window)                                             |
+| KNOWN_PROXIES            | no       | 127.0.0.1,::1    | trusted proxy IPs/CIDRs/hostnames/http(s) URLs (comma-separated; resolved at boot) |
+| ENABLE_REGISTRATION      | no       | false            | `true`/`false` (accept `POST /api/v1/auth/register`)                               |
+| ENABLE_DOCS              | no       | false            | `true`/`false` (serve `/docs/` and `/openapi.*`)                                   |
+| ENRICH_OFF               | no       | false            | `true`/`false` (best-effort Open Food Facts enrichment of `gtin_new`)              |
+| POSTGRES_USERNAME        | yes      | —                | postgres login (builds the DSN)                                                    |
+| POSTGRES_PASSWORD        | yes      | —                | postgres password (builds the DSN; never logged/committed)                         |
+| DATABASE_NAME            | yes      | —                | database name, e.g. `meupreco`                                                     |
+| POSTGRES_HOST            | yes      | —                | postgres host (no default; see the note below)                                     |
+| POSTGRES_PORT            | no       | 5432             | postgres port (1–65535)                                                            |
+| JWT_ACCESS_TTL           | no       | 15m              | Go duration (e.g. `15m`)                                                           |
+| JWT_REFRESH_TTL          | no       | 720h             | Go duration (e.g. `720h`)                                                          |
+| JWT_SECRET               | yes      | —                | ≥ 32 chars; signs access + refresh tokens                                          |
+| ADMIN_EMAIL              | yes      | —                | seeds the first admin (role `admin`) at boot when `users` is empty                 |
+| ADMIN_PASSWORD           | yes      | —                | seeds the first admin password (bcrypt-hashed at boot)                             |
+| ADMIN_NAME               | no       | email local part | seeds the first admin name (unique)                                                |
 
 The DSN is built as `postgres://USER:PASS@HOST:PORT/DATABASE?sslmode=disable`.
 Missing DB vars (or a too-short `JWT_SECRET`, or a missing `ADMIN_EMAIL`/
@@ -233,7 +233,9 @@ committed.
 Hostnames are resolved **at startup** (5s timeout) and every returned address is
 trusted; a hostname that fails to resolve aborts startup. Restart the server
 after a DNS change. Only the immediate peer is checked against the list, so
-forwarding headers from anyone else are ignored.
+forwarding headers from anyone else are ignored. See
+[Running behind a reverse proxy](docs/reverse-proxy.md) for the full contract,
+topology examples, and verification steps.
 
 > [!IMPORTANT]
 > `POSTGRES_HOST` is **required and has no default**. `localhost` means _the
@@ -262,6 +264,11 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
 
 ### Hardening & operations
 
+- **Trusted proxies** — the client IP used for logs and rate limits is resolved
+  from `X-Forwarded-For` / `Forwarded` / `CF-Connecting-IP` only when the
+  immediate peer is listed in `KNOWN_PROXIES`; otherwise headers are ignored.
+  See [Running behind a reverse proxy](docs/reverse-proxy.md) for accepted
+  formats, multi-hop topologies, and verification.
 - **Rate limiting** — a global per-IP token bucket guards the whole `/api/v1`
   tree; an authenticated per-user bucket is layered on the protected routes
   (keyed by the JWT subject). A throttled request answers `429` with the
@@ -273,10 +280,10 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
   admin create-user endpoint yet, so keep this in mind for closed deployments.
 - **Login throttle** — failed logins are counted per account identifier
   (case-insensitive) inside `LOGIN_WINDOW`. Once `LOGIN_MAX_FAILURES` is
-  exceeded, the account is answered `429 too_many_attempts` with a
-  `Retry-After` header until the window expires. A successful login clears the
-  counter. Unknown accounts run a dummy bcrypt comparison, so response timing
-  does not reveal whether the account exists.
+  exceeded, the account is answered `429 too_many_attempts` with a `Retry-After`
+  header until the window expires. A successful login clears the counter.
+  Unknown accounts run a dummy bcrypt comparison, so response timing does not
+  reveal whether the account exists.
 - **Opt-in docs** — `/docs/`, `/openapi.yaml`, `/openapi.json` and the `/`
   redirect are mounted only when `ENABLE_DOCS=true`. With the default
   `ENABLE_DOCS=false` those paths answer `404`.
@@ -593,9 +600,11 @@ each release rather than silently tracking moving tags.
 > to point to your desired API instance
 
 - `api/openapi.yaml` — versioned API contract (the SPA consumes only this).
-- Local interactive API documentation is available at `/docs/` (or `/`) when the
-  server is running. The raw contract is available at `/openapi.yaml` and
-  `/openapi.json`.
+- `docs/reverse-proxy.md` — trusted-proxy contract, `KNOWN_PROXIES` reference,
+  and reverse-proxy verification.
+- Local interactive API documentation is served only when `ENABLE_DOCS=true`:
+  `/docs/` (or the `/` redirect), plus `/openapi.yaml` and `/openapi.json`. With
+  the default `ENABLE_DOCS=false` these paths return `404`.
 - Web tooling lives under `web/`; `web/node_modules/` is local-only and must not
   be committed. From the repository root, run:
 
