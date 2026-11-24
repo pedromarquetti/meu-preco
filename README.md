@@ -277,6 +277,12 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
   `Retry-After` header until the window expires. A successful login clears the
   counter. Unknown accounts run a dummy bcrypt comparison, so response timing
   does not reveal whether the account exists.
+- **Opt-in docs** — `/docs/`, `/openapi.yaml`, `/openapi.json` and the `/`
+  redirect are mounted only when `ENABLE_DOCS=true`. With the default
+  `ENABLE_DOCS=false` those paths answer `404`.
+- **Log hygiene** — an incoming `X-Request-ID` is accepted only when it is short
+  and log-safe; otherwise a random ID is generated. Debug logs never include the
+  QR payload and show only a masked access key.
 - **Preview GC** — expired drafts are purged on write _and_ by a background
   goroutine every `PREVIEW_GC_INTERVAL`, so the `previews` table stays bounded
   even on an idle server.

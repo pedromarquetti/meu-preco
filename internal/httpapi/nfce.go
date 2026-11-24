@@ -84,8 +84,7 @@ func (api *nfceAPI) draft(writer http.ResponseWriter, req *http.Request) {
 	}
 
 	api.svc.Log.Debug("NFCe Draft",
-		"Access Key", body.AccessKey,
-		"qr", body.QRPayload,
+		"access_key", nfce.MaskAccessKey(res.AccessKey),
 		"item_count", res.Totals.Items,
 	)
 

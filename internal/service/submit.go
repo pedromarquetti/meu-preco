@@ -49,7 +49,7 @@ func (s *Service) ReportPreview(ctx context.Context, req PreviewRequest) (*Previ
 	// again; the commit that follows is the usual silent no-op.
 	if existing, err := s.Stores.Nfces().GetByAccessKey(ctx, key.String()); err == nil {
 		s.Log.Debug("service: receipt already stored, rebuilding draft without SEFAZ",
-			"access_key", key.String())
+			"access_key", nfce.MaskAccessKey(key.String()))
 		return s.persistDraft(ctx, req.UserID, key, payload, existing)
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return nil, err

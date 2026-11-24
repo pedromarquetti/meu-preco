@@ -34,11 +34,36 @@ func routePattern(r *http.Request) string {
 	return r.Method + " " + r.URL.Path
 }
 
-// RequestID injects a X-Request-ID (incoming if provided, otherwise random)
-// and makes it available in the request context.
+// maxRequestIDLen bounds an incoming X-Request-ID. Anything longer is
+// replaced with a generated ID so logs cannot be bloated by a header.
+const maxRequestIDLen = 64
+
+// validRequestID accepts only short, log-safe identifiers: ASCII letters,
+// digits, '-', '_' and '.'. This blocks spaces, control characters and
+// newlines that could corrupt a log line.
+func validRequestID(s string) bool {
+	if len(s) == 0 || len(s) > maxRequestIDLen {
+		return false
+	}
+	for _, r := range s {
+		if r == '-' || r == '_' || r == '.' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// RequestID injects a X-Request-ID (incoming if valid, otherwise random) and
+// makes it available in the request context.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
+		if !validRequestID(id) {
+			id = ""
+		}
 		if id == "" {
 			var b [8]byte
 			if _, err := rand.Read(b[:]); err == nil {

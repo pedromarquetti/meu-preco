@@ -17,6 +17,18 @@ const (
 	bakeryKey = "35251111222333000181650010000000911000013378"
 )
 
+func TestMaskAccessKey(t *testing.T) {
+	if got := MaskAccessKey(senateKey); got != "352411****5901" {
+		t.Errorf("MaskAccessKey(senateKey) = %q, want 352411****5901", got)
+	}
+
+	for _, raw := range []string{"", "12345", "1234567890", "   "} {
+		if got := MaskAccessKey(raw); got != "****" {
+			t.Errorf("MaskAccessKey(%q) = %q, want ****", raw, got)
+		}
+	}
+}
+
 func TestParseAccessKeyValid(t *testing.T) {
 	for _, raw := range []string{
 		senateKey,

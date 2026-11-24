@@ -76,6 +76,37 @@ func TestRequestID(t *testing.T) {
 	}
 }
 
+func TestRequestIDRejectsInvalidValues(t *testing.T) {
+	invalid := []string{
+		"has space",
+		"line\nbreak",
+		"bad/slash",
+		strings.Repeat("a", maxRequestIDLen+1),
+	}
+
+	for _, value := range invalid {
+		var got string
+		h := RequestID(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			got = RequestIDFrom(r.Context())
+		}))
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Request-ID", value)
+		h.ServeHTTP(rec, req)
+
+		if got == value {
+			t.Errorf("invalid request id %q was preserved", value)
+		}
+		if !validRequestID(got) {
+			t.Errorf("generated request id %q is not valid", got)
+		}
+		if rec.Header().Get("X-Request-ID") != got {
+			t.Errorf("response header = %q, context = %q", rec.Header().Get("X-Request-ID"), got)
+		}
+	}
+}
+
 func TestLogging(t *testing.T) {
 	var buf bytes.Buffer
 	r := chi.NewRouter()

@@ -29,9 +29,19 @@ func (f *fakeStores) RefreshTokens() domain.RefreshTokenStore { return f.refresh
 func (f *fakeStores) Ping(context.Context) error              { return f.pingErr }
 
 func testRouter() http.Handler {
-	return New(config.Config{CORSOrigins: []string{"https://app.example.com"}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		&fakeStores{})
+	return testRouterWith(config.Config{CORSOrigins: []string{"https://app.example.com"}})
+}
+
+func testRouterWith(cfg config.Config) http.Handler {
+	return New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), &fakeStores{})
+}
+
+// docsRouter enables the opt-in documentation routes.
+func docsRouter() http.Handler {
+	return testRouterWith(config.Config{
+		CORSOrigins: []string{"https://app.example.com"},
+		EnableDocs:  true,
+	})
 }
 
 func TestHealthz(t *testing.T) {
@@ -100,7 +110,7 @@ func TestDocumentationRoutes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			docsRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
@@ -117,10 +127,36 @@ func TestDocumentationRoutes(t *testing.T) {
 
 func TestDocumentationMissingAsset(t *testing.T) {
 	rec := httptest.NewRecorder()
-	testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/docs/missing.js", nil))
+	docsRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/docs/missing.js", nil))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestDocsDisabledByDefault(t *testing.T) {
+	// testRouter() leaves EnableDocs at its zero value (false), which is the
+	// production default.
+	for _, path := range []string{"/", "/docs/", "/openapi.yaml", "/openapi.json"} {
+		rec := httptest.NewRecorder()
+		testRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s status = %d, want 404", path, rec.Code)
+			continue
+		}
+		var body struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Errorf("%s: unmarshal %q: %v", path, rec.Body.String(), err)
+			continue
+		}
+		if body.Error.Code != "not_found" {
+			t.Errorf("%s error code = %q, want not_found", path, body.Error.Code)
+		}
 	}
 }
 

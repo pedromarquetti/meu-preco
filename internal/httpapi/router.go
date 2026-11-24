@@ -56,8 +56,10 @@ func newRouter(cfg config.Config, log *slog.Logger, nfceSvc nfceResolver, stores
 	router.Get("/readyz", readyz(stores))
 	router.Get("/metrics", metricsHandler(offClient))
 
-	if err := documentationRoutes(router); err != nil {
-		panic("httpapi: initialize embedded documentation: " + err.Error())
+	if cfg.EnableDocs {
+		if err := documentationRoutes(router); err != nil {
+			panic("httpapi: initialize embedded documentation: " + err.Error())
+		}
 	}
 
 	authAPI := newAuthAPI(cfg, stores)

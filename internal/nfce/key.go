@@ -51,7 +51,19 @@ func ParseAccessKey(raw string) (AccessKey, error) {
 	return AccessKey{v: v}, nil
 }
 
+// String returns the normalized 44-digit key.
 func (k AccessKey) String() string { return k.v }
+
+// MaskAccessKey returns a log-safe form of an access key: the first six and
+// last four characters, with the middle redacted. Values too short to be a key
+// are fully redacted so arbitrary input never leaks into logs.
+func MaskAccessKey(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if len(raw) <= 10 {
+		return "****"
+	}
+	return raw[:6] + "****" + raw[len(raw)-4:]
+}
 
 // valid reports whether the key is a usable zero-free value.
 func (k AccessKey) valid() bool { return len(k.v) == keyLen }
