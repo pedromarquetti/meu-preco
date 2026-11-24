@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"meupreco/internal/auth"
 	"meupreco/internal/domain"
@@ -15,6 +17,11 @@ import (
 )
 
 const maxNfceBody = 1 << 16 // 64 KiB is plenty for a new/submit body
+
+// portalRequestBudget bounds portal work (limiter queue + fetch/solve) below
+// the server WriteTimeout (30s), so a saturated queue answers with a typed
+// retryable error instead of the client seeing a reset or an empty reply.
+const portalRequestBudget = 20 * time.Second
 
 // nfceResolver is the slice of the nfce pipeline the ingestion handlers need.
 // Keeping it an interface lets httptest tests stub the whole portal layer.
@@ -71,7 +78,10 @@ func (api *nfceAPI) draft(writer http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	res, err := api.svc.ReportPreview(req.Context(), service.PreviewRequest{
+	ctx, cancel := context.WithTimeout(req.Context(), portalRequestBudget)
+	defer cancel()
+
+	res, err := api.svc.ReportPreview(ctx, service.PreviewRequest{
 		UserID:    userID,
 		AccessKey: body.AccessKey,
 		QRPayload: body.QRPayload,
@@ -249,9 +259,25 @@ func respondResolveError(writer http.ResponseWriter, req *http.Request, err erro
 		httpx.Error(writer, req, http.StatusUnprocessableEntity, "invalid_qr_payload", err.Error())
 	case errors.Is(err, nfce.ErrUnsupportedUF):
 		httpx.Error(writer, req, http.StatusNotImplemented, "unsupported_uf", err.Error())
+	case errors.Is(err, nfce.ErrPortalCoolingDown):
+		setRetryAfter(writer, err)
+		httpx.Error(writer, req, http.StatusTooManyRequests, "upstream_cooling_down",
+			"the fiscal portal is cooling down after rejecting requests; retry after the indicated delay")
+	case errors.Is(err, nfce.ErrPortalBusy):
+		setRetryAfter(writer, err)
+		httpx.Error(writer, req, http.StatusServiceUnavailable, "upstream_busy",
+			"the fiscal portal request queue is saturated; retry shortly")
+	case errors.Is(err, nfce.ErrAntiBotChallenge):
+		setRetryAfter(writer, err)
+		httpx.Error(writer, req, http.StatusTooManyRequests, "upstream_js_challenge",
+			"the fiscal portal requires a browser challenge this server cannot solve; try again later")
 	case errors.Is(err, nfce.ErrAntiBotRejection):
+		setRetryAfter(writer, err)
 		httpx.Error(writer, req, http.StatusTooManyRequests, "upstream_rate_limited",
 			"the fiscal portal is temporarily rejecting requests; try again later")
+	case errors.Is(err, context.DeadlineExceeded):
+		httpx.Error(writer, req, http.StatusServiceUnavailable, "upstream_timeout",
+			"the fiscal portal did not answer within the request budget; retry later")
 	case errors.Is(err, nfce.ErrUpstream), errors.Is(err, nfce.ErrBadResponse):
 		httpx.Error(writer, req, http.StatusBadGateway, "upstream_error",
 			"the fiscal portal could not answer the request")
@@ -273,4 +299,32 @@ func respondCaptcha(w http.ResponseWriter, capErr *nfce.CaptchaError) {
 			"image_url":    "/api/v1/nfce/captcha/image/" + capErr.ChallengeID,
 		},
 	})
+}
+
+// setRetryAfter adds the Retry-After header for the typed portal errors that
+// carry a retry delay. Whole seconds, rounded up, never negative.
+func setRetryAfter(w http.ResponseWriter, err error) {
+	var cooldown *nfce.PortalCooldownError
+	var busy *nfce.PortalBusyError
+	var antiBot *nfce.AntiBotError
+	var challenge *nfce.AntiBotChallengeError
+
+	var d time.Duration
+	switch {
+	case errors.As(err, &cooldown):
+		d = cooldown.RetryAfter
+	case errors.As(err, &busy):
+		d = busy.RetryAfter
+	case errors.As(err, &antiBot):
+		d = antiBot.RetryAfter
+	case errors.As(err, &challenge):
+		d = challenge.RetryAfter
+	default:
+		return
+	}
+	if d <= 0 {
+		return
+	}
+	seconds := int64((d + time.Second - 1) / time.Second)
+	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 }

@@ -13,7 +13,7 @@ build: static
 	go build -o $(BIN) ./cmd/server
 
 build-check:
-	go build ./...
+	@$(ENV_LOAD) go build ./...
 
 ci: fmtcheck vet build-check test
 

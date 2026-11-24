@@ -104,7 +104,7 @@ func TestAdminCreateSynonym(t *testing.T) {
 	}
 
 	raw := newRouter(config.Config{JWTSecret: testJWTSecret, CORSOrigins: []string{"https://app.example.com"}},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil)
+		slog.New(slog.NewTextHandler(io.Discard, nil)), pgResolver{}, st, nil, nil)
 	rec, _ = do(t, raw, http.MethodPost, "/api/v1/admin/synonym",
 		`{"synonym":"qjo","canonical_name":"queijo mussarela"}`)
 	if rec.Code != http.StatusUnauthorized {

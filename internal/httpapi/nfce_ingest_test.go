@@ -98,7 +98,7 @@ func authRouter(t *testing.T, stores domain.Stores, res nfceResolver, userID int
 		t.Fatalf("issue token: %v", err)
 	}
 
-	handler := newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), res, stores, captcha)
+	handler := newRouter(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), res, stores, captcha, nil)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Authorization", "Bearer "+token)
