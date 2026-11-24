@@ -91,6 +91,11 @@ type SolvedCache interface {
 	CacheSolved(key nfce.AccessKey, raw []byte)
 }
 
+// The production dispatch table must satisfy the captcha bridge; without this
+// the type assertion in SolveCaptcha silently fails and every solve causes a
+// second portal fetch.
+var _ SolvedCache = (*nfce.MultiResolver)(nil)
+
 // CaptchaSupport wires the captcha-solving loop into the pipeline: where the
 // challenges live, who replays the answer against the portal, and the attempt
 // budget. Nil on a Service disables the captcha endpoints.

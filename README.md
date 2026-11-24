@@ -158,8 +158,9 @@ resetting connections, or unavailable.
       429 with `Retry-After` header
 - [x] Security headers — `X-Content-Type-Options`, `X-Frame-Options`,
       `Referrer-Policy`, `Cache-Control: no-store`
-- [x] Health & metrics — `/healthz` liveness, `/readyz` readiness, `/metrics`
-      with route counters, latency histogram, auth failures, OFF cache stats
+- [x] Health & metrics — `/healthz` liveness, `/readyz` readiness, and the
+      admin-only `/api/v1/admin/metrics` with route counters, latency histogram,
+      auth failures, OFF cache stats and portal outcome counters
 - [x] Database & migrations — PostgreSQL with `pg_trgm`, `golang-migrate` with
       embedded migrations, initial schema + commodity synonyms seeding
 - [x] Configuration — env var + `.env` file, configurable
@@ -192,10 +193,13 @@ The server expects some env. vars to be set.
 | LOG_FORMAT               | no       | pretty           | `pretty` \| `json`                                                                 |
 | CORS_ORIGINS             | no       | \*               | comma-separated origins, or `*`                                                    |
 | SEFAZ_FETCH_RPS          | no       | 1                | integer ≥ 1                                                                        |
-| SEFAZ_MAX_RETRIES        | no       | 3                | integer ≥ 1 (fetch attempts per receipt)                                           |
+| SEFAZ_MIN_INTERVAL       | no       | 10s              | Go duration ≥ 0 (minimum spacing between portal fetches; wins over RPS)            |
+| SEFAZ_MAX_RETRIES        | no       | 1                | integer ≥ 1 (attempts per receipt; `1` = one attempt, zero retries)                |
 | SEFAZ_TIMEOUT            | no       | 30s              | Go duration (per portal request)                                                   |
 | SEFAZ_BACKOFF_BASE       | no       | 200ms            | Go duration ≥ 0 (start of the exponential retry delay)                             |
 | SEFAZ_BACKOFF_CAP        | no       | 2s               | Go duration ≥ `SEFAZ_BACKOFF_BASE` (cap per retry delay)                           |
+| SEFAZ_COOLDOWN           | no       | 1m               | Go duration > 0 (wait after an anti-bot/rate-limit rejection; capped at 15m)       |
+| SEFAZ_USER_AGENT         | no       | `MeuPreco/0.1`   | printable ASCII, ≤ 256 bytes, no control characters (trimmed)                      |
 | SEFAZ_BASE_URL           | no       | SP prod          | https URL (overrides the SP QR consultation endpoint for test proxies)             |
 | PREVIEWS_TTL             | no       | 15m              | Go duration > 0 (pending draft + receipt snapshot lifetime)                        |
 | PREVIEW_GC_INTERVAL      | no       | 5m               | Go duration > 0 (background sweep period)                                          |
@@ -236,6 +240,14 @@ after a DNS change. Only the immediate peer is checked against the list, so
 forwarding headers from anyone else are ignored. See
 [Running behind a reverse proxy](docs/reverse-proxy.md) for the full contract,
 topology examples, and verification steps.
+
+> [!NOTE]
+> `SEFAZ_MAX_RETRIES=1` means **one attempt and zero retries**. Leave it at 1:
+> retrying the same receipt immediately only amplifies an IP-level block. The
+> default `SEFAZ_USER_AGENT` is the ASCII `MeuPreco/0.1`; non-ASCII characters,
+> control characters and values longer than 256 bytes are rejected at boot, and
+> browser user agents are not a supported workaround. `SEFAZ_COOLDOWN` is capped
+> at 15 minutes even when configured higher.
 
 > [!IMPORTANT]
 > `POSTGRES_HOST` is **required and has no default**. `localhost` means _the
@@ -298,9 +310,15 @@ injects environment directly (`env_file`/`-e`) — the compiled binary never rea
   nosniff`, `X-Frame-Options: DENY` and
   `Referrer-Policy: no-referrer`; JSON responses (and the captcha image proxy)
   are sent `Cache-Control: no-store`.
-- **Metrics** — `GET /metrics` (unauthenticated) returns per-route request
-  counters, a latency histogram, auth-failure counts and, when
-  `ENRICH_OFF=true`, the Open Food Facts cache hit/miss counters as JSON.
+- **Metrics** — `GET /api/v1/admin/metrics` (admin bearer token) returns
+  per-route request counters, a latency histogram, auth-failure counts, the
+  Open Food Facts cache hit/miss counters when `ENRICH_OFF=true`, and the
+  fiscal-portal outcome counters (`portal_outcomes`) when portal traffic has
+  been observed. The portal block rate (anti-bot rejections + JavaScript
+  challenges over all recorded outcomes) is included per host and in aggregate.
+  Counters are process-local and reset on restart; the anti-bot cooldown is
+  shared by the fetcher and captcha solver within one process but is **not**
+  shared across replicas. No server-side cookie storage is added.
 - **Contract** — `api/openapi.yaml` is the versioned source of truth for the
   HTTP surface; the SPA consumes only that.
 
@@ -686,60 +704,68 @@ make migrate-down
 make migrate-version
 ```
 
-- [x] Diagnostics — a standalone command (`diag`) to reproduce SEFAZ regressions
-      with custom user agents and retry counts without modifying the server.
+- [x] Diagnostics — a standalone command (`fetch-nfce`) to reproduce SEFAZ
+      regressions with custom user agents, pacing and retry counts without
+      modifying the server.
 
 ### Diagnostic Command
 
-The `diag` tool allows you to isolate variables (like User Agent or Base URL)
-that might be causing connection resets from the fiscal portal. It uses the same
-internal fetcher logic as the main application but prints detailed telemetry for
-every attempt directly to stdout/stderr.
+`fetch-nfce` isolates variables (user agent, base URL, pacing, retries) that may
+be causing connection resets from the fiscal portal. It uses the same internal
+fetcher as the main application and prints per-attempt telemetry.
 
 ```sh
-# Basic usage:
-./cmd/diag <access_key>
+# Public test receipt (Senate CEAPS key used by the test suite):
+KEY=35241152323688000144650020000002571115675901
 
-# Test a specific user agent and retry count (e.g., 10 attempts):
-./cmd/diag --user-agent "Mozilla/5.0" --retries 10 <access_key>
+# Basic usage: access key only.
+go run ./cmd/fetch-nfce "$KEY"
+
+# Replay an exact QR payload; its embedded key must match the first argument.
+go run ./cmd/fetch-nfce "$KEY" "$KEY|3|1"
+
+# A QR payload (or full portal URL) can also be the only argument.
+go run ./cmd/fetch-nfce "$KEY|3|1"
+
+# Test a specific printable-ASCII user agent, one attempt, 30s apart:
+go run ./cmd/fetch-nfce -a "MeuPreco/diagnostic" -r 1 -i 30s "$KEY"
 
 # Test against a different base URL:
-./cmd/diag --base-url https://test.portal.gov.br <access_key>
+go run ./cmd/fetch-nfce -u https://test.portal.gov.br "$KEY"
 
-# Replay an exact QR payload (if known):
-./cmd/diag --payload "p=abc|3|1" <access_key>
+# Diagnostic cookie replay. Prefer the environment variable: its value never
+# appears in argv or logs.
+SEFAZ_DIAG_COOKIE='ASP.NET_SessionId=...' go run ./cmd/fetch-nfce "$KEY"
+
+# Or a file readable only by the owner (chmod 600); -c accepts @path only, so
+# a literal cookie never lands in shell history.
+go run ./cmd/fetch-nfce -c @/tmp/sefaz-cookie "$KEY"
 ```
 
 **Warning:** This command contacts a live fiscal portal and should be run at low
-frequency with public test receipts only. Never use it to process production
-data or for high-frequency testing.
+frequency with public test receipts only. Every failed request may extend an
+IP-level block for the whole deployment, so keep the default single attempt and
+the `-i` spacing. The start log includes the access key, host/path, effective
+user agent and cookie *source* — never the cookie value or the full QR payload.
 
 ### Fetch test command
 
-The server also includes `fetch-nfce` command
-
-Use this command to test basic SEFAZ fetcher (no parser, only fetch, mainly for
-rejection/debug quick local test)
+`fetch-nfce` is the fetch-only diagnostic (no parser), useful for quick
+rejection/debug tests:
 
 ```bash
-flag needs an argument: -h
 Usage: fetch-nfce [flags] <access_key> [payload]
 
 Flags:
-  -a string
-    	User agent for the request
-  -f string
-    	Set the logger's Log format (json or pretty print)
-  -h string
-    	Print this help menu
-  -l string
-    	Set the logger's Log level (default "info")
-  -r int
-    	Maximum number of attempts/retries (default 3)
-  -t string
-    	Timeout per attempt (e.g., 15s, 60s) (default "30s")
-  -u string
-    	SEFAZ base URL (default "https://www.nfce.fazenda.sp.gov.br/qrcode")
+  -a string   User agent for the request (default "MeuPreco/0.1")
+  -c string   Cookie source: @path to a 0600 file (or set SEFAZ_DIAG_COOKIE)
+  -f string   Set the logger's Log format (json or pretty print)
+  -h          Print this help menu
+  -i string   Minimum spacing between attempts (default "10s")
+  -l string   Set the logger's Log level (default "info")
+  -r int      Maximum number of attempts/retries (default 1)
+  -t string   Timeout per attempt (default "30s")
+  -u string   SEFAZ base URL (default "https://www.nfce.fazenda.sp.gov.br/qrcode")
 ```
 
 ## Import a bulk Open Food Facts dump (789/790 GTINs only, idempotent)

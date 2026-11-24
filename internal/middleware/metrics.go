@@ -24,7 +24,7 @@ type RouteMetrics struct {
 	Histogram    []int64 `json:"histogram"`
 }
 
-// MetricsReport is the serializable report the /metrics endpoint serves.
+// MetricsReport is the serializable report the admin metrics endpoint serves.
 type MetricsReport struct {
 	TotalRequests   int64            `json:"total_requests"`
 	TotalDurationMs int64            `json:"total_duration_ms"`

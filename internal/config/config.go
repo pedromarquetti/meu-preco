@@ -55,6 +55,11 @@ type Config struct {
 	// SEFAZFetchRPS caps how many requests per second the SP NFC-e portal
 	// fetcher may issue (politeness/anti-ban knob).
 	SEFAZFetchRPS int
+	// SEFAZMinInterval is the minimum spacing between portal requests. It is
+	// applied on top of SEFAZFetchRPS (whichever is slower wins). The SEFAZ
+	// edge blocks a source after a couple of rapid requests, so this defaults
+	// to 10s.
+	SEFAZMinInterval time.Duration
 	// SEFAZMaxRetries is the number of fetch attempts per receipt (>= 1).
 	SEFAZMaxRetries int
 	// SEFAZTimeout bounds each portal request (retries included).
@@ -65,7 +70,7 @@ type Config struct {
 	SEFAZBackoffCap time.Duration
 
 	// SefazUserAgent specifies the user-agent string sent to the SP NFC-e portal.
-	// Defaults to "Meu Preço/0.1".
+	// Defaults to "MeuPreco/0.1"; it must be printable ASCII (see Validate).
 	SefazUserAgent string
 
 	// SEFAZCooldown is how long subsequent requests must wait after an
@@ -123,6 +128,15 @@ type netIPLookup func(ctx context.Context, network, host string) ([]netip.Addr, 
 
 // defaultNetIPLookup resolves KNOWN_PROXIES hostnames with the system resolver.
 var defaultNetIPLookup netIPLookup = net.DefaultResolver.LookupNetIP
+
+const (
+	// defaultSefazUserAgent is the neutral user agent sent to the SEFAZ portal.
+	// It is ASCII on purpose: net/http header values are not guaranteed to
+	// carry non-ASCII bytes, and browser impersonation is not a goal.
+	defaultSefazUserAgent = "MeuPreco/0.1"
+	// maxSefazUserAgentLen bounds SEFAZ_USER_AGENT to a sane header size.
+	maxSefazUserAgentLen = 256
+)
 
 // requiredEnv lists environment variables without which the process must not
 // boot.
@@ -183,7 +197,12 @@ func loadWithLookup(env map[string]string, lookup netIPLookup) (Config, error) {
 		return Config{}, err
 	}
 
-	sefaRetries, err := envInt(env, "SEFAZ_MAX_RETRIES", 3)
+	sefaRetries, err := envInt(env, "SEFAZ_MAX_RETRIES", 1)
+	if err != nil {
+		return Config{}, err
+	}
+
+	sefaMinInterval, err := envDuration(env, "SEFAZ_MIN_INTERVAL", 10*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -208,7 +227,7 @@ func loadWithLookup(env map[string]string, lookup netIPLookup) (Config, error) {
 		return Config{}, err
 	}
 
-	sefaUserAgent := envString(env, "SEFAZ_USER_AGENT", "Meu Preço/0.1")
+	sefaUserAgent := strings.TrimSpace(envString(env, "SEFAZ_USER_AGENT", defaultSefazUserAgent))
 
 	previewTTL, err := envDuration(env, "PREVIEWS_TTL", 15*time.Minute)
 	if err != nil {
@@ -304,6 +323,7 @@ func loadWithLookup(env map[string]string, lookup netIPLookup) (Config, error) {
 		SefazBaseURL:       env["SEFAZ_BASE_URL"],
 
 		SEFAZMaxRetries:  sefaRetries,
+		SEFAZMinInterval: sefaMinInterval,
 		SEFAZTimeout:     sefaTimeout,
 		SEFAZBackoffBase: sefaBackoffBase,
 		SEFAZBackoffCap:  sefaBackoffCap,
@@ -406,6 +426,9 @@ func (c Config) Validate() error {
 	if c.SEFAZMaxRetries < 1 {
 		return fmt.Errorf("config: SEFAZ_MAX_RETRIES must be >= 1")
 	}
+	if c.SEFAZMinInterval < 0 {
+		return fmt.Errorf("config: SEFAZ_MIN_INTERVAL must be >= 0")
+	}
 	if c.SEFAZTimeout <= 0 {
 		return fmt.Errorf("config: SEFAZ_TIMEOUT must be a positive duration")
 	}
@@ -417,6 +440,9 @@ func (c Config) Validate() error {
 	}
 	if c.SEFAZCooldown <= 0 {
 		return fmt.Errorf("config: SEFAZ_COOLDOWN must be a positive duration")
+	}
+	if err := validateSefazUserAgent(c.SefazUserAgent); err != nil {
+		return err
 	}
 	if c.PreviewTTL <= 0 {
 		return fmt.Errorf("config: PREVIEWS_TTL must be a positive duration")
@@ -620,6 +646,28 @@ func appendUniquePrefix(prefixes []netip.Prefix, p netip.Prefix) []netip.Prefix 
 		return prefixes
 	}
 	return append(prefixes, p)
+}
+
+// validateSefazUserAgent enforces that SEFAZ_USER_AGENT is a non-empty,
+// printable ASCII HTTP header value of bounded length. net/http rejects
+// control characters when sending and non-ASCII bytes are not portable, so
+// fail at boot instead of on the first receipt fetch.
+func validateSefazUserAgent(ua string) error {
+	if ua == "" {
+		return fmt.Errorf("config: SEFAZ_USER_AGENT must not be empty")
+	}
+	if ua != strings.TrimSpace(ua) {
+		return fmt.Errorf("config: SEFAZ_USER_AGENT must not have leading or trailing whitespace")
+	}
+	if len(ua) > maxSefazUserAgentLen {
+		return fmt.Errorf("config: SEFAZ_USER_AGENT must be at most %d bytes, got %d", maxSefazUserAgentLen, len(ua))
+	}
+	for i := 0; i < len(ua); i++ {
+		if b := ua[i]; b < 0x20 || b > 0x7e {
+			return fmt.Errorf("config: SEFAZ_USER_AGENT must be printable ASCII, found byte 0x%02x at offset %d", b, i)
+		}
+	}
+	return nil
 }
 
 func envString(env map[string]string, key, default_val string) string {

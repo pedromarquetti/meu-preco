@@ -730,6 +730,27 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /api/v1/admin/metrics:
+    get:
+      tags: [admin, metrics]
+      summary: Runtime metrics (admin)
+      responses:
+        "200":
+          description: |
+            Per-route request counters, latency histogram and auth-failure
+            counts; when OFF enrichment is enabled, `off_cache` holds the
+            Open Food Facts hit/miss counters. `portal_outcomes` holds the
+            process-local fiscal-portal outcome counters and block rate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Metrics" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /api/v1/admin/user/{id}:
     get:
       tags: [admin]
@@ -1186,21 +1207,6 @@ paths:
               schema: { $ref: "#/components/schemas/NotFoundError" }
         "429":
           $ref: "#/components/responses/RateLimited"
-
-  /metrics:
-    get:
-      tags: [metrics]
-      summary: Runtime metrics (unauthenticated)
-      security: []
-      responses:
-        "200":
-          description: |
-            Per-route request counters, latency histogram and auth-failure
-            counts; when OFF enrichment is enabled, `off_cache` holds the
-            Open Food Facts hit/miss counters.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Metrics" }
 
 components:
   securitySchemes:
@@ -2221,6 +2227,29 @@ components:
           properties:
             hits: { type: integer, format: int64 }
             misses: { type: integer, format: int64 }
+        portal_outcomes: { $ref: "#/components/schemas/PortalOutcomes" }
+    PortalOutcomes:
+      type: object
+      description: Process-local fiscal-portal counters; reset on restart.
+      properties:
+        totals: { $ref: "#/components/schemas/PortalOutcomeCounts" }
+        block_rate_pct:
+          type: number
+          description: (anti-bot rejections + JS challenges) / total outcomes × 100.
+        hosts:
+          type: object
+          description: Per-host counters keyed by portal host.
+          additionalProperties: { $ref: "#/components/schemas/PortalOutcomeCounts" }
+    PortalOutcomeCounts:
+      type: object
+      properties:
+        success: { type: integer, format: int64 }
+        captcha: { type: integer, format: int64 }
+        anti_bot_rejection: { type: integer, format: int64 }
+        js_challenge: { type: integer, format: int64 }
+        transport: { type: integer, format: int64 }
+        cooldown: { type: integer, format: int64 }
+        busy: { type: integer, format: int64 }
     MetricsReport:
       type: object
       properties:
